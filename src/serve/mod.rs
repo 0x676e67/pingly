@@ -66,7 +66,7 @@ pub async fn run(config: Config) -> Result<()> {
     let tls_config = match (config.tls_cert.as_ref(), config.tls_key.as_ref()) {
         (Some(cert), Some(key)) => RustlsConfig::from_pem_chain_file(cert, key).await,
         _ => {
-            let (cert, key) = cert::generate_self_signed()?;
+            let (cert, key) = cert::get_self_signed_cert()?;
             RustlsConfig::from_pem(cert, key).await
         }
     }?;
