@@ -7,8 +7,6 @@ pub struct Http2TrackInfo {
     track_time: String,
     akamai_fingerprint: String,
     akamai_fingerprint_hash: String,
-    full_akamai_fingerprint: String,
-    full_akamai_fingerprint_hash: String,
 
     #[serde(serialize_with = "serialize_sent_frames")]
     sent_frames: Arc<Http2Frame>,
@@ -16,21 +14,14 @@ pub struct Http2TrackInfo {
 
 impl Http2TrackInfo {
     pub fn new(sent_frames: Arc<Http2Frame>) -> Http2TrackInfo {
-        let now = sent_frames.elapsed();
-
-        let (akamai_fingerprint, full_akamai_fingerprint) =
-            compute_akamai_fingerprint(&sent_frames);
-
+        let track_time = format!("{:?}", sent_frames.elapsed());
+        let akamai_fingerprint = compute_akamai_fingerprint(&sent_frames);
         let akamai_fingerprint_hash = compute_akamai_fingerprint_hash(&akamai_fingerprint);
-        let full_akamai_fingerprint_hash =
-            compute_akamai_fingerprint_hash(&full_akamai_fingerprint);
 
         Self {
-            track_time: format!("{now:?}"),
+            track_time,
             akamai_fingerprint,
             akamai_fingerprint_hash,
-            full_akamai_fingerprint,
-            full_akamai_fingerprint_hash,
             sent_frames,
         }
     }
@@ -46,12 +37,11 @@ fn compute_akamai_fingerprint_hash(akamai_fingerprint: &str) -> String {
 ///
 /// The Akamai fingerprint is a string of 16 bytes that is computed from the sent frames.
 /// It is used to identify the client and the server.
-fn compute_akamai_fingerprint(sent_frames: &Arc<Http2Frame>) -> (String, String) {
+fn compute_akamai_fingerprint(sent_frames: &Arc<Http2Frame>) -> String {
     let mut setting_group = Vec::new();
     let mut window_update_group = None;
     let mut priority_group = None;
-    let mut headers_group = String::new();
-    let mut full_headers_group = Vec::with_capacity(4);
+    let mut headers_group = Vec::with_capacity(4);
 
     for (_, frame) in sent_frames.iter() {
         match frame {
@@ -75,14 +65,11 @@ fn compute_akamai_fingerprint(sent_frames: &Arc<Http2Frame>) -> (String, String)
                 ));
             }
             Frame::Headers(frame) => {
-                let pseudo_headers = frame.pseudo_headers.join(",");
-                headers_group.push_str(&pseudo_headers);
-
-                full_headers_group.push(format!("{}", frame.stream_id));
-                full_headers_group.push(pseudo_headers);
-                full_headers_group.push(format!("{}", *frame.flags));
+                headers_group.push(format!("{}", frame.stream_id));
+                headers_group.push(frame.pseudo_headers.join(","));
+                headers_group.push(format!("{}", *frame.flags));
                 if let Some(ref priority) = frame.priority {
-                    full_headers_group.push(format!(
+                    headers_group.push(format!(
                         "{}:{}:{}",
                         priority.exclusive as u8,
                         priority.depends_on,
@@ -97,28 +84,20 @@ fn compute_akamai_fingerprint(sent_frames: &Arc<Http2Frame>) -> (String, String)
     }
 
     let mut akamai_fingerprint = Vec::with_capacity(3);
-    let mut full_akamai_fingerprint = Vec::with_capacity(3);
 
     akamai_fingerprint.push(setting_group.join(";"));
-    full_akamai_fingerprint.push(setting_group.join(";"));
 
     if let Some(window_update_group) = window_update_group {
         akamai_fingerprint.push(window_update_group.to_string());
-        full_akamai_fingerprint.push(window_update_group.to_string());
     }
 
     if let Some(priority_group) = priority_group {
         akamai_fingerprint.push(priority_group.join(","));
-        full_akamai_fingerprint.push(priority_group.join(","));
     }
 
-    akamai_fingerprint.push(headers_group);
-    full_akamai_fingerprint.push(full_headers_group.join(";"));
+    akamai_fingerprint.push(headers_group.join(";"));
 
-    (
-        akamai_fingerprint.join("|"),
-        full_akamai_fingerprint.join("|"),
-    )
+    akamai_fingerprint.join("|")
 }
 
 fn serialize_sent_frames<S>(sent_frames: &Arc<Http2Frame>, serializer: S) -> Result<S::Ok, S::Error>
