@@ -14,8 +14,9 @@ use tokio::io::{self, AsyncRead, AsyncWrite, ReadBuf};
 use tokio::time::Instant;
 use tokio_rustls::server::TlsStream;
 
+#[derive(Clone, Debug)]
 pub struct Http2Frame {
-    inner: boxcar::Vec<Frame>,
+    inner: Arc<boxcar::Vec<Frame>>,
 }
 
 impl Deref for Http2Frame {
@@ -32,7 +33,7 @@ pin_project_lite::pin_project! {
         inner: TlsStream<TlsInspector<I>>,
 
         buf: Vec<u8>,
-        http2_frames: Arc<Http2Frame>,
+        http2_frames: Http2Frame,
     }
 }
 
@@ -44,15 +45,15 @@ where
         Self {
             inner,
             buf: Vec::new(),
-            http2_frames: Arc::new(Http2Frame {
-                inner: boxcar::Vec::new(),
-            }),
+            http2_frames: Http2Frame {
+                inner: Arc::new(boxcar::Vec::new()),
+            },
         }
     }
 
     #[inline]
     #[must_use]
-    pub fn frames(&self) -> Arc<Http2Frame> {
+    pub fn frames(&self) -> Http2Frame {
         self.http2_frames.clone()
     }
 }
@@ -77,7 +78,7 @@ where
         let not_http2 = me.buf.len() >= plen && !me.buf.starts_with(HTTP2_PREFACE);
         if !not_http2 {
             me.buf.extend(&buf.filled()[len..]);
-            let frames = &me.http2_frames.inner;
+            let frames = me.http2_frames.deref();
             while me.buf.len() > plen {
                 let last = frames.iter().last().map(|f| f.1);
                 if matches!(last, Some(Frame::Headers(_))) {
@@ -181,7 +182,7 @@ pub struct SettingsFrame {
     pub settings: Vec<Setting>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub enum Setting {
     HeaderTableSize(u16, u32),
     EnablePush(u16, u32),
@@ -300,6 +301,31 @@ impl TryFrom<(u8, u8, u32, &[u8])> for Frame {
 }
 
 /// ====== impl SettingsFrame ======
+
+impl Serialize for Setting {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let value = match self {
+            Setting::HeaderTableSize(_, value) => format!("HEADER_TABLE_SIZE = {}", value),
+            Setting::EnablePush(_, value) => format!("ENABLE_PUSH = {}", value),
+            Setting::MaxConcurrentStreams(_, value) => {
+                format!("MAX_CONCURRENT_STREAMS = {}", value)
+            }
+            Setting::InitialWindowSize(_, value) => format!("INITIAL_WINDOW_SIZE = {}", value),
+            Setting::MaxFrameSize(_, value) => format!("MAX_FRAME_SIZE = {}", value),
+            Setting::MaxHeaderListSize(_, value) => format!("MAX_HEADER_LIST_SIZE = {}", value),
+            Setting::EnableConnectProtocol(_, value) => {
+                format!("ENABLE_CONNECT_PROTOCOL = {}", value)
+            }
+            Setting::NoRfc7540Priorities(_, value) => format!("NO_RFC7540_PRIORITIES = {}", value),
+            Setting::UnknownSetting(_, value) => format!("UNKNOWN_SETTING = {}", value),
+        };
+
+        serializer.serialize_str(&value)
+    }
+}
 
 impl TryFrom<(u32, &[u8])> for SettingsFrame {
     type Error = ();

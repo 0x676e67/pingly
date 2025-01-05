@@ -53,6 +53,8 @@ pub async fn run(config: Config) -> Result<()> {
         .layer(ConcurrencyLimitLayer::new(config.concurrent));
 
     let router = Router::new()
+        .route("/api/all", get(route::track))
+        .route("/api/tls", get(route::tls_track))
         .route("/api/http2", get(route::http2_frames))
         .layer(global_layer);
 
