@@ -1,8 +1,9 @@
+use serde::Serialize;
 use std::io::IoSlice;
 use std::pin::Pin;
 use std::task;
 use std::task::Poll;
-use tls_parser::{TlsCipherSuite, TlsCipherSuiteID, TlsMessage, TlsMessageHandshake};
+use tls_parser::{TlsCipherSuite, TlsExtension, TlsExtensionType, TlsMessage, TlsMessageHandshake};
 use tokio::io::{self, AsyncRead, AsyncWrite, ReadBuf};
 
 pin_project_lite::pin_project! {
@@ -11,7 +12,7 @@ pin_project_lite::pin_project! {
         inner: I,
 
         buf: Vec<u8>,
-        client_hello: Option<()>,
+        client_hello: Option<ClientHello>,
     }
 }
 
@@ -31,7 +32,7 @@ where
     /// Take the ownership of client hello payload, leaving the `None` in the place
     #[inline]
     #[must_use]
-    pub fn client_hello(&mut self) -> Option<()> {
+    pub fn client_hello(&mut self) -> Option<ClientHello> {
         self.client_hello.take()
     }
 }
@@ -52,7 +53,7 @@ where
 
         if me.client_hello.is_none() {
             me.buf.extend(&buf.filled()[len..]);
-            // *me.client_hello = parse_client_hello(me.buf);
+            *me.client_hello = ClientHello::parse(me.buf);
         }
 
         poll
@@ -97,35 +98,95 @@ where
     }
 }
 
-/// Parse client hello payload from tls plaintext
-#[allow(unused)]
-#[inline]
-fn parse_client_hello(bytes: &[u8]) -> Option<()> {
-    let (_, r) = tls_parser::parse_tls_raw_record(bytes).ok()?;
-    let (_, msg_list) = tls_parser::parse_tls_record_with_header(r.data, &r.hdr).ok()?;
+#[derive(Clone, Serialize)]
+pub struct ClientHello {
+    pub ciphers: Vec<&'static str>,
+    pub extensions: Vec<Extension>,
+    pub version: String,
+    pub random: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+}
 
-    // Find client hello payload
-    if let Some(TlsMessage::Handshake(TlsMessageHandshake::ClientHello(payload))) =
-        msg_list.into_iter().find(|msg| {
-            matches!(
-                msg,
-                TlsMessage::Handshake(TlsMessageHandshake::ClientHello(_))
-            )
-        })
-    {
-        // Parse tls extensions
-        let ext = payload.ext?;
-        let (_, ext_list) = tls_parser::parse_tls_client_hello_extensions(ext).ok()?;
+#[derive(Clone, Serialize)]
+pub struct Extension {
+    name: String,
+    value: Vec<u8>,
+}
 
-        let mut client_hello_payload = Vec::with_capacity(ext_list.len());
+/// ==== impl ClientHello ====
 
-        // Cipher suites
-        client_hello_payload.push(payload.ciphers);
+impl ClientHello {
+    #[inline]
+    fn parse(bytes: &[u8]) -> Option<ClientHello> {
+        let (_, r) = tls_parser::parse_tls_raw_record(bytes).ok()?;
+        let (_, msg_list) = tls_parser::parse_tls_record_with_header(r.data, &r.hdr).ok()?;
 
-        // return Some(client_hello_payload);
+        // Find client hello payload
+        if let Some(TlsMessage::Handshake(TlsMessageHandshake::ClientHello(payload))) =
+            msg_list.into_iter().find(|msg| {
+                matches!(
+                    msg,
+                    TlsMessage::Handshake(TlsMessageHandshake::ClientHello(_))
+                )
+            })
+        {
+            // Parse tls extensions
+            let ext = payload.ext?;
+            let (_, ext_list) = tls_parser::parse_tls_client_hello_extensions(ext).ok()?;
+
+            let client_hello = ClientHello {
+                ciphers: payload
+                    .ciphers
+                    .iter()
+                    .flat_map(|v| TlsCipherSuite::from_id(v.0).map(|v| v.name))
+                    .collect(),
+                extensions: vec![],
+                version: format!("{}", payload.version),
+                random: hex::encode(payload.random),
+                session_id: payload.session_id.map(hex::encode),
+            };
+
+            for extension in ext_list {
+                match extension {
+                    TlsExtension::SNI(v) => {
+                        let _ = v.into_iter().map(|(_, v)| dbg!(String::from_utf8_lossy(v)));
+                    }
+                    _ => {} // TlsExtension::MaxFragmentLength(_) => todo!(),
+                            // TlsExtension::StatusRequest(_) => todo!(),
+                            // TlsExtension::EllipticCurves(vec) => todo!(),
+                            // TlsExtension::EcPointFormats(_) => todo!(),
+                            // TlsExtension::SignacatureAlgorithms(vec) => todo!(),
+                            // TlsExtension::RecordSizeLimit(_) => todo!(),
+                            // TlsExtension::SessionTicket(_) => todo!(),
+                            // TlsExtension::KeyShareOld(_) => todo!(),
+                            // TlsExtension::KeyShare(_) => todo!(),
+                            // TlsExtension::PreSharedKey(_) => todo!(),
+                            // TlsExtension::EarlyData(_) => todo!(),
+                            // TlsExtension::SupportedVersions(vec) => todo!(),
+                            // TlsExtension::Cookie(_) => todo!(),
+                            // TlsExtension::PskExchangeModes(vec) => todo!(),
+                            // TlsExtension::Heartbeat(_) => todo!(),
+                            // TlsExtension::ALPN(vec) => todo!(),
+                            // TlsExtension::SignedCertificateTimestamp(_) => todo!(),
+                            // TlsExtension::Padding(_) => todo!(),
+                            // TlsExtension::EncryptThenMac => todo!(),
+                            // TlsExtension::ExtendedMasterSecret => todo!(),
+                            // TlsExtension::OidFilters(vec) => todo!(),
+                            // TlsExtension::PostHandshakeAuth => todo!(),
+                            // TlsExtension::NextProtocolNegotiation => todo!(),
+                            // TlsExtension::RenegotiationInfo(_) => todo!(),
+                            // TlsExtension::EncryptedServerName { ciphersuite, group, key_share, record_digest, encrypted_sni } => todo!(),
+                            // TlsExtension::Grease(_, _) => todo!(),
+                            // TlsExtension::Unknown(tls_extension_type, _) => todo!(),
+                }
+            }
+
+            return Some(client_hello);
+        }
+
+        None
     }
-
-    None
 }
 
 /// Find the signature name from the value
@@ -169,11 +230,4 @@ pub fn find_signature_name(value: &u16) -> Option<&'static str> {
         2076 => Some("ecdsa_brainpoolP512r1tls13_sha512"),
         _ => None,
     }
-}
-
-/// Find the cipher name from the value
-#[allow(unused)]
-#[inline]
-pub fn find_cipher_name(value: &TlsCipherSuiteID) -> Option<&'static str> {
-    TlsCipherSuite::from_id(value.0).map(|v| v.name)
 }

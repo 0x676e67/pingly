@@ -31,12 +31,12 @@ where
         let acceptor = self.0.clone();
         Box::pin(async move {
             let (mut stream, service) = acceptor.accept(TlsInspector::new(stream), service).await?;
-            let _client_hello = stream.get_mut().0.client_hello();
+            let client_hello = stream.get_mut().0.client_hello();
 
             let stream = Http2Inspector::new(stream);
             let http2_frames = stream.frames();
 
-            let track = ConnectTrack::new(http2_frames);
+            let track = ConnectTrack::new(client_hello, http2_frames);
             let service = Extension(track).layer(service);
 
             Ok((stream, service))
