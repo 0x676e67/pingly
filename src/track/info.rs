@@ -1,6 +1,25 @@
-use super::{inspector::Frame, Http2Frame};
+use super::{
+    inspector::{ClientHello, Frame},
+    Http2Frame,
+};
 use serde::{Serialize, Serializer};
-use std::sync::Arc;
+
+pub struct TlsTrackInfo(ClientHello);
+
+impl TlsTrackInfo {
+    pub fn new(client_hello: ClientHello) -> TlsTrackInfo {
+        TlsTrackInfo(client_hello)
+    }
+}
+
+impl Serialize for TlsTrackInfo {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.0.serialize(serializer)
+    }
+}
 
 #[derive(Serialize)]
 pub struct Http2TrackInfo {
@@ -8,19 +27,23 @@ pub struct Http2TrackInfo {
     akamai_fingerprint_hash: String,
 
     #[serde(serialize_with = "serialize_sent_frames")]
-    sent_frames: Arc<Http2Frame>,
+    sent_frames: Http2Frame,
 }
 
 impl Http2TrackInfo {
-    pub fn new(sent_frames: Arc<Http2Frame>) -> Http2TrackInfo {
+    pub fn new(sent_frames: Http2Frame) -> Option<Http2TrackInfo> {
+        if sent_frames.is_empty() {
+            return None;
+        }
+
         let akamai_fingerprint = compute_akamai_fingerprint(&sent_frames);
         let akamai_fingerprint_hash = compute_akamai_fingerprint_hash(&akamai_fingerprint);
 
-        Self {
+        Some(Self {
             akamai_fingerprint,
             akamai_fingerprint_hash,
             sent_frames,
-        }
+        })
     }
 }
 
@@ -34,7 +57,7 @@ fn compute_akamai_fingerprint_hash(akamai_fingerprint: &str) -> String {
 ///
 /// The Akamai fingerprint is a string of 16 bytes that is computed from the sent frames.
 /// It is used to identify the client and the server.
-fn compute_akamai_fingerprint(sent_frames: &Arc<Http2Frame>) -> String {
+fn compute_akamai_fingerprint(sent_frames: &Http2Frame) -> String {
     let mut setting_group = Vec::new();
     let mut window_update_group = None;
     let mut priority_group = None;
@@ -97,7 +120,7 @@ fn compute_akamai_fingerprint(sent_frames: &Arc<Http2Frame>) -> String {
     akamai_fingerprint.join("|")
 }
 
-fn serialize_sent_frames<S>(sent_frames: &Arc<Http2Frame>, serializer: S) -> Result<S::Ok, S::Error>
+fn serialize_sent_frames<S>(sent_frames: &Http2Frame, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
