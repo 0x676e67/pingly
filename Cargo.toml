@@ -20,7 +20,7 @@ axum-extra = { version = "0.10.0", default-features = false, features = ["erased
 axum-server = { version = "0.7.1", features = ["tls-rustls"] }
 tower-http = { version = "0.6.2", default-features = false, features = ["trace", "cors"] }
 tower = { version = "0.5.2", default-features = false, features = ["limit"] }
-rcgen = "0.13.2"
+rcgen = "0.14.1"
 md5 = "0.7.0"
 hex = "0.4.3"
 
