@@ -8,10 +8,7 @@ pub(super) async fn graceful_shutdown(handle: Handle) {
     tokio::signal::ctrl_c()
         .await
         .expect("Ctrl+C signal hanlde error");
-    sending_graceful_shutdown_signal(handle).await;
-}
 
-async fn sending_graceful_shutdown_signal(handle: Handle) {
     info!("Ctrl+C signal received: starting graceful shutdown");
 
     // Signal the server to shutdown using Handle.
