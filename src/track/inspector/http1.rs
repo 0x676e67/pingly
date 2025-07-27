@@ -1,0 +1,106 @@
+#![allow(unused)]
+use std::{
+    fmt::Write, io::IoSlice, ops::Deref, pin::Pin, sync::Arc, task, task::Poll, time::Duration,
+};
+
+use axum::http::{HeaderMap, HeaderName};
+use bytes::Bytes;
+use httlib_hpack::Decoder;
+use pin_project_lite::pin_project;
+use serde::{ser::SerializeStruct, Serialize, Serializer};
+use tokio::{
+    io::{self, AsyncRead, AsyncWrite, ReadBuf},
+    time::Instant,
+};
+use tokio_rustls::server::TlsStream;
+
+use crate::track::TlsInspector;
+
+pub type Http1Headers = Arc<boxcar::Vec<(Bytes, Bytes)>>;
+
+pin_project! {
+    pub struct Http1Inspector<I> {
+        #[pin]
+        inner: TlsStream<TlsInspector<I>>,
+        buf: Vec<u8>,
+        headers: Http1Headers,
+    }
+}
+
+impl<I> Http1Inspector<I>
+where
+    I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    pub fn new(inner: TlsStream<TlsInspector<I>>) -> Self {
+        Self {
+            inner,
+            buf: Vec::new(),
+            headers: Arc::new(boxcar::Vec::new()),
+        }
+    }
+
+    /// Get previously parsed HTTP/1 headers
+    #[inline]
+    pub fn headers(&self) -> Http1Headers {
+        self.headers.clone()
+    }
+}
+
+impl<I> AsyncRead for Http1Inspector<I>
+where
+    I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut task::Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let this = self.project();
+        let prev_len = buf.filled().len();
+        let poll = this.inner.poll_read(cx, buf);
+
+        // Only process new data
+        let new_data = &buf.filled()[prev_len..];
+        if !new_data.is_empty() {
+            this.buf.extend_from_slice(new_data);
+            // Try to parse headers
+            let mut headers = [httparse::EMPTY_HEADER; 64];
+            let mut req = httparse::Request::new(&mut headers);
+            if let Ok(httparse::Status::Complete(_header_len)) = req.parse(&this.buf) {
+                let headers = this.headers.deref();
+                for h in req.headers.iter() {
+                    headers.push((
+                        Bytes::from(h.name.to_owned()),
+                        Bytes::copy_from_slice(h.value),
+                    ));
+                }
+            }
+        }
+
+        poll
+    }
+}
+
+impl<I> AsyncWrite for Http1Inspector<I>
+where
+    I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    #[inline]
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut task::Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        self.project().inner.poll_write(cx, buf)
+    }
+
+    #[inline]
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut task::Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    #[inline]
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<io::Result<()>> {
+        self.project().inner.poll_shutdown(cx)
+    }
+}

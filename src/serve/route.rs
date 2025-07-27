@@ -1,5 +1,5 @@
-use super::track::TrackInfo;
-use crate::{error::Error, track::ConnectTrack, Result};
+use std::net::SocketAddr;
+
 use axum::{
     body::Body,
     extract::ConnectInfo,
@@ -8,7 +8,9 @@ use axum::{
     Extension,
 };
 use axum_extra::response::ErasedJson;
-use std::net::SocketAddr;
+
+use super::track::TrackInfo;
+use crate::{error::Error, track::ConnectionTrack, Result};
 
 impl IntoResponse for Error {
     fn into_response(self) -> axum::response::Response {
@@ -20,18 +22,18 @@ impl IntoResponse for Error {
 #[inline]
 pub async fn track(
     Extension(ConnectInfo(addr)): Extension<ConnectInfo<SocketAddr>>,
-    Extension(track): Extension<ConnectTrack>,
+    Extension(track): Extension<ConnectionTrack>,
     req: Request<Body>,
 ) -> Result<ErasedJson> {
-    let (tls, http2) = tokio::task::spawn_blocking(move || track.into_track_info()).await?;
-    let info = TrackInfo::new(addr, tls, http2, &req);
+    let (tls, http1, http2) = tokio::task::spawn_blocking(move || track.into_track_info()).await?;
+    let info = TrackInfo::new(addr, &req, tls, http1, http2);
     Ok(ErasedJson::pretty(info))
 }
 
 #[inline]
 pub async fn tls_track(
     Extension(ConnectInfo(addr)): Extension<ConnectInfo<SocketAddr>>,
-    Extension(track): Extension<ConnectTrack>,
+    Extension(track): Extension<ConnectionTrack>,
     req: Request<Body>,
 ) -> Result<ErasedJson> {
     let tls = tokio::task::spawn_blocking(move || track.into_tls_track_info()).await?;
@@ -40,9 +42,20 @@ pub async fn tls_track(
 }
 
 #[inline]
+pub async fn http1_headers(
+    Extension(ConnectInfo(addr)): Extension<ConnectInfo<SocketAddr>>,
+    Extension(track): Extension<ConnectionTrack>,
+    req: Request<Body>,
+) -> Result<ErasedJson> {
+    let http1 = tokio::task::spawn_blocking(move || track.into_http1_headers()).await?;
+    let info = TrackInfo::new_http1_track(addr, http1, &req);
+    Ok(ErasedJson::pretty(info))
+}
+
+#[inline]
 pub async fn http2_frames(
     Extension(ConnectInfo(addr)): Extension<ConnectInfo<SocketAddr>>,
-    Extension(track): Extension<ConnectTrack>,
+    Extension(track): Extension<ConnectionTrack>,
     req: Request<Body>,
 ) -> Result<ErasedJson> {
     let http2 = tokio::task::spawn_blocking(move || track.into_http2_track_info()).await?;

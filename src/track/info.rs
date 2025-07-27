@@ -1,10 +1,17 @@
+use serde::{Serialize, Serializer};
+
 use super::{
     inspector::{ClientHello, Frame},
     Http2Frame,
 };
-use serde::{Serialize, Serializer};
+use crate::track::inspector::Http1Headers;
 
+#[derive(Serialize)]
 pub struct TlsTrackInfo(ClientHello);
+
+pub struct Http1TrackInfo(Http1Headers);
+
+// ==== impl Http1TrackInfo ====
 
 impl TlsTrackInfo {
     pub fn new(client_hello: ClientHello) -> TlsTrackInfo {
@@ -12,14 +19,34 @@ impl TlsTrackInfo {
     }
 }
 
-impl Serialize for TlsTrackInfo {
+// ==== impl Http1TrackInfo ====
+
+impl Http1TrackInfo {
+    pub fn new(headers: Http1Headers) -> Http1TrackInfo {
+        Http1TrackInfo(headers)
+    }
+}
+
+impl Serialize for Http1TrackInfo {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        self.0.serialize(serializer)
+        use serde::ser::SerializeSeq;
+        let mut seq = serializer.serialize_seq(Some(self.0.count()))?;
+        for (_, (name, value)) in self.0.iter() {
+            let s = format!(
+                "{}: {}",
+                String::from_utf8_lossy(name),
+                String::from_utf8_lossy(value)
+            );
+            seq.serialize_element(&s)?;
+        }
+        seq.end()
     }
 }
+
+// ==== impl Http2TrackInfo ====
 
 #[derive(Serialize)]
 pub struct Http2TrackInfo {

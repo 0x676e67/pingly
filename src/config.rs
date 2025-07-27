@@ -1,5 +1,6 @@
-use clap::Args;
 use std::{net::SocketAddr, path::PathBuf};
+
+use clap::Args;
 
 #[derive(Args, Clone)]
 pub struct Config {

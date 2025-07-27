@@ -1,39 +1,27 @@
 #![allow(unused)]
-use crate::track::TlsInspector;
+use std::{
+    fmt::Write, io::IoSlice, ops::Deref, pin::Pin, sync::Arc, task, task::Poll, time::Duration,
+};
+
 use httlib_hpack::Decoder;
-use serde::ser::SerializeStruct;
-use serde::{Serialize, Serializer};
-use std::fmt::Write;
-use std::ops::Deref;
-use std::pin::Pin;
-use std::task;
-use std::task::Poll;
-use std::time::Duration;
-use std::{io::IoSlice, sync::Arc};
-use tokio::io::{self, AsyncRead, AsyncWrite, ReadBuf};
-use tokio::time::Instant;
+use pin_project_lite::pin_project;
+use serde::{ser::SerializeStruct, Serialize, Serializer};
+use tokio::{
+    io::{self, AsyncRead, AsyncWrite, ReadBuf},
+    time::Instant,
+};
 use tokio_rustls::server::TlsStream;
 
-#[derive(Clone, Debug)]
-pub struct Http2Frame {
-    inner: Arc<boxcar::Vec<Frame>>,
-}
+use crate::track::TlsInspector;
 
-impl Deref for Http2Frame {
-    type Target = boxcar::Vec<Frame>;
+pub type Http2Frame = Arc<boxcar::Vec<Frame>>;
 
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
-pin_project_lite::pin_project! {
+pin_project! {
     pub struct Http2Inspector<I> {
         #[pin]
         inner: TlsStream<TlsInspector<I>>,
-
         buf: Vec<u8>,
-        http2_frames: Http2Frame,
+        frames: Http2Frame,
     }
 }
 
@@ -45,16 +33,14 @@ where
         Self {
             inner,
             buf: Vec::new(),
-            http2_frames: Http2Frame {
-                inner: Arc::new(boxcar::Vec::new()),
-            },
+            frames: Arc::new(boxcar::Vec::new()),
         }
     }
 
     #[inline]
     #[must_use]
     pub fn frames(&self) -> Http2Frame {
-        self.http2_frames.clone()
+        self.frames.clone()
     }
 }
 
@@ -71,22 +57,22 @@ where
         const HTTP2_PREFACE: &[u8] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 
         let len = buf.filled().len();
-        let me = self.project();
-        let poll = me.inner.poll_read(cx, buf);
+        let this = self.project();
+        let poll = this.inner.poll_read(cx, buf);
 
         let plen = HTTP2_PREFACE.len();
-        let not_http2 = me.buf.len() >= plen && !me.buf.starts_with(HTTP2_PREFACE);
+        let not_http2 = this.buf.len() >= plen && !this.buf.starts_with(HTTP2_PREFACE);
         if !not_http2 {
-            me.buf.extend(&buf.filled()[len..]);
-            let frames = me.http2_frames.deref();
-            while me.buf.len() > plen {
+            this.buf.extend(&buf.filled()[len..]);
+            let frames = this.frames.deref();
+            while this.buf.len() > plen {
                 let last = frames.iter().last().map(|f| f.1);
                 if matches!(last, Some(Frame::Headers(_))) {
                     break;
                 }
-                let (frame_len, frame) = parse_frame(&me.buf[plen..]);
+                let (frame_len, frame) = parse_frame(&this.buf[plen..]);
                 if frame_len > 0 {
-                    me.buf.drain(plen..plen + frame_len);
+                    this.buf.drain(plen..plen + frame_len);
                     if let Some(frame) = frame {
                         frames.push(frame);
                     }
@@ -114,15 +100,6 @@ where
     }
 
     #[inline]
-    fn poll_write_vectored(
-        self: Pin<&mut Self>,
-        cx: &mut task::Context<'_>,
-        bufs: &[IoSlice<'_>],
-    ) -> Poll<io::Result<usize>> {
-        self.project().inner.poll_write_vectored(cx, bufs)
-    }
-
-    #[inline]
     fn poll_flush(self: Pin<&mut Self>, _cx: &mut task::Context<'_>) -> Poll<io::Result<()>> {
         Poll::Ready(Ok(()))
     }
@@ -130,11 +107,6 @@ where
     #[inline]
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<io::Result<()>> {
         self.project().inner.poll_shutdown(cx)
-    }
-
-    #[inline]
-    fn is_write_vectored(&self) -> bool {
-        self.inner.is_write_vectored()
     }
 }
 
@@ -284,7 +256,7 @@ impl Serialize for HeadersFlag {
     }
 }
 
-/// ====== impl Http2Frame ======
+/// ====== impl Frame ======
 
 impl TryFrom<(u8, u8, u32, &[u8])> for Frame {
     type Error = ();
@@ -300,7 +272,7 @@ impl TryFrom<(u8, u8, u32, &[u8])> for Frame {
     }
 }
 
-/// ====== impl SettingsFrame ======
+// ====== impl Setting ======
 
 impl Serialize for Setting {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -326,6 +298,8 @@ impl Serialize for Setting {
         serializer.serialize_str(&value)
     }
 }
+
+// ====== impl SettingsFrame ======
 
 impl TryFrom<(u32, &[u8])> for SettingsFrame {
     type Error = ();

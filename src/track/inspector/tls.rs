@@ -1,9 +1,7 @@
+use std::{pin::Pin, task, task::Poll};
+
 use serde::Serialize;
-use std::io::IoSlice;
-use std::pin::Pin;
-use std::task;
-use std::task::Poll;
-use tls_parser::{TlsCipherSuite, TlsExtension, TlsExtensionType, TlsMessage, TlsMessageHandshake};
+use tls_parser::{TlsCipherSuite, TlsExtension, TlsMessage, TlsMessageHandshake};
 use tokio::io::{self, AsyncRead, AsyncWrite, ReadBuf};
 
 pin_project_lite::pin_project! {
@@ -74,15 +72,6 @@ where
     }
 
     #[inline]
-    fn poll_write_vectored(
-        self: Pin<&mut Self>,
-        cx: &mut task::Context<'_>,
-        bufs: &[IoSlice<'_>],
-    ) -> Poll<io::Result<usize>> {
-        self.project().inner.poll_write_vectored(cx, bufs)
-    }
-
-    #[inline]
     fn poll_flush(self: Pin<&mut Self>, _cx: &mut task::Context<'_>) -> Poll<io::Result<()>> {
         Poll::Ready(Ok(()))
     }
@@ -90,11 +79,6 @@ where
     #[inline]
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<io::Result<()>> {
         self.project().inner.poll_shutdown(cx)
-    }
-
-    #[inline]
-    fn is_write_vectored(&self) -> bool {
-        self.inner.is_write_vectored()
     }
 }
 
@@ -152,33 +136,34 @@ impl ClientHello {
                     TlsExtension::SNI(v) => {
                         let _ = v.into_iter().map(|(_, v)| dbg!(String::from_utf8_lossy(v)));
                     }
-                    _ => {} // TlsExtension::MaxFragmentLength(_) => todo!(),
-                            // TlsExtension::StatusRequest(_) => todo!(),
-                            // TlsExtension::EllipticCurves(vec) => todo!(),
-                            // TlsExtension::EcPointFormats(_) => todo!(),
-                            // TlsExtension::SignacatureAlgorithms(vec) => todo!(),
-                            // TlsExtension::RecordSizeLimit(_) => todo!(),
-                            // TlsExtension::SessionTicket(_) => todo!(),
-                            // TlsExtension::KeyShareOld(_) => todo!(),
-                            // TlsExtension::KeyShare(_) => todo!(),
-                            // TlsExtension::PreSharedKey(_) => todo!(),
-                            // TlsExtension::EarlyData(_) => todo!(),
-                            // TlsExtension::SupportedVersions(vec) => todo!(),
-                            // TlsExtension::Cookie(_) => todo!(),
-                            // TlsExtension::PskExchangeModes(vec) => todo!(),
-                            // TlsExtension::Heartbeat(_) => todo!(),
-                            // TlsExtension::ALPN(vec) => todo!(),
-                            // TlsExtension::SignedCertificateTimestamp(_) => todo!(),
-                            // TlsExtension::Padding(_) => todo!(),
-                            // TlsExtension::EncryptThenMac => todo!(),
-                            // TlsExtension::ExtendedMasterSecret => todo!(),
-                            // TlsExtension::OidFilters(vec) => todo!(),
-                            // TlsExtension::PostHandshakeAuth => todo!(),
-                            // TlsExtension::NextProtocolNegotiation => todo!(),
-                            // TlsExtension::RenegotiationInfo(_) => todo!(),
-                            // TlsExtension::EncryptedServerName { ciphersuite, group, key_share, record_digest, encrypted_sni } => todo!(),
-                            // TlsExtension::Grease(_, _) => todo!(),
-                            // TlsExtension::Unknown(tls_extension_type, _) => todo!(),
+                    _ => {} /* TlsExtension::MaxFragmentLength(_) => todo!(),
+                             * TlsExtension::StatusRequest(_) => todo!(),
+                             * TlsExtension::EllipticCurves(vec) => todo!(),
+                             * TlsExtension::EcPointFormats(_) => todo!(),
+                             * TlsExtension::SignacatureAlgorithms(vec) => todo!(),
+                             * TlsExtension::RecordSizeLimit(_) => todo!(),
+                             * TlsExtension::SessionTicket(_) => todo!(),
+                             * TlsExtension::KeyShareOld(_) => todo!(),
+                             * TlsExtension::KeyShare(_) => todo!(),
+                             * TlsExtension::PreSharedKey(_) => todo!(),
+                             * TlsExtension::EarlyData(_) => todo!(),
+                             * TlsExtension::SupportedVersions(vec) => todo!(),
+                             * TlsExtension::Cookie(_) => todo!(),
+                             * TlsExtension::PskExchangeModes(vec) => todo!(),
+                             * TlsExtension::Heartbeat(_) => todo!(),
+                             * TlsExtension::ALPN(vec) => todo!(),
+                             * TlsExtension::SignedCertificateTimestamp(_) => todo!(),
+                             * TlsExtension::Padding(_) => todo!(),
+                             * TlsExtension::EncryptThenMac => todo!(),
+                             * TlsExtension::ExtendedMasterSecret => todo!(),
+                             * TlsExtension::OidFilters(vec) => todo!(),
+                             * TlsExtension::PostHandshakeAuth => todo!(),
+                             * TlsExtension::NextProtocolNegotiation => todo!(),
+                             * TlsExtension::RenegotiationInfo(_) => todo!(),
+                             * TlsExtension::EncryptedServerName { ciphersuite, group, key_share,
+                             * record_digest, encrypted_sni } => todo!(),
+                             * TlsExtension::Grease(_, _) => todo!(),
+                             * TlsExtension::Unknown(tls_extension_type, _) => todo!(), */
                 }
             }
 

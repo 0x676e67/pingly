@@ -1,10 +1,12 @@
-use crate::{config::Config, serve};
-use daemonize::Daemonize;
 use std::{
     fs::{File, Permissions},
     os::unix::fs::PermissionsExt,
     path::Path,
 };
+
+use daemonize::Daemonize;
+
+use crate::{config::Config, serve};
 
 const PID_PATH: &str = "/var/run/pingly.pid";
 const DEFAULT_STDOUT_PATH: &str = "/var/run/pingly.out";

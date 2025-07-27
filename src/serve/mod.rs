@@ -3,13 +3,9 @@ mod route;
 mod signal;
 mod track;
 
-use std::net::SocketAddr;
-use std::{str::FromStr, time::Duration};
+use std::{net::SocketAddr, str::FromStr, time::Duration};
 
-use crate::Result;
-use crate::{config::Config, track::TrackAcceptor};
-use axum::routing::get;
-use axum::Router;
+use axum::{routing::get, Router};
 use axum_server::{tls_rustls::RustlsConfig, Handle};
 use tower::limit::ConcurrencyLimitLayer;
 use tower_http::{
@@ -18,6 +14,8 @@ use tower_http::{
 };
 use tracing::Level;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
+
+use crate::{config::Config, track::accept::TrackAcceptor, Result};
 
 #[tokio::main]
 pub async fn run(config: Config) -> Result<()> {
@@ -55,6 +53,7 @@ pub async fn run(config: Config) -> Result<()> {
     let router = Router::new()
         .route("/api/all", get(route::track))
         .route("/api/tls", get(route::tls_track))
+        .route("/api/http1", get(route::http1_headers))
         .route("/api/http2", get(route::http2_frames))
         .layer(global_layer);
 
@@ -77,9 +76,6 @@ pub async fn run(config: Config) -> Result<()> {
     let mut server = axum_server::bind_rustls(config.bind, tls_config);
     server
         .http_builder()
-        .http1()
-        .title_case_headers(true)
-        .preserve_header_case(true)
         .http2()
         .keep_alive_timeout(Duration::from_secs(config.keep_alive_timeout));
 
