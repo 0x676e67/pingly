@@ -5,7 +5,7 @@ mod tls;
 use std::{pin::Pin, task, task::Poll};
 
 pub use http1::{Http1Headers, Http1Inspector};
-pub use http2::{Frame, Http2Frame, Http2Inspector};
+pub use http2::{frame::Frame, Http2Frame, Http2Inspector};
 pub use tls::{ClientHello, TlsInspector};
 use tokio::io::{self, AsyncRead, AsyncWrite, ReadBuf};
 

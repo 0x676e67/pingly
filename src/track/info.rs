@@ -113,14 +113,19 @@ fn compute_akamai_fingerprint(sent_frames: &Http2Frame) -> String {
             }
             Frame::Headers(frame) => {
                 headers_group.push(format!("{}", frame.stream_id));
-                headers_group.push(frame.pseudo_headers.join(","));
-                headers_group.push(format!("{}", *frame.flags));
+                headers_group.push(
+                    frame
+                        .pseudo_headers
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(","),
+                );
+                headers_group.push(format!("{}", frame.flags.0));
                 if let Some(ref priority) = frame.priority {
                     headers_group.push(format!(
                         "{}:{}:{}",
-                        priority.exclusive as u8,
-                        priority.depends_on,
-                        priority.weight as u16 + 1
+                        priority.exclusive, priority.depends_on, priority.weight
                     ));
                 }
             }

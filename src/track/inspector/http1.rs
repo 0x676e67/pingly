@@ -19,6 +19,10 @@ use crate::track::TlsInspector;
 pub type Http1Headers = Arc<boxcar::Vec<(Bytes, Bytes)>>;
 
 pin_project! {
+    /// A wrapper over a TLS stream that inspects HTTP/1.x traffic.
+    /// It buffers incoming data, parses HTTP/1 request headers,
+    /// and records parsed headers for later inspection or analysis.
+    /// Does not interfere with normal stream reading or writing.
     pub struct Http1Inspector<I> {
         #[pin]
         inner: TlsStream<TlsInspector<I>>,
@@ -31,6 +35,8 @@ impl<I> Http1Inspector<I>
 where
     I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    /// Create a new `Http1Inspector` instance.
+    #[inline]
     pub fn new(inner: TlsStream<TlsInspector<I>>) -> Self {
         Self {
             inner,
