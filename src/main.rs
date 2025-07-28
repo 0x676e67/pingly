@@ -1,10 +1,10 @@
-pub mod alloc;
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
 
+pub mod alloc;
 #[cfg(target_family = "unix")]
 mod daemon;
 mod error;
 mod serve;
-mod track;
 
 use std::{net::SocketAddr, path::PathBuf};
 

@@ -14,7 +14,7 @@ use tokio::{
 };
 use tokio_rustls::server::TlsStream;
 
-use crate::track::TlsInspector;
+use super::tls::TlsInspector;
 
 pub type Http1Headers = Arc<boxcar::Vec<(Bytes, Bytes)>>;
 
@@ -35,7 +35,7 @@ impl<I> Http1Inspector<I>
 where
     I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    /// Create a new `Http1Inspector` instance.
+    /// Create a new [`Http1Inspector`] instance.
     #[inline]
     pub fn new(inner: TlsStream<TlsInspector<I>>) -> Self {
         Self {

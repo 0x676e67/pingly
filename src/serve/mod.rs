@@ -21,13 +21,9 @@ use tower_http::{
 };
 use tracing::Level;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
+use track::{accept::TrackAcceptor, ConnectionTrack};
 
-use crate::{
-    error::Error,
-    serve::track::TrackInfo,
-    track::{accept::TrackAcceptor, ConnectionTrack},
-    Args, Result,
-};
+use crate::{error::Error, serve::track::info::TrackInfo, Args, Result};
 
 #[tokio::main]
 pub async fn run(args: Args) -> Result<()> {
@@ -124,7 +120,7 @@ pub async fn tls_track(
     req: Request<Body>,
 ) -> Result<ErasedJson> {
     let tls = tokio::task::spawn_blocking(move || track.into_tls_track_info()).await?;
-    let info = TrackInfo::new_tls_track(addr, tls, &req);
+    let info = TrackInfo::new_tls_track(addr, &req, tls);
     Ok(ErasedJson::pretty(info))
 }
 
@@ -135,7 +131,7 @@ pub async fn http1_headers(
     req: Request<Body>,
 ) -> Result<ErasedJson> {
     let http1 = tokio::task::spawn_blocking(move || track.into_http1_headers()).await?;
-    let info = TrackInfo::new_http1_track(addr, http1, &req);
+    let info = TrackInfo::new_http1_track(addr, &req, http1);
     Ok(ErasedJson::pretty(info))
 }
 
@@ -146,6 +142,6 @@ pub async fn http2_frames(
     req: Request<Body>,
 ) -> Result<ErasedJson> {
     let http2 = tokio::task::spawn_blocking(move || track.into_http2_track_info()).await?;
-    let info = TrackInfo::new_http2_track(addr, http2, &req);
+    let info = TrackInfo::new_http2_track(addr, &req, http2);
     Ok(ErasedJson::pretty(info))
 }

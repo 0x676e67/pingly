@@ -6,8 +6,10 @@ use futures_util::future::BoxFuture;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tower::Layer;
 
-use super::{ConnectionTrack, Http2Inspector, TlsInspector};
-use crate::track::inspector::{Http1Inspector, Inspector};
+use super::{
+    inspector::{Http1Inspector, Http2Inspector, Inspector, TlsInspector},
+    ConnectionTrack,
+};
 
 #[derive(Clone)]
 pub struct TrackAcceptor(RustlsAcceptor);
@@ -54,8 +56,7 @@ where
                 }
             };
 
-            let service = Extension(connect_track).layer(service);
-            Ok((stream, service))
+            Ok((stream, Extension(connect_track).layer(service)))
         })
     }
 }

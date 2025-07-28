@@ -2,10 +2,8 @@ pub mod accept;
 pub mod info;
 mod inspector;
 
-use info::{Http2TrackInfo, TlsTrackInfo};
-use inspector::{ClientHello, Http1Headers, Http2Frame, Http2Inspector, TlsInspector};
-
-use crate::track::info::Http1TrackInfo;
+use info::{Http1TrackInfo, Http2TrackInfo, TlsTrackInfo};
+use inspector::{ClientHello, Http1Headers, Http2Frame};
 
 /// ConnectionTrack
 /// Collects TLS, HTTP/1, and HTTP/2 handshake info for tracking.

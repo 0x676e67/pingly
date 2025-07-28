@@ -7,7 +7,7 @@ use pin_project_lite::pin_project;
 use tokio::io::{self, AsyncRead, AsyncWrite, ReadBuf};
 use tokio_rustls::server::TlsStream;
 
-use crate::track::TlsInspector;
+use super::tls::TlsInspector;
 
 pub type Http2Frame = Arc<boxcar::Vec<Frame>>;
 
@@ -28,7 +28,7 @@ impl<I> Http2Inspector<I>
 where
     I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    /// Create a new `Http2Inspector` instance.
+    /// Create a new [`Http2Inspector`] instance.
     #[inline]
     pub fn new(inner: TlsStream<TlsInspector<I>>) -> Self {
         Self {
