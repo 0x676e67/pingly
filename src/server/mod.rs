@@ -111,8 +111,10 @@ pub async fn track(
     Extension(track): Extension<ConnectionTrack>,
     req: Request<Body>,
 ) -> Result<ErasedJson> {
-    let info = TrackInfo::new(Track::ALL, addr, &req, track);
-    Ok(ErasedJson::pretty(info))
+    tokio::task::spawn_blocking(move || TrackInfo::new(Track::ALL, addr, req, track))
+        .await
+        .map(ErasedJson::pretty)
+        .map_err(Error::from)
 }
 
 #[inline]
@@ -121,8 +123,10 @@ pub async fn tls_track(
     Extension(track): Extension<ConnectionTrack>,
     req: Request<Body>,
 ) -> Result<ErasedJson> {
-    let info = TrackInfo::new(Track::TLS, addr, &req, track);
-    Ok(ErasedJson::pretty(info))
+    tokio::task::spawn_blocking(move || TrackInfo::new(Track::TLS, addr, req, track))
+        .await
+        .map(ErasedJson::pretty)
+        .map_err(Error::from)
 }
 
 #[inline]
@@ -131,8 +135,10 @@ pub async fn http1_headers(
     Extension(track): Extension<ConnectionTrack>,
     req: Request<Body>,
 ) -> Result<ErasedJson> {
-    let info = TrackInfo::new(Track::HTTP1, addr, &req, track);
-    Ok(ErasedJson::pretty(info))
+    tokio::task::spawn_blocking(move || TrackInfo::new(Track::HTTP1, addr, req, track))
+        .await
+        .map(ErasedJson::pretty)
+        .map_err(Error::from)
 }
 
 #[inline]
@@ -141,6 +147,8 @@ pub async fn http2_frames(
     Extension(track): Extension<ConnectionTrack>,
     req: Request<Body>,
 ) -> Result<ErasedJson> {
-    let info = TrackInfo::new(Track::HTTP2, addr, &req, track);
-    Ok(ErasedJson::pretty(info))
+    tokio::task::spawn_blocking(move || TrackInfo::new(Track::HTTP2, addr, req, track))
+        .await
+        .map(ErasedJson::pretty)
+        .map_err(Error::from)
 }

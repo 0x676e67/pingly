@@ -12,6 +12,37 @@ use super::{
     parser,
 };
 
+#[derive(Clone)]
+pub struct LazyClientHello {
+    buf: Vec<u8>,
+}
+
+impl LazyClientHello {
+    /// Creates a new, empty buffer for accumulating ClientHello data.
+    pub fn new() -> LazyClientHello {
+        LazyClientHello {
+            buf: Vec::with_capacity(1024),
+        }
+    }
+
+    /// Attempts to parse a TLS ClientHello message from the buffered data.
+    /// Returns `Some(ClientHello)` if parsing succeeds, otherwise `None`.
+    pub fn parse(self) -> Option<ClientHello> {
+        ClientHello::parse(&self.buf)
+    }
+
+    /// Returns `true` if the buffered data has reached the maximum TLS record length.
+    /// This can be used to determine if further buffering is unnecessary.
+    pub fn is_max_record_len(&self) -> bool {
+        self.buf.len() >= tls_parser::MAX_RECORD_LEN.into()
+    }
+
+    /// Appends additional data to the internal buffer.
+    pub fn extend(&mut self, data: &[u8]) {
+        self.buf.extend(data);
+    }
+}
+
 /// Represents a TLS Client Hello message.
 #[derive(Clone, Serialize)]
 pub struct ClientHello {

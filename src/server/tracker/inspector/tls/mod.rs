@@ -6,7 +6,7 @@ mod parser;
 
 use std::{pin::Pin, task, task::Poll};
 
-pub use hello::ClientHello;
+pub use hello::{ClientHello, LazyClientHello};
 use tokio::io::{self, AsyncRead, AsyncWrite, ReadBuf};
 
 pin_project_lite::pin_project! {
@@ -17,9 +17,7 @@ pin_project_lite::pin_project! {
     pub struct TlsInspector<I> {
         #[pin]
         inner: I,
-
-        buf: Vec<u8>,
-        client_hello: Option<ClientHello>,
+        client_hello: Option<LazyClientHello>,
     }
 }
 
@@ -31,16 +29,15 @@ where
     pub fn new(inner: I) -> Self {
         Self {
             inner,
-            buf: Vec::new(),
-            client_hello: None,
+            client_hello: Some(LazyClientHello::new()),
         }
     }
 
-    /// Get client hello payload
-    /// Take the ownership of client hello payload, leaving the `None` in the place
+    /// Extracts and takes ownership of the buffered ClientHello payload,
+    /// leaving `None` in its place.
     #[inline]
     #[must_use]
-    pub fn client_hello(&mut self) -> Option<ClientHello> {
+    pub fn client_hello(&mut self) -> Option<LazyClientHello> {
         self.client_hello.take()
     }
 }
@@ -59,9 +56,10 @@ where
         let this = self.project();
         let poll = this.inner.poll_read(cx, buf);
 
-        if this.client_hello.is_none() {
-            this.buf.extend(&buf.filled()[len..]);
-            *this.client_hello = ClientHello::parse(&this.buf);
+        if let Some(client_hello) = this.client_hello {
+            if !client_hello.is_max_record_len() {
+                client_hello.extend(&buf.filled()[len..]);
+            }
         }
 
         poll

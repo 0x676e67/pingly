@@ -6,7 +6,7 @@ use std::{pin::Pin, task, task::Poll};
 
 pub use http1::{Http1Headers, Http1Inspector};
 pub use http2::{frame::Frame, Http2Frame, Http2Inspector};
-pub use tls::{ClientHello, TlsInspector};
+pub use tls::{ClientHello, LazyClientHello, TlsInspector};
 use tokio::io::{self, AsyncRead, AsyncWrite, ReadBuf};
 
 pub enum Inspector<S> {

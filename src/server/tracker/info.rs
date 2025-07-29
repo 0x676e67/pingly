@@ -2,13 +2,13 @@ use std::net::SocketAddr;
 
 use axum::{
     body::Body,
-    http::{header::USER_AGENT, Request},
+    http::{header::USER_AGENT, HeaderValue, Method, Request},
 };
 use serde::{Serialize, Serializer};
 
-use super::inspector::{ClientHello, Frame, Http1Headers, Http2Frame};
+use super::inspector::{ClientHello, Frame, Http1Headers, Http2Frame, LazyClientHello};
 
-/// TLS handshake tracking information, wrapping the parsed ClientHello.
+/// TLS handshake tracking information, which includes the client hello payload.
 #[derive(Serialize)]
 pub struct TlsTrackInfo(ClientHello);
 
@@ -28,7 +28,7 @@ pub struct Http2TrackInfo {
 /// Collects TLS, HTTP/1, and HTTP/2 handshake info for tracking.
 #[derive(Clone, Default)]
 pub struct ConnectionTrack {
-    client_hello: Option<ClientHello>,
+    client_hello: Option<LazyClientHello>,
     http1_headers: Option<Http1Headers>,
     http2_frames: Option<Http2Frame>,
 }
@@ -37,14 +37,16 @@ pub struct ConnectionTrack {
 /// including TLS handshake info, HTTP/1 headers, and HTTP/2 frames.
 /// Useful for logging, analysis, or debugging connection
 #[derive(Serialize)]
-pub struct TrackInfo<'a> {
+pub struct TrackInfo {
     donate: &'static str,
-    socket_addr: SocketAddr,
+    address: SocketAddr,
     http_version: String,
-    method: &'a str,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
-    user_agent: Option<&'a str>,
+    #[serde(serialize_with = "serialize_method")]
+    method: Method,
+
+    #[serde(serialize_with = "serialize_user_agent")]
+    user_agent: Option<HeaderValue>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     tls: Option<TlsTrackInfo>,
@@ -216,7 +218,7 @@ where
 impl ConnectionTrack {
     /// Set TLS client hello
     #[inline]
-    pub fn set_client_hello(&mut self, client_hello: Option<ClientHello>) {
+    pub fn set_client_hello(&mut self, client_hello: Option<LazyClientHello>) {
         self.client_hello = client_hello;
     }
 
@@ -235,25 +237,28 @@ impl ConnectionTrack {
 
 // ==== impl TrackInfo ====
 
-impl<'a> TrackInfo<'a> {
+impl TrackInfo {
     const DONATE_URL: &'static str = "Analysis server for TLS and HTTP/1/2/3, developed by 0x676e67: https://github.com/0x676e67/pingly";
 
     /// Create a new [`TrackInfo`] instance.
     #[inline]
     pub fn new(
         track: Track,
-        socket_addr: SocketAddr,
-        req: &'a Request<Body>,
+        addr: SocketAddr,
+        req: Request<Body>,
         connection_track: ConnectionTrack,
-    ) -> TrackInfo<'a> {
+    ) -> TrackInfo {
         let headers = req.headers();
         let track_info = TrackInfo {
             donate: Self::DONATE_URL,
-            socket_addr,
+            address: addr,
             http_version: format!("{:?}", req.version()),
-            method: req.method().as_str(),
-            user_agent: headers.get(USER_AGENT).and_then(|v| v.to_str().ok()),
-            tls: connection_track.client_hello.map(TlsTrackInfo::new),
+            method: req.method().clone(),
+            user_agent: headers.get(USER_AGENT).cloned(),
+            tls: connection_track
+                .client_hello
+                .and_then(LazyClientHello::parse)
+                .map(TlsTrackInfo::new),
             http1: connection_track.http1_headers.map(Http1TrackInfo::new),
             http2: connection_track.http2_frames.and_then(Http2TrackInfo::new),
         };
@@ -277,4 +282,27 @@ impl<'a> TrackInfo<'a> {
             },
         }
     }
+}
+
+fn serialize_user_agent<'a, S>(
+    value: &'a Option<HeaderValue>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match value {
+        Some(value) => value
+            .to_str()
+            .map_err(serde::ser::Error::custom)
+            .and_then(|s| serializer.serialize_str(s)),
+        None => serializer.serialize_none(),
+    }
+}
+
+fn serialize_method<S>(method: &Method, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(method.as_str())
 }
