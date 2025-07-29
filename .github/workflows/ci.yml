@@ -29,11 +29,9 @@ jobs:
 
       - uses: actions-rs/toolchain@v1
         with:
-          toolchain: nightly
+          toolchain: stable
+          components: clippy,rustfmt
           override: true
-
-      - name: Install rustfmt
-        run: rustup component add rustfmt
 
       - name: Style check
         run: cargo fmt --all -- --check
