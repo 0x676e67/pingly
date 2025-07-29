@@ -122,6 +122,7 @@ enum_builder! {
     /// by IANA. The `Unknown` item is used when processing unrecognised ordinals.
     /// The `OCSP` value is used to indicate that the certificate status is provided
     /// using the Online Certificate Status Protocol (OCSP).
+    #[allow(clippy::upper_case_acronyms)]
     @U8
     pub enum CertificateStatusType {
         OCSP => 0x01,
@@ -203,12 +204,12 @@ impl ::std::fmt::Display for NamesGroup {
             NamesGroup::P_521 => f.write_str("P-521"),
             NamesGroup::Unknown(x) => {
                 if x & 0x0f0f == 0x0a0a {
-                    write!(f, "GREASE ({:#06x})", x)
+                    write!(f, "GREASE ({x:#06x})")
                 } else {
-                    write!(f, "Unknown ({:#06x})", x)
+                    write!(f, "Unknown ({x:#06x})")
                 }
             }
-            other => write!(f, "{:?}", other),
+            other => write!(f, "{other:?}"),
         }
     }
 }

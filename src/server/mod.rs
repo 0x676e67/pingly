@@ -111,7 +111,7 @@ pub async fn track(
     Extension(track): Extension<ConnectionTrack>,
     req: Request<Body>,
 ) -> Result<ErasedJson> {
-    tokio::task::spawn_blocking(move || TrackInfo::new(Track::ALL, addr, req, track))
+    tokio::task::spawn_blocking(move || TrackInfo::new(Track::All, addr, req, track))
         .await
         .map(ErasedJson::pretty)
         .map_err(Error::from)
@@ -123,7 +123,7 @@ pub async fn tls_track(
     Extension(track): Extension<ConnectionTrack>,
     req: Request<Body>,
 ) -> Result<ErasedJson> {
-    tokio::task::spawn_blocking(move || TrackInfo::new(Track::TLS, addr, req, track))
+    tokio::task::spawn_blocking(move || TrackInfo::new(Track::Tls, addr, req, track))
         .await
         .map(ErasedJson::pretty)
         .map_err(Error::from)

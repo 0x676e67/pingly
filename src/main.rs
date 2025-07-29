@@ -9,8 +9,7 @@ mod server;
 use std::{net::SocketAddr, path::PathBuf};
 
 use clap::{Parser, Subcommand};
-
-type Result<T, E = error::Error> = std::result::Result<T, E>;
+use error::Result;
 
 #[derive(Parser)]
 #[clap(author, version, about, arg_required_else_help = true)]

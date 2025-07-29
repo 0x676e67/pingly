@@ -50,7 +50,7 @@ where
                     Inspector::Http2(inspector)
                 }
                 //  If ALPN is not set, default to HTTP/1.1
-                Some(b"http/1.1") | _ => {
+                _ => {
                     tracing::debug!("negotiated ALPN protocol: HTTP/1.1 or not set");
                     let inspector = Http1Inspector::new(stream);
                     connect_track.set_http1_headers(inspector.headers());

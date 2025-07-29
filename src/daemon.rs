@@ -32,7 +32,7 @@ pub fn root() {
 /// Start the daemon
 pub fn start(config: Args) -> crate::Result<()> {
     if let Some(pid) = get_pid() {
-        println!("pingly is already running with pid: {}", pid);
+        println!("pingly is already running with pid: {pid}");
         return Ok(());
     }
 
@@ -149,9 +149,9 @@ pub fn log() -> crate::Result<()> {
                     start = false;
                     println!("{placeholder}");
                 }
-                println!("{}", content);
+                println!("{content}");
             } else if let Err(err) = line {
-                eprintln!("Error reading line: {}", err);
+                eprintln!("Error reading line: {err}");
             }
         }
 

@@ -9,6 +9,9 @@ pub use http2::{frame::Frame, Http2Frame, Http2Inspector};
 pub use tls::{ClientHello, LazyClientHello, TlsInspector};
 use tokio::io::{self, AsyncRead, AsyncWrite, ReadBuf};
 
+/// `Inspector` is an enum that wraps protocol-specific inspectors (such as `Http1Inspector` and
+/// `Http2Inspector`) to provide a unified interface for inspecting and tracking different protocol
+/// streams. Implements `AsyncRead` and `AsyncWrite` by delegating to the underlying
 pub enum Inspector<S> {
     Http1(Http1Inspector<S>),
     Http2(Http2Inspector<S>),

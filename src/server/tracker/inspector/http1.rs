@@ -72,7 +72,7 @@ where
             // Try to parse headers
             let mut headers = [httparse::EMPTY_HEADER; 64];
             let mut req = httparse::Request::new(&mut headers);
-            if let Ok(httparse::Status::Complete(_header_len)) = req.parse(&this.buf) {
+            if let Ok(httparse::Status::Complete(_header_len)) = req.parse(this.buf) {
                 let headers = this.headers.deref();
                 for h in req.headers.iter() {
                     headers.push((

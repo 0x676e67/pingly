@@ -61,8 +61,8 @@ pub struct TrackInfo {
 /// Track enum to specify which tracking information to collect.
 #[repr(u8)]
 pub enum Track {
-    ALL,
-    TLS,
+    All,
+    Tls,
     HTTP1,
     HTTP2,
 }
@@ -156,9 +156,9 @@ fn compute_akamai_fingerprint(sent_frames: &Http2Frame) -> String {
                 priority_group.push(format!(
                     "{}:{}:{}:{}",
                     frame.stream_id,
-                    frame.priority.exclusive as u8,
+                    frame.priority.exclusive,
                     frame.priority.depends_on,
-                    frame.priority.weight as u16 + 1
+                    frame.priority.weight + 1
                 ));
             }
             Frame::Headers(frame) => {
@@ -264,8 +264,8 @@ impl TrackInfo {
         };
 
         match track {
-            Track::ALL => track_info,
-            Track::TLS => TrackInfo {
+            Track::All => track_info,
+            Track::Tls => TrackInfo {
                 http1: None,
                 http2: None,
                 ..track_info
@@ -284,10 +284,7 @@ impl TrackInfo {
     }
 }
 
-fn serialize_user_agent<'a, S>(
-    value: &'a Option<HeaderValue>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
+fn serialize_user_agent<S>(value: &Option<HeaderValue>, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {

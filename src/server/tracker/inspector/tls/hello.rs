@@ -328,7 +328,7 @@ impl ClientHello {
                             value: extension_id,
                             data: algorithms
                                 .into_iter()
-                                .map(|a| SignatureAlgorithm::from(a))
+                                .map(SignatureAlgorithm::from)
                                 .collect(),
                         });
                 }
@@ -358,7 +358,7 @@ impl ClientHello {
                         .push(ClientHelloExtension::EcPointFormats {
                             value: extension_id,
                             data: formats
-                                .into_iter()
+                                .iter()
                                 .map(|f| ECPointFormat::from(*f))
                                 .collect(),
                         });

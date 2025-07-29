@@ -16,7 +16,7 @@ pub enum Setting {
     MaxHeaderListSize(u16, u32),
     EnableConnectProtocol(u16, u32),
     NoRfc7540Priorities(u16, u32),
-    UnknownSetting(u16, u32),
+    Unknown(u16, u32),
 }
 
 /// Representing a SETTINGS frame in HTTP/2.
@@ -40,7 +40,7 @@ impl From<(u16, u32)> for Setting {
             6 => Setting::MaxHeaderListSize(id, value),
             8 => Setting::EnableConnectProtocol(id, value),
             9 => Setting::NoRfc7540Priorities(id, value),
-            _ => Setting::UnknownSetting(id, value),
+            _ => Setting::Unknown(id, value),
         }
     }
 }
@@ -56,7 +56,7 @@ impl Setting {
             Setting::MaxHeaderListSize(id, value) => (*id, *value),
             Setting::EnableConnectProtocol(id, value) => (*id, *value),
             Setting::NoRfc7540Priorities(id, value) => (*id, *value),
-            Setting::UnknownSetting(id, value) => (*id, *value),
+            Setting::Unknown(id, value) => (*id, *value),
         }
     }
 }
@@ -67,19 +67,19 @@ impl Serialize for Setting {
         S: Serializer,
     {
         let value = match self {
-            Setting::HeaderTableSize(_, value) => format!("HEADER_TABLE_SIZE = {}", value),
-            Setting::EnablePush(_, value) => format!("ENABLE_PUSH = {}", value),
+            Setting::HeaderTableSize(_, value) => format!("HEADER_TABLE_SIZE = {value}"),
+            Setting::EnablePush(_, value) => format!("ENABLE_PUSH = {value}"),
             Setting::MaxConcurrentStreams(_, value) => {
-                format!("MAX_CONCURRENT_STREAMS = {}", value)
+                format!("MAX_CONCURRENT_STREAMS = {value}")
             }
-            Setting::InitialWindowSize(_, value) => format!("INITIAL_WINDOW_SIZE = {}", value),
-            Setting::MaxFrameSize(_, value) => format!("MAX_FRAME_SIZE = {}", value),
-            Setting::MaxHeaderListSize(_, value) => format!("MAX_HEADER_LIST_SIZE = {}", value),
+            Setting::InitialWindowSize(_, value) => format!("INITIAL_WINDOW_SIZE = {value}"),
+            Setting::MaxFrameSize(_, value) => format!("MAX_FRAME_SIZE = {value}"),
+            Setting::MaxHeaderListSize(_, value) => format!("MAX_HEADER_LIST_SIZE = {value}"),
             Setting::EnableConnectProtocol(_, value) => {
-                format!("ENABLE_CONNECT_PROTOCOL = {}", value)
+                format!("ENABLE_CONNECT_PROTOCOL = {value}")
             }
-            Setting::NoRfc7540Priorities(_, value) => format!("NO_RFC7540_PRIORITIES = {}", value),
-            Setting::UnknownSetting(_, value) => format!("UNKNOWN_SETTING = {}", value),
+            Setting::NoRfc7540Priorities(_, value) => format!("NO_RFC7540_PRIORITIES = {value}"),
+            Setting::Unknown(_, value) => format!("UNKNOWN_SETTING = {value}"),
         };
 
         serializer.serialize_str(&value)
