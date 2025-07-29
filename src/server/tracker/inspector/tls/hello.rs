@@ -1,7 +1,7 @@
 //! See: <https://www.rfc-editor.org/rfc/rfc8446#section-4.2>
 
 use serde::Serialize;
-use tls_parser::{TlsCipherSuite, TlsExtension, TlsExtensionType, TlsMessage, TlsMessageHandshake};
+use tls_parser::{TlsCipherSuite, TlsExtensionType, TlsMessage, TlsMessageHandshake};
 
 use super::{
     enums::{
@@ -61,123 +61,100 @@ pub struct ClientHello {
     /// A list of ciphers supported by client
     ciphers: Vec<&'static str>,
     /// A list of extensions supported by client
-    extensions: Vec<ClientHelloExtension>,
+    extensions: Vec<TlsExtension>,
 }
 
 /// Extensions that can be set in a [`ClientHello`] message by a TLS client.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ClientHelloExtension {
-    ServerName {
-        value: u16,
-        data: Vec<String>,
-    },
+pub enum TlsExtension {
+    /// Server Name Indication (SNI), used for virtual hosting.
+    ServerName { value: u16, data: Vec<String> },
 
-    SupportedGroups {
-        value: u16,
-        data: Vec<NamesGroup>,
-    },
+    /// Supported elliptic curve groups for key exchange.
+    SupportedGroups { value: u16, data: Vec<NamesGroup> },
 
+    /// Supported EC point formats for key exchange.
     EcPointFormats {
         value: u16,
         data: Vec<ECPointFormat>,
     },
 
+    /// Supported signature algorithms for authentication.
     SignatureAlgorithms {
         value: u16,
         data: Vec<SignatureAlgorithm>,
     },
 
-    StatusRequest {
-        value: u16,
-        data: StatusRequest,
-    },
+    /// OCSP stapling support (status request).
+    StatusRequest { value: u16, data: StatusRequest },
 
-    ApplicationLayerProtocolNegotiation {
-        value: u16,
-        data: Vec<String>,
-    },
+    /// Application-Layer Protocol Negotiation (ALPN), e.g., for HTTP/2.
+    ApplicationLayerProtocolNegotiation { value: u16, data: Vec<String> },
 
-    ApplicationSettings {
-        value: u16,
-        data: Vec<String>,
-    },
+    /// Old Application Settings extension (non-standard).
+    ApplicationSettingsOld { value: u16, data: Vec<String> },
 
-    SupportedVersions {
-        value: u16,
-        data: Vec<TlsVersion>,
-    },
+    /// Application Settings extension (used for ALPS in HTTP/2/3).
+    ApplicationSettings { value: u16, data: Vec<String> },
 
-    SessionTicket {
-        value: u16,
-        data: String,
-    },
+    /// Supported TLS protocol versions.
+    SupportedVersions { value: u16, data: Vec<TlsVersion> },
 
+    /// Session ticket for session resumption.
+    SessionTicket { value: u16, data: String },
+
+    /// Supported certificate compression algorithms.
     CertificateCompression {
         value: u16,
         data: Vec<CertificateCompressionAlgorithm>,
     },
 
-    RecordSizeLimit {
-        value: u16,
-        data: u16,
-    },
+    /// Record size limit for TLS records.
+    RecordSizeLimit { value: u16, data: u16 },
 
+    /// Delegated credentials for authentication.
     DelegatedCredentials {
         value: u16,
         data: Vec<SignatureAlgorithm>,
     },
 
-    EncryptedClientHello {
-        value: u16,
-        data: ECHClientHello,
-    },
+    /// Encrypted ClientHello (ECH) extension.
+    EncryptedClientHello { value: u16, data: ECHClientHello },
 
+    /// Signed Certificate Timestamp (SCT) for certificate transparency.
     SignedCertificateTimestamp {
         value: u16,
         #[serde(skip_serializing_if = "Option::is_none")]
         data: Option<String>,
     },
 
-    RenegotiationInfo {
-        value: u16,
-        data: String,
-    },
+    /// Renegotiation info for secure renegotiation.
+    RenegotiationInfo { value: u16 },
 
-    ExtendedMasterSecret {
-        value: u16,
-    },
+    /// Extended Master Secret extension for improved security.
+    ExtendedMasterSecret { value: u16 },
 
-    Padding {
-        value: u16,
-        data: String,
-    },
+    /// Padding extension to obscure ClientHello length.
+    Padding { value: u16, data: String },
 
-    KeyShare {
-        value: u16,
-        data: Vec<KeyShare>,
-    },
+    /// Key share entries for key exchange (TLS 1.3).
+    KeyShare { value: u16, data: Vec<KeyShare> },
 
+    /// PSK key exchange modes (TLS 1.3).
     PskKeyExchangeModes {
         value: u16,
         data: PskKeyExchangeModes,
     },
 
-    PreSharedKey {
-        value: u16,
-        data: String,
-    },
+    /// Pre-shared key for session resumption or 0-RTT.
+    PreSharedKey { value: u16, data: String },
 
-    Grease {
-        value: u16,
-    },
+    /// GREASE value for protocol extensibility testing.
+    Grease { value: u16 },
 
-    /// Any extension not supported.
-    /// as it is still to be done or considered out of scope.
-    Opaque {
-        value: u16,
-        data: String,
-    },
+    /// Any unknown or unsupported extension.
+    Opaque { value: u16, data: String },
 }
 
 /// StatusRequest extension data
@@ -267,41 +244,36 @@ impl ClientHello {
 
         let ext = payload.ext?;
         let (_, ext_list) = tls_parser::parse_tls_client_hello_extensions(ext).ok()?;
-        let mut grease_list = Vec::new();
 
         for ext in ext_list {
             let extension_id = TlsExtensionType::from(&ext).0;
             match ext {
-                TlsExtension::SNI(name) => {
+                tls_parser::TlsExtension::SNI(name) => {
                     tracing::debug!("ClientHello: SNI extension: {name:?}");
 
-                    client_hello
-                        .extensions
-                        .push(ClientHelloExtension::ServerName {
-                            value: extension_id,
-                            data: name
-                                .into_iter()
-                                .map(|n| n.1)
-                                .map(|n| String::from_utf8_lossy(n).to_string())
-                                .collect(),
-                        });
+                    client_hello.extensions.push(TlsExtension::ServerName {
+                        value: extension_id,
+                        data: name
+                            .into_iter()
+                            .map(|n| n.1)
+                            .map(|n| String::from_utf8_lossy(n).to_string())
+                            .collect(),
+                    });
                 }
-                TlsExtension::EllipticCurves(groups) => {
+                tls_parser::TlsExtension::EllipticCurves(groups) => {
                     tracing::debug!("ClientHello: EllipticCurves extension: {groups:?}");
 
-                    client_hello
-                        .extensions
-                        .push(ClientHelloExtension::SupportedGroups {
-                            value: extension_id,
-                            data: groups.into_iter().map(|g| NamesGroup::from(g.0)).collect(),
-                        });
+                    client_hello.extensions.push(TlsExtension::SupportedGroups {
+                        value: extension_id,
+                        data: groups.into_iter().map(|g| NamesGroup::from(g.0)).collect(),
+                    });
                 }
-                TlsExtension::SupportedVersions(versions) => {
+                tls_parser::TlsExtension::SupportedVersions(versions) => {
                     tracing::debug!("ClientHello: SupportedVersions extension: {versions:?}");
 
                     client_hello
                         .extensions
-                        .push(ClientHelloExtension::SupportedVersions {
+                        .push(TlsExtension::SupportedVersions {
                             value: extension_id,
                             data: versions
                                 .into_iter()
@@ -309,22 +281,20 @@ impl ClientHello {
                                 .collect(),
                         });
                 }
-                TlsExtension::SessionTicket(data) => {
+                tls_parser::TlsExtension::SessionTicket(data) => {
                     tracing::debug!("ClientHello: SessionTicket extension: {data:?}");
 
-                    client_hello
-                        .extensions
-                        .push(ClientHelloExtension::SessionTicket {
-                            value: extension_id,
-                            data: hex::encode(data),
-                        });
+                    client_hello.extensions.push(TlsExtension::SessionTicket {
+                        value: extension_id,
+                        data: hex::encode(data),
+                    });
                 }
-                TlsExtension::SignatureAlgorithms(algorithms) => {
+                tls_parser::TlsExtension::SignatureAlgorithms(algorithms) => {
                     tracing::debug!("ClientHello: SignatureAlgorithms extension: {algorithms:?}");
 
                     client_hello
                         .extensions
-                        .push(ClientHelloExtension::SignatureAlgorithms {
+                        .push(TlsExtension::SignatureAlgorithms {
                             value: extension_id,
                             data: algorithms
                                 .into_iter()
@@ -332,39 +302,35 @@ impl ClientHello {
                                 .collect(),
                         });
                 }
-                TlsExtension::StatusRequest(data) => {
+                tls_parser::TlsExtension::StatusRequest(data) => {
                     tracing::debug!("ClientHello: StatusRequest extension: {data:?}");
 
                     if let Some((status, data)) = data {
                         let (_, (responder_id_list, request_extensions)) =
                             parser::parse_ocsp_status_request_lengths(data).ok()?;
-                        client_hello
-                            .extensions
-                            .push(ClientHelloExtension::StatusRequest {
-                                value: extension_id,
-                                data: StatusRequest {
-                                    certificate_status_type: CertificateStatusType::from(status.0),
-                                    responder_id_list,
-                                    request_extensions,
-                                },
-                            });
+                        client_hello.extensions.push(TlsExtension::StatusRequest {
+                            value: extension_id,
+                            data: StatusRequest {
+                                certificate_status_type: CertificateStatusType::from(status.0),
+                                responder_id_list,
+                                request_extensions,
+                            },
+                        });
                     }
                 }
-                TlsExtension::EcPointFormats(formats) => {
+                tls_parser::TlsExtension::EcPointFormats(formats) => {
                     tracing::debug!("ClientHello: ECPointFormats extension: {formats:?}");
 
-                    client_hello
-                        .extensions
-                        .push(ClientHelloExtension::EcPointFormats {
-                            value: extension_id,
-                            data: formats.iter().map(|f| ECPointFormat::from(*f)).collect(),
-                        });
+                    client_hello.extensions.push(TlsExtension::EcPointFormats {
+                        value: extension_id,
+                        data: formats.iter().map(|f| ECPointFormat::from(*f)).collect(),
+                    });
                 }
-                TlsExtension::ALPN(protocols) => {
+                tls_parser::TlsExtension::ALPN(protocols) => {
                     tracing::debug!("ClientHello: ALPN extension: {protocols:?}");
 
                     client_hello.extensions.push(
-                        ClientHelloExtension::ApplicationLayerProtocolNegotiation {
+                        TlsExtension::ApplicationLayerProtocolNegotiation {
                             value: extension_id,
                             data: protocols
                                 .into_iter()
@@ -373,27 +339,26 @@ impl ClientHello {
                         },
                     );
                 }
-                TlsExtension::SignedCertificateTimestamp(timestamps) => {
+                tls_parser::TlsExtension::SignedCertificateTimestamp(timestamps) => {
                     tracing::debug!("ClientHello: SCT extension: {timestamps:?}");
 
-                    client_hello.extensions.push(
-                        ClientHelloExtension::SignedCertificateTimestamp {
+                    client_hello
+                        .extensions
+                        .push(TlsExtension::SignedCertificateTimestamp {
                             value: extension_id,
                             data: timestamps.map(hex::encode),
-                        },
-                    );
+                        });
                 }
-                TlsExtension::RenegotiationInfo(data) => {
+                tls_parser::TlsExtension::RenegotiationInfo(data) => {
                     tracing::debug!("ClientHello: RenegotiationInfo extension: {data:?}");
 
                     client_hello
                         .extensions
-                        .push(ClientHelloExtension::RenegotiationInfo {
+                        .push(TlsExtension::RenegotiationInfo {
                             value: extension_id,
-                            data: hex::encode(data),
                         });
                 }
-                TlsExtension::Unknown(TlsExtensionType(34), algorithms) => {
+                tls_parser::TlsExtension::Unknown(TlsExtensionType(34), algorithms) => {
                     tracing::debug!("ClientHello: DelegatedCredentials extension: {algorithms:?}");
 
                     let extension =
@@ -402,17 +367,15 @@ impl ClientHello {
                             .1;
                     client_hello.extensions.push(extension);
                 }
-                TlsExtension::RecordSizeLimit(limit) => {
+                tls_parser::TlsExtension::RecordSizeLimit(limit) => {
                     tracing::debug!("ClientHello: RecordSizeLimit extension: {limit:?}");
 
-                    client_hello
-                        .extensions
-                        .push(ClientHelloExtension::RecordSizeLimit {
-                            value: extension_id,
-                            data: limit,
-                        });
+                    client_hello.extensions.push(TlsExtension::RecordSizeLimit {
+                        value: extension_id,
+                        data: limit,
+                    });
                 }
-                TlsExtension::Unknown(TlsExtensionType(27), data) => {
+                tls_parser::TlsExtension::Unknown(TlsExtensionType(27), data) => {
                     tracing::debug!("ClientHello: CertificateCompression extension: {data:?}");
 
                     let extension =
@@ -421,100 +384,96 @@ impl ClientHello {
                             .1;
                     client_hello.extensions.push(extension);
                 }
-                TlsExtension::Unknown(TlsExtensionType(65037), data) => {
+                tls_parser::TlsExtension::Unknown(TlsExtensionType(65037), data) => {
                     tracing::debug!("ClientHello: EncryptedClientHello extension: {data:?}");
 
                     let extension = parser::parse_tls_extension_ech(extension_id, data).ok()?.1;
                     client_hello.extensions.push(extension);
                 }
-                TlsExtension::Padding(padding) => {
+                tls_parser::TlsExtension::Padding(padding) => {
                     tracing::debug!("ClientHello: Padding extension");
 
-                    client_hello.extensions.push(ClientHelloExtension::Padding {
+                    client_hello.extensions.push(TlsExtension::Padding {
                         value: extension_id,
                         data: hex::encode(padding),
                     });
                 }
-                TlsExtension::KeyShare(data) => {
+                tls_parser::TlsExtension::KeyShare(data) => {
                     tracing::debug!("ClientHello: KeyShare extension: {data:?}");
 
-                    client_hello
-                        .extensions
-                        .push(ClientHelloExtension::KeyShare {
-                            value: extension_id,
-                            data: parser::parse_key_share(data)?
-                                .into_iter()
-                                .map(|data| KeyShare {
-                                    name: NamesGroup::from(data.0),
-                                    value: hex::encode(data.1),
-                                })
-                                .collect(),
-                        });
+                    client_hello.extensions.push(TlsExtension::KeyShare {
+                        value: extension_id,
+                        data: parser::parse_key_share(data)?
+                            .into_iter()
+                            .map(|data| KeyShare {
+                                name: NamesGroup::from(data.0),
+                                value: hex::encode(data.1),
+                            })
+                            .collect(),
+                    });
                 }
-                TlsExtension::PskExchangeModes(data) => {
+                tls_parser::TlsExtension::PskExchangeModes(data) => {
                     tracing::debug!("ClientHello: PskExchangeModes extension: {data:?}");
 
                     client_hello
                         .extensions
-                        .push(ClientHelloExtension::PskKeyExchangeModes {
+                        .push(TlsExtension::PskKeyExchangeModes {
                             value: extension_id,
                             data: PskKeyExchangeModes {
                                 ke_modes: data.into_iter().map(PskKeyExchangeMode::from).collect(),
                             },
                         });
                 }
-                TlsExtension::PreSharedKey(data) => {
+                tls_parser::TlsExtension::PreSharedKey(data) => {
                     tracing::debug!("ClientHello: PreSharedKey extension: {data:?}");
 
-                    client_hello
-                        .extensions
-                        .push(ClientHelloExtension::PreSharedKey {
-                            value: extension_id,
-                            data: hex::encode(data),
-                        });
+                    client_hello.extensions.push(TlsExtension::PreSharedKey {
+                        value: extension_id,
+                        data: hex::encode(data),
+                    });
                 }
-                TlsExtension::Unknown(TlsExtensionType(17513), protocols) => {
+                tls_parser::TlsExtension::Unknown(TlsExtensionType(17513), protocols) => {
                     tracing::debug!(
                         "ClientHello: Old Application Settings extension: {protocols:?}"
                     );
 
                     client_hello
                         .extensions
-                        .push(ClientHelloExtension::ApplicationSettings {
+                        .push(TlsExtension::ApplicationSettingsOld {
                             value: extension_id,
                             data: parser::parse_alps_packet(protocols),
                         });
                 }
-                TlsExtension::Unknown(TlsExtensionType(17613), protocols) => {
+                tls_parser::TlsExtension::Unknown(TlsExtensionType(17613), protocols) => {
                     tracing::debug!("ClientHello: Application Settings extension: {protocols:?}");
 
                     client_hello
                         .extensions
-                        .push(ClientHelloExtension::ApplicationSettings {
+                        .push(TlsExtension::ApplicationSettings {
                             value: extension_id,
                             data: parser::parse_alps_packet(protocols),
                         });
                 }
-                TlsExtension::ExtendedMasterSecret => {
+                tls_parser::TlsExtension::ExtendedMasterSecret => {
                     tracing::debug!("ClientHello: ExtendedMasterSecret extension");
 
                     client_hello
                         .extensions
-                        .push(ClientHelloExtension::ExtendedMasterSecret {
+                        .push(TlsExtension::ExtendedMasterSecret {
                             value: extension_id,
                         });
                 }
-                TlsExtension::Grease(id, _) => {
-                    tracing::debug!("ClientHello: Grease extension: {id:?}");
+                tls_parser::TlsExtension::Grease(id, data) => {
+                    tracing::debug!("ClientHello: Grease extension: {id:?}, {data:?}");
 
-                    grease_list.push(ClientHelloExtension::Grease {
+                    client_hello.extensions.push(TlsExtension::Grease {
                         value: extension_id,
                     });
                 }
-                TlsExtension::Unknown(_, data) => {
+                tls_parser::TlsExtension::Unknown(_, data) => {
                     tracing::debug!("ClientHello: Unknown extension: {extension_id:?}");
 
-                    client_hello.extensions.push(ClientHelloExtension::Opaque {
+                    client_hello.extensions.push(TlsExtension::Opaque {
                         value: extension_id,
                         data: hex::encode(data),
                     });

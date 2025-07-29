@@ -6,9 +6,7 @@ use nom::{
     IResult, Parser,
 };
 
-use super::hello::{
-    ClientHelloExtension, ECHClientHello, ECHClientHelloOuter, HpkeSymmetricCipherSuite,
-};
+use super::hello::{ECHClientHello, ECHClientHelloOuter, HpkeSymmetricCipherSuite, TlsExtension};
 
 /// Parse KeyShare extension in TLS 1.3 (RFC 8446) with 4-byte length and 4-byte fields.
 pub fn parse_key_share(data: &[u8]) -> Option<Vec<(u16, Vec<u8>)>> {
@@ -44,11 +42,12 @@ pub fn parse_ocsp_status_request_lengths(data: &[u8]) -> IResult<&[u8], (u16, u1
 pub fn parse_tls_extension_delegated_credentials(
     id: u16,
     data: &[u8],
-) -> IResult<&[u8], ClientHelloExtension> {
+) -> IResult<&[u8], TlsExtension> {
     map_parser(
         length_data(be_u16),
-        map(parse_u16_type, |x| {
-            ClientHelloExtension::DelegatedCredentials { value: id, data: x }
+        map(parse_u16_type, |x| TlsExtension::DelegatedCredentials {
+            value: id,
+            data: x,
         }),
     )
     .parse(data)
@@ -58,11 +57,11 @@ pub fn parse_tls_extension_delegated_credentials(
 pub fn parse_tls_extension_certificate_compression(
     id: u16,
     data: &[u8],
-) -> IResult<&[u8], ClientHelloExtension> {
+) -> IResult<&[u8], TlsExtension> {
     map_parser(
         length_data(be_u8),
         map(parse_u16_type, |args| {
-            ClientHelloExtension::CertificateCompression {
+            TlsExtension::CertificateCompression {
                 value: id,
                 data: args,
             }
@@ -72,7 +71,7 @@ pub fn parse_tls_extension_certificate_compression(
 }
 
 /// Parses extension for encrypted client hello (ECH).
-pub fn parse_tls_extension_ech(id: u16, data: &[u8]) -> IResult<&[u8], ClientHelloExtension> {
+pub fn parse_tls_extension_ech(id: u16, data: &[u8]) -> IResult<&[u8], TlsExtension> {
     let (input, is_outer) = map_opt(be_u8, |v| match v {
         0 => Some(true),
         1 => Some(false),
@@ -88,7 +87,7 @@ pub fn parse_tls_extension_ech(id: u16, data: &[u8]) -> IResult<&[u8], ClientHel
 
             Ok((
                 input,
-                ClientHelloExtension::EncryptedClientHello {
+                TlsExtension::EncryptedClientHello {
                     value: id,
                     data: ECHClientHello::Outer(ECHClientHelloOuter {
                         cipher_suite: HpkeSymmetricCipherSuite {
@@ -104,7 +103,7 @@ pub fn parse_tls_extension_ech(id: u16, data: &[u8]) -> IResult<&[u8], ClientHel
         }
         false => Ok((
             input,
-            ClientHelloExtension::EncryptedClientHello {
+            TlsExtension::EncryptedClientHello {
                 value: id,
                 data: ECHClientHello::Inner,
             },
