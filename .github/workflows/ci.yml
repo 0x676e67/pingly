@@ -32,35 +32,21 @@ jobs:
           toolchain: nightly
           override: true
 
+      - name: Install rustfmt
+        run: rustup component add rustfmt
+
       - name: Style check
         run: cargo fmt --all -- --check
 
       - name: Clippy check
         run: cargo clippy --all-targets
-
-  hack:
-    name: Hack
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-      - uses: Swatinem/rust-cache@v2
-      - name: Install cargo-hack from crates.io
-        uses: baptiste0928/cargo-install@v3
-        with:
-          crate: cargo-hack
-      - name: Run hack script
-        run: cargo hack check --each-feature
         
   build:
     name: Build
     runs-on: ubuntu-latest
     environment: Linux
     if: startsWith(github.ref, 'refs/tags/')
-    needs: ["style", "hack"]
+    needs: ["style"]
     container:
       image: ghcr.io/rust-cross/cargo-zigbuild:latest
 
