@@ -357,10 +357,7 @@ impl ClientHello {
                         .extensions
                         .push(ClientHelloExtension::EcPointFormats {
                             value: extension_id,
-                            data: formats
-                                .iter()
-                                .map(|f| ECPointFormat::from(*f))
-                                .collect(),
+                            data: formats.iter().map(|f| ECPointFormat::from(*f)).collect(),
                         });
                 }
                 TlsExtension::ALPN(protocols) => {
