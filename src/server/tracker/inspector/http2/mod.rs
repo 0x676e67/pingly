@@ -101,8 +101,8 @@ where
     }
 
     #[inline]
-    fn poll_flush(self: Pin<&mut Self>, _cx: &mut task::Context<'_>) -> Poll<io::Result<()>> {
-        Poll::Ready(Ok(()))
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<io::Result<()>> {
+        self.project().inner.poll_flush(cx)
     }
 
     #[inline]
