@@ -2,7 +2,7 @@ mod certificate;
 mod signal;
 mod tracker;
 
-use std::{net::SocketAddr, str::FromStr, time::Duration};
+use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
 
 use axum::{
     body::Body,
@@ -74,14 +74,20 @@ pub async fn run(args: Args) -> Result<()> {
     // Spawn a task to gracefully shutdown server.
     tokio::spawn(signal::graceful_shutdown(handle.clone()));
 
-    // Load TLS configuration
+    // Load TLS configuration with HTTP/2 ALPN preference
     let tls_config = match (args.tls_cert.as_ref(), args.tls_key.as_ref()) {
-        (Some(cert), Some(key)) => RustlsConfig::from_pem_chain_file(cert, key).await,
-        _ => {
-            let (cert, key) = certificate::get_self_signed_cert()?;
-            RustlsConfig::from_pem(cert, key).await
+        (Some(cert_path), Some(key_path)) => {
+            // Load certificate and key from files
+            let cert_pem = std::fs::read(cert_path)?;
+            let key_pem = std::fs::read(key_path)?;
+            create_rustls_config_with_h2_alpn(cert_pem, key_pem).await?
         }
-    }?;
+        _ => {
+            // Generate self-signed certificate
+            let (cert_pem, key_pem) = certificate::get_self_signed_cert()?;
+            create_rustls_config_with_h2_alpn(cert_pem, key_pem).await?
+        }
+    };
 
     // Use TLS configuration to create a secure server
     let mut server = axum_server::bind_rustls(args.bind, tls_config);
@@ -103,6 +109,45 @@ impl IntoResponse for Error {
         tracing::warn!("server track error: {}", self);
         (StatusCode::INTERNAL_SERVER_ERROR).into_response()
     }
+}
+
+/// Create RustlsConfig with HTTP/2 ALPN preference
+async fn create_rustls_config_with_h2_alpn(
+    cert_pem: Vec<u8>,
+    key_pem: Vec<u8>,
+) -> Result<RustlsConfig> {
+    use tokio_rustls::rustls::{
+        pki_types::{CertificateDer, PrivateKeyDer},
+        ServerConfig,
+    };
+
+    // Parse certificates/PK
+    let certs: Vec<CertificateDer> = rustls_pemfile::certs(&mut cert_pem.as_slice())
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| Error::Other(format!("Failed to parse certificate: {}", e)))?;
+
+    let key: PrivateKeyDer = rustls_pemfile::private_key(&mut key_pem.as_slice())
+        .map_err(|e| Error::Other(format!("Failed to parse private key: {}", e)))?
+        .ok_or_else(|| Error::Other("No private key found".to_string()))?;
+
+    // Create server config with ALPN protocols (HTTP/2 first)
+    let config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .map_err(|e| Error::Other(format!("Failed to create TLS config: {}", e)))?;
+
+    // Set ALPN protocols with HTTP/2 preference
+    let mut config = config;
+    config.alpn_protocols = vec![
+        b"h2".to_vec(),
+        b"http/1.1".to_vec(),
+        b"http/1.0".to_vec(),
+        b"http/0.9".to_vec(),
+    ];
+
+    tracing::info!("TLS configured with ALPN protocols: h2 (HTTP/2), http/1.1, http/1.0, http/0.9");
+
+    Ok(RustlsConfig::from_config(Arc::new(config)))
 }
 
 #[inline]
