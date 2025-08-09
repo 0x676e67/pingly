@@ -32,7 +32,7 @@ impl Daemon {
     /// Get the pid of the daemon
     fn get_pid(&self) -> crate::Result<Option<String>> {
         if let Ok(data) = std::fs::read(&self.pid_file) {
-            let binding = String::from_utf8(data).unwrap();
+            let binding = String::from_utf8(data)?;
             return Ok(Some(binding.trim().to_string()));
         }
         Ok(None)
