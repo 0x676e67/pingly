@@ -55,6 +55,7 @@ impl LazyClientHello {
 pub struct ClientHello {
     /// TLS version of message
     tls_version: TlsVersion,
+    /// The final TLS version negotiated during the handshake
     tls_version_negotiated: Option<TlsVersion>,
     client_random: String,
     session_id: Option<String>,
