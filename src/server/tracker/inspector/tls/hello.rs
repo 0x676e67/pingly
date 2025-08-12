@@ -235,6 +235,11 @@ pub struct OidFilter {
 }
 
 impl ClientHello {
+    /// Sets the negotiated TLS version for this `ClientHello`.
+    ///
+    /// # Parameters
+    /// - `version`: An `Option<ProtocolVersion>` representing the negotiated TLS version.
+    ///   If `Some`, the version is set; if `None`, no version was negotiated.
     pub fn set_tls_version_negotiated(&mut self, version: Option<ProtocolVersion>) {
         self.tls_version_negotiated = version.map(u16::from).map(TlsVersion::from);
     }
