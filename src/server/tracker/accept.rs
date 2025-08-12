@@ -40,6 +40,7 @@ where
             let (mut stream, service) = acceptor.accept(TlsInspector::new(stream), service).await?;
             let mut connect_track = ConnectionTrack::default();
             connect_track.set_client_hello(stream.get_mut().0.client_hello());
+            connect_track.set_tls_version_negotiated(stream.get_ref().1.protocol_version());
 
             let stream = match stream.get_ref().1.alpn_protocol() {
                 // If ALPN is set to HTTP/2, use Http2Inspector

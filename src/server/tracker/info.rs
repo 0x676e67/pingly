@@ -5,6 +5,7 @@ use axum::{
     http::{header::USER_AGENT, HeaderValue, Method, Request},
 };
 use serde::{Serialize, Serializer};
+use tokio_rustls::rustls::ProtocolVersion;
 
 use super::inspector::{ClientHello, Frame, Http1Headers, Http2Frame, LazyClientHello};
 
@@ -28,6 +29,7 @@ pub struct Http2TrackInfo {
 /// Collects TLS, HTTP/1, and HTTP/2 handshake info for tracking.
 #[derive(Clone, Default)]
 pub struct ConnectionTrack {
+    tls_version_negotiated: Option<ProtocolVersion>,
     client_hello: Option<LazyClientHello>,
     http1_headers: Option<Http1Headers>,
     http2_frames: Option<Http2Frame>,
@@ -216,6 +218,12 @@ where
 // ==== impl ConnectionTrack ====
 
 impl ConnectionTrack {
+    /// Set TLS version negotiated during the handshake.
+    #[inline]
+    pub fn set_tls_version_negotiated(&mut self, version: Option<ProtocolVersion>) {
+        self.tls_version_negotiated = version;
+    }
+
     /// Set TLS client hello
     #[inline]
     pub fn set_client_hello(&mut self, client_hello: Option<LazyClientHello>) {
@@ -248,17 +256,23 @@ impl TrackInfo {
         req: Request<Body>,
         connection_track: ConnectionTrack,
     ) -> TrackInfo {
-        let headers = req.headers();
+        let mut tls = connection_track
+            .client_hello
+            .and_then(LazyClientHello::parse)
+            .map(TlsTrackInfo::new);
+
+        if let Some(tls) = tls.as_mut() {
+            tls.0
+                .set_tls_version_negotiated(connection_track.tls_version_negotiated);
+        }
+
         let track_info = TrackInfo {
             donate: Self::DONATE_URL,
             address: addr,
             http_version: format!("{:?}", req.version()),
             method: req.method().clone(),
-            user_agent: headers.get(USER_AGENT).cloned(),
-            tls: connection_track
-                .client_hello
-                .and_then(LazyClientHello::parse)
-                .map(TlsTrackInfo::new),
+            user_agent: req.headers().get(USER_AGENT).cloned(),
+            tls,
             http1: connection_track.http1_headers.map(Http1TrackInfo::new),
             http2: connection_track.http2_frames.and_then(Http2TrackInfo::new),
         };
