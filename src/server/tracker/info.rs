@@ -29,6 +29,7 @@ pub struct Http2TrackInfo {
 /// Collects TLS, HTTP/1, and HTTP/2 handshake info for tracking.
 #[derive(Clone, Default)]
 pub struct ConnectionTrack {
+    /// The TLS protocol version that was negotiated for this connection, if any.
     tls_version_negotiated: Option<ProtocolVersion>,
     client_hello: Option<LazyClientHello>,
     http1_headers: Option<Http1Headers>,
