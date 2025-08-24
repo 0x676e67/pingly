@@ -14,7 +14,7 @@ use axum::{
 };
 use axum_extra::response::ErasedJson;
 use axum_server::Handle;
-use tower::limit::ConcurrencyLimitLayer;
+use tower::{limit::ConcurrencyLimitLayer, ServiceBuilder};
 use tower_http::{
     cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer},
     trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnResponse, TraceLayer},
@@ -23,6 +23,7 @@ use tracing::Level;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 use tracker::{
     accept::TrackAcceptor,
+    capture::TcpCaptureTrack,
     info::{ConnectionTrack, Track, TrackInfo},
 };
 
@@ -44,8 +45,8 @@ pub async fn run(args: Args) -> Result<()> {
     tracing::info!("Concurrent limit: {}", args.concurrent);
     tracing::info!("Bind address: {}", args.bind);
 
-    // init global layer provider
-    let global_layer = tower::ServiceBuilder::new()
+    // Init global layer
+    let global_layer = ServiceBuilder::new()
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
@@ -61,17 +62,50 @@ pub async fn run(args: Args) -> Result<()> {
         )
         .layer(ConcurrencyLimitLayer::new(args.concurrent));
 
-    let router = Router::new()
+    // Create the router with the tracking endpoints
+    #[cfg_attr(not(unix), unused_mut)]
+    let mut router = Router::new()
         .route("/api/all", any(track))
         .route("/api/tls", any(tls_track))
         .route("/api/http1", any(http1_track))
-        .route("/api/http2", any(http2_track))
-        .layer(global_layer);
+        .route("/api/http2", any(http2_track));
 
     // Signal the server to shutdown using Handle.
     let handle = Handle::new();
 
+    // Add TCP tracking layer
+    #[cfg(unix)]
+    {
+        let mut tcp_capture_track: Option<TcpCaptureTrack> = None;
+        if args.tcp_capture_packet {
+            tracing::info!("Enabling TCP/IP packet capture (requires root)");
+            let capture = TcpCaptureTrack::new(128, args.bind.port());
+            if let Err(err) = capture.start_capture(args.tcp_capture_interface.clone()) {
+                tracing::error!("Failed to start TCP/IP packet capture: {err}");
+            } else {
+                if let Some(iface) = args.tcp_capture_interface {
+                    tracing::info!(
+                        "TCP/IP packet capture started successfully on interface {iface}"
+                    );
+                }
+                tcp_capture_track = Some(capture);
+            }
+        }
+
+        if let Some(capture) = tcp_capture_track.clone() {
+            router = router
+                .route("/api/tcp", any(tcp_track))
+                .layer(Extension(capture));
+        }
+
+        tokio::spawn(signal::graceful_shutdown(
+            handle.clone(),
+            tcp_capture_track.clone(),
+        ));
+    }
+
     // Spawn a task to gracefully shutdown server.
+    #[cfg(not(unix))]
     tokio::spawn(signal::graceful_shutdown(handle.clone()));
 
     // Load TLS configuration with HTTP/2 ALPN preference
@@ -96,7 +130,11 @@ pub async fn run(args: Args) -> Result<()> {
     server
         .handle(handle)
         .map(TrackAcceptor::new)
-        .serve(router.into_make_service_with_connect_info::<SocketAddr>())
+        .serve(
+            router
+                .layer(global_layer)
+                .into_make_service_with_connect_info::<SocketAddr>(),
+        )
         .await
         .map_err(Into::into)
 }
@@ -154,4 +192,21 @@ pub async fn http2_track(
         .await
         .map(ErasedJson::pretty)
         .map_err(Error::from)
+}
+
+#[inline]
+pub async fn tcp_track(
+    Extension(ConnectInfo(addr)): Extension<ConnectInfo<SocketAddr>>,
+    Extension(capture): Extension<TcpCaptureTrack>,
+) -> Result<ErasedJson> {
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let client_ip = addr.ip().to_string();
+    let client_port = addr.port();
+
+    let packets = capture.get_packets_for_client(&client_ip, client_port);
+
+    capture.clear_packets_for_client(&client_ip, client_port);
+
+    Ok(ErasedJson::pretty(&packets))
 }
