@@ -187,6 +187,7 @@ enum_builder2! {
         ffdhe6144 => 259,
         ffdhe8192 => 260,
         X25519MLKEM768 => 4588,
+        MLKEM1024 => 514,
         CECPQ2 => 16696,
         X25519Kyber768Draft00 => 25497,
         X25519Kyber512Draft00 => 65072,
