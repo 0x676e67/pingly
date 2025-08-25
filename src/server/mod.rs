@@ -14,6 +14,7 @@ use axum::{
 };
 use axum_extra::response::ErasedJson;
 use axum_server::Handle;
+use hyper_util::rt::TokioTimer;
 use tower::limit::ConcurrencyLimitLayer;
 use tower_http::{
     cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer},
@@ -40,7 +41,6 @@ pub async fn run(args: Args) -> Result<()> {
     tracing::info!("OS: {}", std::env::consts::OS);
     tracing::info!("Arch: {}", std::env::consts::ARCH);
     tracing::info!("Version: {}", env!("CARGO_PKG_VERSION"));
-    tracing::info!("Keep alive: {}s", args.keep_alive_timeout);
     tracing::info!("Concurrent limit: {}", args.concurrent);
     tracing::info!("Bind address: {}", args.bind);
 
@@ -91,7 +91,10 @@ pub async fn run(args: Args) -> Result<()> {
     server
         .http_builder()
         .http2()
-        .keep_alive_timeout(Duration::from_secs(args.keep_alive_timeout));
+        .timer(TokioTimer::new())
+        .auto_date_header(true)
+        .keep_alive_interval(Duration::from_secs(0))
+        .keep_alive_timeout(Duration::from_secs(0));
 
     server
         .handle(handle)

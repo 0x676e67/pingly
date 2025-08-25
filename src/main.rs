@@ -33,10 +33,6 @@ pub struct Args {
     #[clap(short, long, default_value = "1024")]
     pub concurrent: usize,
 
-    /// Keep alive timeout (seconds)
-    #[clap(short, long, default_value = "60")]
-    pub keep_alive_timeout: u64,
-
     /// TLS certificate file path
     #[clap(short = 'C', long)]
     pub tls_cert: Option<PathBuf>,

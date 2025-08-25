@@ -24,6 +24,7 @@ clap = { version = "4", features = ["derive", "env"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 tracing = { version = "0.1.40" }
 tracing-subscriber = { version = "0.3.0", features = ["env-filter"] }
+hyper-util = { version = "0.1.16", default-features = false }
 axum = { version = "0.8.1", features = ["http2"] }
 axum-extra = { version = "0.10.0", default-features = false, features = [
     "erased-json",
