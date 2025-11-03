@@ -26,7 +26,7 @@ tracing = { version = "0.1.40" }
 tracing-subscriber = { version = "0.3.0", features = ["env-filter"] }
 hyper-util = { version = "0.1.16", default-features = false }
 axum = { version = "0.8.1", features = ["http2"] }
-axum-extra = { version = "0.10.0", default-features = false, features = [
+axum-extra = { version = "0.12.1", default-features = false, features = [
     "erased-json",
 ] }
 axum-server = { version = "0.7.1", features = ["tls-rustls"] }
