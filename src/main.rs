@@ -1,6 +1,6 @@
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 
-pub mod alloc;
+mod alloc;
 #[cfg(target_family = "unix")]
 mod daemon;
 mod error;
@@ -22,24 +22,38 @@ pub struct Opt {
 #[derive(clap::Args, Clone)]
 pub struct Args {
     /// Debug mode
-    #[clap(long, default_value = "info", env = "PINGLY_LOG")]
+    #[arg(long, default_value = "info", env = "PINGLY_LOG")]
     pub log: String,
 
     /// Bind address
-    #[clap(short, long, default_value = "0.0.0.0:8181")]
+    #[arg(short, long, default_value = "0.0.0.0:8181")]
     pub bind: SocketAddr,
 
     /// Concurrent connections
-    #[clap(short, long, default_value = "1024")]
+    #[arg(short, long, default_value = "1024")]
     pub concurrent: usize,
 
+    /// Keep alive timeout (seconds)
+    #[arg(short, long, default_value = "60")]
+    pub keep_alive_timeout: u64,
+
     /// TLS certificate file path
-    #[clap(short = 'C', long)]
+    #[arg(short = 'C', long)]
     pub tls_cert: Option<PathBuf>,
 
     /// TLS private key file path (EC/PKCS8/RSA)
-    #[clap(short = 'K', long)]
+    #[arg(short = 'K', long)]
     pub tls_key: Option<PathBuf>,
+
+    /// Enable packet capture for TCP/IP analysis (requires root privileges)
+    #[cfg(target_os = "linux")]
+    #[arg(long, short = 'T')]
+    pub tcp_capture_packet: bool,
+
+    /// Network interface to capture packets from (default: auto-detect)
+    #[cfg(target_os = "linux")]
+    #[arg(long, short = 'I')]
+    pub tcp_capture_interface: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -70,6 +84,7 @@ pub enum Commands {
 
 fn main() -> Result<()> {
     let opt = Opt::parse();
+    #[cfg(target_family = "unix")]
     let daemon = daemon::Daemon::default();
     match opt.commands {
         Commands::Run(config) => server::run(config),
