@@ -7,6 +7,8 @@ use axum::{
 use serde::{Serialize, Serializer};
 use tokio_rustls::rustls::ProtocolVersion;
 
+use crate::encoding::hex_encode;
+
 use super::inspector::{ClientHello, Frame, Http1Headers, Http2Frame, LazyClientHello};
 
 #[cfg(target_os = "linux")]
@@ -14,7 +16,16 @@ use super::capture::CapturedPacket;
 
 /// TLS handshake tracking information, which includes the client hello payload.
 #[derive(Serialize)]
-pub struct TlsTrackInfo(ClientHello);
+pub struct TlsTrackInfo {
+    ja3: String,
+    ja3_hash: String,
+    #[serde(rename = "ja4")]
+    ja4_fingerprint: String,
+    #[serde(rename = "ja4_r")]
+    ja4_raw: String,
+    #[serde(flatten)]
+    client_hello: ClientHello,
+}
 
 /// HTTP/1.x request header tracking information.
 pub struct Http1TrackInfo(Http1Headers);
@@ -82,7 +93,21 @@ pub enum Track {
 impl TlsTrackInfo {
     /// Create a new [`TlsTrackInfo`] instance.
     pub fn new(client_hello: ClientHello) -> TlsTrackInfo {
-        TlsTrackInfo(client_hello)
+        let (ja3, ja3_hash) = client_hello.ja3_fingerprint();
+        let (ja4_fingerprint, ja4_raw) = client_hello.ja4_fingerprint();
+
+        TlsTrackInfo {
+            ja3,
+            ja3_hash,
+            ja4_fingerprint,
+            ja4_raw,
+            client_hello,
+        }
+    }
+
+    /// Set TLS version negotiated during the handshake.
+    pub fn set_tls_version_negotiated(&mut self, version: Option<ProtocolVersion>) {
+        self.client_hello.set_tls_version_negotiated(version);
     }
 }
 
@@ -137,7 +162,7 @@ impl Http2TrackInfo {
 /// Compute the Akamai fingerprint hash from the Akamai fingerprint
 fn compute_akamai_fingerprint_hash(akamai_fingerprint: &str) -> String {
     let hash = md5::compute(akamai_fingerprint);
-    hex::encode(hash.as_slice())
+    hex_encode(hash.as_slice())
 }
 
 /// Compute the Akamai fingerprint from the sent frames
@@ -275,8 +300,7 @@ impl TrackInfo {
                 .map(TlsTrackInfo::new);
 
             if let Some(tls) = tls.as_mut() {
-                tls.0
-                    .set_tls_version_negotiated(connection_track.tls_version_negotiated);
+                tls.set_tls_version_negotiated(connection_track.tls_version_negotiated);
             }
 
             let track_info = TrackInfo {
@@ -327,8 +351,7 @@ impl TrackInfo {
             .map(TlsTrackInfo::new);
 
         if let Some(tls) = tls.as_mut() {
-            tls.0
-                .set_tls_version_negotiated(connection_track.tls_version_negotiated);
+            tls.set_tls_version_negotiated(connection_track.tls_version_negotiated);
         }
 
         let track_info = TrackInfo {

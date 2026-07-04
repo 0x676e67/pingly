@@ -18,6 +18,33 @@ enum_builder! {
     }
 }
 
+impl TlsVersion {
+    pub(crate) fn ja4_code(self) -> &'static str {
+        match self {
+            TlsVersion::TLSv1_3 => "13",
+            TlsVersion::TLSv1_2 => "12",
+            TlsVersion::TLSv1_1 => "11",
+            TlsVersion::TLSv1_0 => "10",
+            TlsVersion::SSLv3 => "s3",
+            TlsVersion::SSLv2 => "s2",
+            _ => "00",
+        }
+    }
+
+    pub(crate) fn ja4_code_from_client_hello(
+        legacy_version: u16,
+        supported_versions: impl IntoIterator<Item = u16>,
+    ) -> &'static str {
+        let version = supported_versions
+            .into_iter()
+            .filter(|version| !is_grease(*version))
+            .max()
+            .unwrap_or(legacy_version);
+
+        TlsVersion::from(version).ja4_code()
+    }
+}
+
 enum_builder! {
     /// The `SignatureAlgorithm` TLS protocol enum.  Values in this enum are taken
     /// from the various RFCs covering TLS, and are listed by IANA.
@@ -207,7 +234,7 @@ impl ::std::fmt::Display for NamesGroup {
             NamesGroup::P_384 => f.write_str("P-384"),
             NamesGroup::P_521 => f.write_str("P-521"),
             NamesGroup::Unknown(x) => {
-                if x & 0x0f0f == 0x0a0a {
+                if is_grease(*x) {
                     write!(f, "GREASE ({x:#06x})")
                 } else {
                     write!(f, "Unknown ({x:#06x})")
@@ -215,5 +242,42 @@ impl ::std::fmt::Display for NamesGroup {
             }
             other => write!(f, "{other:?}"),
         }
+    }
+}
+
+/// RFC 8701 reserves these patterned values so clients can keep TLS extension points flexible.
+///
+/// See: <https://www.rfc-editor.org/rfc/rfc8701#section-2>
+pub(crate) fn is_grease(value: u16) -> bool {
+    value & 0x0f0f == 0x0a0a && value >> 8 == value & 0x00ff
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_grease, TlsVersion};
+
+    #[test]
+    fn grease_uses_rfc8701_pattern() {
+        assert!(is_grease(0x0a0a));
+        assert!(is_grease(0xfafa));
+        assert!(!is_grease(0x0a0b));
+        assert!(!is_grease(0x0a1a));
+    }
+
+    #[test]
+    fn tls_version_has_ja4_code() {
+        assert_eq!(TlsVersion::TLSv1_3.ja4_code(), "13");
+        assert_eq!(TlsVersion::TLSv1_2.ja4_code(), "12");
+        assert_eq!(TlsVersion::SSLv3.ja4_code(), "s3");
+        assert_eq!(TlsVersion::Unknown(0xffff).ja4_code(), "00");
+    }
+
+    #[test]
+    fn ja4_client_hello_version_prefers_supported_versions() {
+        assert_eq!(
+            TlsVersion::ja4_code_from_client_hello(0x0303, [0x0a0a, 0x0304]),
+            "13"
+        );
+        assert_eq!(TlsVersion::ja4_code_from_client_hello(0x0303, []), "12");
     }
 }

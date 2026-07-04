@@ -3,6 +3,7 @@
 mod alloc;
 #[cfg(target_family = "unix")]
 mod daemon;
+mod encoding;
 mod error;
 mod server;
 

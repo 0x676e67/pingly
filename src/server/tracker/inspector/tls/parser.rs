@@ -6,6 +6,8 @@ use nom::{
     IResult, Parser,
 };
 
+use crate::encoding::hex_encode;
+
 use super::hello::{ECHClientHello, ECHClientHelloOuter, HpkeSymmetricCipherSuite, TlsExtension};
 
 /// Parse KeyShare extension in TLS 1.3 (RFC 8446) with 4-byte length and 4-byte fields.
@@ -95,8 +97,8 @@ pub fn parse_tls_extension_ech(id: u16, data: &[u8]) -> IResult<&[u8], TlsExtens
                             kdf_id: kdf_id.into(),
                         },
                         config_id,
-                        enc: hex::encode(enc),
-                        payload: hex::encode(payload),
+                        enc: hex_encode(enc),
+                        payload: hex_encode(payload),
                     }),
                 },
             ))
