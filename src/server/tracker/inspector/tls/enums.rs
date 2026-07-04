@@ -58,6 +58,9 @@ enum_builder! {
         ecdsa_brainpoolp256r1tls13_sha256 => 2074,
         ecdsa_brainpoolp384r1tls13_sha384 => 2075,
         ecdsa_brainpoolp512r1tls13_sha512 => 2076,
+        mldsa44 =>2308,
+        mldsa65 => 2309,
+        mldsa87 => 2310,
     }
 }
 
