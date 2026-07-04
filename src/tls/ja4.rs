@@ -1,0 +1,319 @@
+use std::fmt::Write;
+
+use sha2::{Digest, Sha256};
+use tls_parser::TlsExtensionType;
+
+use super::{
+    enums::{is_grease, TlsVersion},
+    hello::{ClientHello, TlsExtension},
+};
+
+/// JA4 TLS client fingerprint, plus the raw material used to produce the hash chunks.
+pub(super) struct Ja4Fingerprint {
+    pub(super) fingerprint: String,
+    pub(super) raw: String,
+}
+
+impl Ja4Fingerprint {
+    pub(super) fn from_client_hello(client_hello: &ClientHello) -> Self {
+        let mut ciphers = client_hello.cipher_values.clone();
+        ciphers.retain(|value| !is_grease(*value));
+
+        let mut extensions = Vec::with_capacity(client_hello.extensions.len());
+        let mut supported_versions = Vec::new();
+        let mut signature_algorithms = Vec::new();
+        let mut alpn = (None, None);
+        let mut extension_count = 0usize;
+        let mut has_server_name = false;
+
+        for extension in &client_hello.extensions {
+            let value = extension.value();
+            if is_grease(value) {
+                continue;
+            }
+
+            let extension_type = TlsExtensionType::from_u16(value);
+            extension_count += 1;
+            has_server_name |= matches!(extension_type, TlsExtensionType::ServerName);
+
+            match extension {
+                TlsExtension::SupportedVersions { data, .. } => {
+                    supported_versions.extend(data.iter().map(|version| version.value()));
+                }
+                TlsExtension::SignatureAlgorithms { data, .. } => {
+                    signature_algorithms.extend(data.iter().map(|algorithm| algorithm.value()));
+                }
+                TlsExtension::ApplicationLayerProtocolNegotiation { data, .. }
+                    if alpn.0.is_none() =>
+                {
+                    if let Some(protocol) = data.first() {
+                        alpn = first_last(protocol);
+                    }
+                }
+                _ => {}
+            }
+
+            if !matches!(
+                extension_type,
+                TlsExtensionType::ServerName
+                    | TlsExtensionType::ApplicationLayerProtocolNegotiation
+            ) {
+                extensions.push(value);
+            }
+        }
+
+        let cipher_count = ciphers.len().min(99);
+        let extension_count = extension_count.min(99);
+
+        ciphers.sort_unstable();
+        extensions.sort_unstable();
+
+        let mut cipher_list = String::new();
+        push_hex_list(&mut cipher_list, ciphers);
+
+        let mut extension_signature_list = String::new();
+        push_hex_list(&mut extension_signature_list, extensions);
+        if !signature_algorithms.is_empty() {
+            extension_signature_list.push('_');
+            push_hex_list(&mut extension_signature_list, signature_algorithms);
+        }
+
+        let first_chunk = format!(
+            "{transport}{version}{sni}{cipher_count:02}{extension_count:02}{alpn_first}{alpn_last}",
+            transport = 't',
+            version = TlsVersion::ja4_code_from_client_hello(
+                client_hello.tls_version.value(),
+                supported_versions
+            ),
+            sni = if has_server_name { 'd' } else { 'i' },
+            cipher_count = cipher_count,
+            extension_count = extension_count,
+            alpn_first = alpn.0.unwrap_or('0'),
+            alpn_last = alpn.1.unwrap_or('0'),
+        );
+
+        let fingerprint = format!(
+            "{first_chunk}_{cipher_hash}_{extension_signature_hash}",
+            cipher_hash = hash12(&cipher_list),
+            extension_signature_hash = hash12(&extension_signature_list),
+        );
+        let raw = format!("{first_chunk}_{cipher_list}_{extension_signature_list}");
+
+        Self { fingerprint, raw }
+    }
+}
+
+fn push_hex_list(out: &mut String, values: impl IntoIterator<Item = u16>) {
+    for value in values {
+        if !out.is_empty() && !out.ends_with('_') {
+            out.push(',');
+        }
+        let _ = write!(out, "{value:04x}");
+    }
+}
+
+fn hash12(input: &str) -> String {
+    if input.is_empty() {
+        return "000000000000".to_owned();
+    }
+
+    let digest = Sha256::digest(input.as_bytes());
+    let mut out = String::with_capacity(12);
+    for byte in digest.iter().take(6) {
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
+}
+
+fn first_last(value: &str) -> (Option<char>, Option<char>) {
+    let mut chars = value
+        .chars()
+        .map(|value| if value.is_ascii() { value } else { '9' });
+
+    let first = chars.next();
+    let last = chars.next_back();
+    (first, last)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{hash12, Ja4Fingerprint};
+    use crate::tls::{
+        enums::{is_grease, ECPointFormat, NamesGroup, SignatureAlgorithm, TlsVersion},
+        hello::{ClientHello, TlsExtension},
+    };
+    use tls_parser::TlsExtensionType;
+
+    #[test]
+    fn ja4_matches_foxio_reference_vector() {
+        let ciphers = [
+            0x1301, 0x1302, 0x1303, 0xc02b, 0xc02f, 0xc02c, 0xc030, 0xcca9, 0xcca8, 0xc013, 0xc014,
+            0x009c, 0x009d, 0x002f, 0x0035,
+        ];
+        let extensions = [
+            0x001b, 0x0000, 0x0033, 0x0010, 0x4469, 0x0017, 0x002d, 0x000d, 0x0005, 0x0023, 0x0012,
+            0x002b, 0xff01, 0x000b, 0x000a, 0x0015,
+        ];
+        let signature_algorithms = [
+            0x0403, 0x0804, 0x0401, 0x0503, 0x0805, 0x0501, 0x0806, 0x0601,
+        ];
+
+        let client_hello = client_hello_for_ja4(
+            &ciphers,
+            &extensions,
+            &[0x0304, 0x0303],
+            &signature_algorithms,
+        );
+        let fingerprint = Ja4Fingerprint::from_client_hello(&client_hello);
+
+        assert_eq!(
+            fingerprint.fingerprint,
+            "t13d1516h2_8daaf6152771_e5627efa2ab1"
+        );
+        assert_eq!(
+            fingerprint.raw,
+            "t13d1516h2_002f,0035,009c,009d,1301,1302,1303,c013,c014,c02b,c02c,c02f,c030,cca8,cca9_0005,000a,000b,000d,0012,0015,0017,001b,0023,002b,002d,0033,4469,ff01_0403,0804,0401,0503,0805,0501,0806,0601"
+        );
+    }
+
+    #[test]
+    fn chrome_browser_sample_matches_observed_ja4() {
+        let ciphers = [
+            0x1301, 0x1302, 0x1303, 0xc02b, 0xc02f, 0xc02c, 0xc030, 0xcca9, 0xcca8, 0xc013, 0xc014,
+            0x009c, 0x009d, 0x002f, 0x0035,
+        ];
+        let extensions = [
+            0x44cd, 0x002b, 0x002d, 0x000b, 0x000d, 0x0005, 0x0023, 0xff01, 0x0010, 0x0033, 0x0000,
+            0x0012, 0x001b, 0xfe0d, 0x000a, 0x0017,
+        ];
+        let signature_algorithms = [
+            0x0904, 0x0905, 0x0906, 0x0403, 0x0804, 0x0401, 0x0503, 0x0805, 0x0501, 0x0806, 0x0601,
+        ];
+        let client_hello = client_hello_for_ja4(
+            &ciphers,
+            &extensions,
+            &[0x0304, 0x0303],
+            &signature_algorithms,
+        );
+        let fingerprint = Ja4Fingerprint::from_client_hello(&client_hello);
+
+        assert_eq!(
+            fingerprint.fingerprint,
+            "t13d1516h2_8daaf6152771_806a8c22fdea"
+        );
+        assert_eq!(
+            fingerprint.raw,
+            "t13d1516h2_002f,0035,009c,009d,1301,1302,1303,c013,c014,c02b,c02c,c02f,c030,cca8,cca9_0005,000a,000b,000d,0012,0017,001b,0023,002b,002d,0033,44cd,fe0d,ff01_0904,0905,0906,0403,0804,0401,0503,0805,0501,0806,0601"
+        );
+    }
+
+    #[test]
+    fn firefox_browser_sample_matches_observed_ja4() {
+        let ciphers = [
+            0x1301, 0x1303, 0x1302, 0xc02b, 0xc02f, 0xcca9, 0xcca8, 0xc02c, 0xc030, 0xc00a, 0xc013,
+            0xc014, 0x009c, 0x009d, 0x002f, 0x0035,
+        ];
+        let extensions = [
+            0x0000, 0x0017, 0xff01, 0x000a, 0x000b, 0x0010, 0x0005, 0x0022, 0x0012, 0x0033, 0x002b,
+            0x000d, 0x002d, 0x001c, 0x001b, 0xfe0d, 0x0029,
+        ];
+        let signature_algorithms = [
+            0x0403, 0x0503, 0x0603, 0x0804, 0x0805, 0x0806, 0x0401, 0x0501, 0x0601, 0x0203, 0x0201,
+        ];
+        let client_hello = client_hello_for_ja4(
+            &ciphers,
+            &extensions,
+            &[0x0304, 0x0303],
+            &signature_algorithms,
+        );
+        let fingerprint = Ja4Fingerprint::from_client_hello(&client_hello);
+
+        assert_eq!(
+            fingerprint.fingerprint,
+            "t13d1617h2_86a278354501_e6dcd7ae0a9e"
+        );
+        assert_eq!(
+            fingerprint.raw,
+            "t13d1617h2_002f,0035,009c,009d,1301,1302,1303,c00a,c013,c014,c02b,c02c,c02f,c030,cca8,cca9_0005,000a,000b,000d,0012,0017,001b,001c,0022,0029,002b,002d,0033,fe0d,ff01_0403,0503,0603,0804,0805,0806,0401,0501,0601,0203,0201"
+        );
+    }
+
+    #[test]
+    fn ja4_filters_grease_before_counting_and_hashing() {
+        let client_hello = client_hello_for_ja4(
+            &[0x0a0a, 0x1301],
+            &[0x0a0a, 0x0000, 0x0010, 0x000d],
+            &[0x2a2a, 0x0304],
+            &[],
+        );
+        let fingerprint = Ja4Fingerprint::from_client_hello(&client_hello);
+
+        assert!(is_grease(0x0a0a));
+        assert!(!is_grease(0x0a0b));
+        assert_eq!(fingerprint.raw, "t12d0103h2_1301_000d");
+    }
+
+    #[test]
+    fn hash12_uses_zeros_for_empty_input() {
+        assert_eq!(hash12("551d0f,551d25,551d11"), "aae71e8db6d7");
+        assert_eq!(hash12(""), "000000000000");
+    }
+
+    fn client_hello_for_ja4(
+        ciphers: &[u16],
+        extensions: &[u16],
+        supported_versions: &[u16],
+        signature_algorithms: &[u16],
+    ) -> ClientHello {
+        ClientHello {
+            tls_version: TlsVersion::TLSv1_2,
+            tls_version_negotiated: None,
+            cipher_values: ciphers.to_vec(),
+            client_random: String::new(),
+            session_id: None,
+            compression_algorithms: Vec::new(),
+            ciphers: Vec::new(),
+            extensions: extensions
+                .iter()
+                .map(|value| match TlsExtensionType::from_u16(*value) {
+                    TlsExtensionType::ServerName => TlsExtension::ServerName {
+                        value: *value,
+                        data: Vec::new(),
+                    },
+                    TlsExtensionType::ApplicationLayerProtocolNegotiation => {
+                        TlsExtension::ApplicationLayerProtocolNegotiation {
+                            value: *value,
+                            data: vec!["h2".to_owned()],
+                        }
+                    }
+                    TlsExtensionType::SupportedVersions => TlsExtension::SupportedVersions {
+                        value: *value,
+                        data: supported_versions
+                            .iter()
+                            .map(|version| TlsVersion::from(*version))
+                            .collect(),
+                    },
+                    TlsExtensionType::SignatureAlgorithms => TlsExtension::SignatureAlgorithms {
+                        value: *value,
+                        data: signature_algorithms
+                            .iter()
+                            .map(|algorithm| SignatureAlgorithm::from(*algorithm))
+                            .collect(),
+                    },
+                    TlsExtensionType::SupportedGroups => TlsExtension::SupportedGroups {
+                        value: *value,
+                        data: Vec::<NamesGroup>::new(),
+                    },
+                    TlsExtensionType::EcPointFormats => TlsExtension::EcPointFormats {
+                        value: *value,
+                        data: Vec::<ECPointFormat>::new(),
+                    },
+                    _ => TlsExtension::Opaque {
+                        value: *value,
+                        data: None,
+                    },
+                })
+                .collect(),
+        }
+    }
+}
