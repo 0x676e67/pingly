@@ -30,18 +30,16 @@ pub async fn config_self_signed() -> crate::Result<RustlsConfig> {
 
     // Make sure file contains only one key
     if key_vec.len() != 1 {
-        return Err(
-            io::Error::new(io::ErrorKind::Other, "private key format not supported").into(),
-        );
+        return Err(io::Error::other("private key format not supported").into());
     }
 
     let cert = cert.into_iter().map(CertificateDer::from).collect();
     let key = PrivateKeyDer::try_from(
         key_vec
             .pop()
-            .expect("private key should be present in the file"),
+            .ok_or_else(|| io::Error::other("private key should be present in the file"))?,
     )
-    .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
+    .map_err(io::Error::other)?;
 
     Ok(config_from_der(cert, key)?)
 }
@@ -58,15 +56,14 @@ pub async fn config_from_pem_chain_file(
 
     let key = tokio::fs::read(chain.as_ref()).await?;
     let key_cert: PrivateKeyDer = match rustls_pemfile::read_one(&mut key.as_ref())?
-        .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "could not parse pem file"))?
+        .ok_or_else(|| io::Error::other("could not parse pem file"))?
     {
         Item::Pkcs8Key(key) => Ok(key.into()),
         Item::Sec1Key(key) => Ok(key.into()),
         Item::Pkcs1Key(key) => Ok(key.into()),
-        x => Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("invalid certificate format, received: {x:?}"),
-        )),
+        x => Err(io::Error::other(format!(
+            "invalid certificate format, received: {x:?}"
+        ))),
     }?;
 
     Ok(config_from_der(cert, key_cert)?)
@@ -79,7 +76,7 @@ fn config_from_der(
     let mut config = ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(cert_chain, key_der)
-        .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
+        .map_err(io::Error::other)?;
 
     config.alpn_protocols = vec![
         b"h2".to_vec(),
