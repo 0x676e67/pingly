@@ -5,7 +5,11 @@ mod alloc;
 mod daemon;
 mod encoding;
 mod error;
+mod http2;
 mod server;
+#[cfg(target_os = "linux")]
+mod tcp;
+mod tls;
 
 use std::{net::SocketAddr, path::PathBuf};
 
