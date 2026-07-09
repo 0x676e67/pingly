@@ -1,13 +1,8 @@
-#[macro_use]
-mod macros;
-mod enums;
-mod hello;
-mod parser;
-
 use std::{pin::Pin, task, task::Poll};
 
-pub use hello::{ClientHello, LazyClientHello};
 use tokio::io::{self, AsyncRead, AsyncWrite, ReadBuf};
+
+use crate::tls::LazyClientHello;
 
 pin_project_lite::pin_project! {
     /// A wrapper over a TLS stream that inspects TLS client hello messages.

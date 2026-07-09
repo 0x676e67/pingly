@@ -4,9 +4,11 @@ mod tls;
 
 use std::{pin::Pin, task, task::Poll};
 
+pub use crate::http2::Http2Frame;
+pub use crate::tls::{ClientHello, LazyClientHello};
 pub use http1::{Http1Headers, Http1Inspector};
-pub use http2::{frame::Frame, Http2Frame, Http2Inspector};
-pub use tls::{ClientHello, LazyClientHello, TlsInspector};
+pub use http2::Http2Inspector;
+pub use tls::TlsInspector;
 use tokio::io::{self, AsyncRead, AsyncWrite, ReadBuf};
 
 /// `Inspector` is an enum that wraps protocol-specific inspectors (such as `Http1Inspector` and

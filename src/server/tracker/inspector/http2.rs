@@ -1,15 +1,12 @@
-pub mod frame;
-
 use std::{ops::Deref, pin::Pin, sync::Arc, task, task::Poll};
 
-use frame::Frame;
 use pin_project_lite::pin_project;
 use tokio::io::{self, AsyncRead, AsyncWrite, ReadBuf};
 use tokio_rustls::server::TlsStream;
 
-use super::tls::TlsInspector;
+use crate::http2::{frame, frame::Frame, Http2Frame};
 
-pub type Http2Frame = Arc<boxcar::Vec<Frame>>;
+use super::tls::TlsInspector;
 
 pin_project! {
     /// A wrapper over a TLS stream that inspects HTTP/2 traffic.
