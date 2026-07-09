@@ -113,7 +113,14 @@ pub(super) struct PendingHeaders {
 /// [`HeadersFlagName::Unknown`]. See
 /// [RFC 9113, Section 6.2](https://www.rfc-editor.org/rfc/rfc9113#section-6.2).
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "HeadersFlagsRepr")]
 pub struct HeadersFlags {
+    raw: u8,
+    values: Vec<HeadersFlag>,
+}
+
+#[derive(Deserialize)]
+struct HeadersFlagsRepr {
     raw: u8,
     values: Vec<HeadersFlag>,
 }
@@ -191,6 +198,19 @@ impl From<u8> for HeadersFlags {
         }
 
         Self { raw, values }
+    }
+}
+
+impl TryFrom<HeadersFlagsRepr> for HeadersFlags {
+    type Error = &'static str;
+
+    fn try_from(repr: HeadersFlagsRepr) -> Result<Self, Self::Error> {
+        let expected = Self::from(repr.raw);
+        if repr.values != expected.values {
+            return Err("HEADERS flag values do not match the raw flag byte");
+        }
+
+        Ok(expected)
     }
 }
 
@@ -502,6 +522,21 @@ mod tests {
             name: HeadersFlagName::Priority,
         }));
         assert_eq!(deserialized.raw, 0x28);
+    }
+
+    #[test]
+    fn headers_flags_reject_inconsistent_deserialized_values() {
+        let missing = serde_json::from_value::<HeadersFlags>(json!({
+            "raw": 4,
+            "values": []
+        }));
+        let wrong_name = serde_json::from_value::<HeadersFlags>(json!({
+            "raw": 1,
+            "values": [{"id": 1, "name": "Priority"}]
+        }));
+
+        assert!(missing.is_err());
+        assert!(wrong_name.is_err());
     }
 
     #[test]
