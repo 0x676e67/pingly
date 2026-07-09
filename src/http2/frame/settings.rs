@@ -83,6 +83,10 @@ pub struct SettingsFrame {
     /// The payload length, excluding the 9-byte frame header.
     pub length: usize,
 
+    /// Whether this frame acknowledges the peer's settings.
+    #[serde(skip)]
+    is_ack: bool,
+
     /// Settings in their original wire order.
     pub settings: Vec<Setting>,
 }
@@ -179,6 +183,13 @@ impl Setting {
 
 // ==== impl SettingsFrame ====
 
+impl SettingsFrame {
+    #[inline]
+    pub(crate) fn is_ack(&self) -> bool {
+        self.is_ack
+    }
+}
+
 impl TryFrom<(u8, u32, &[u8])> for SettingsFrame {
     type Error = Error;
 
@@ -213,6 +224,7 @@ impl TryFrom<(u8, u32, &[u8])> for SettingsFrame {
             frame_type: FrameType::Settings,
             stream_id,
             length: payload.len(),
+            is_ack,
             settings,
         })
     }
@@ -266,8 +278,9 @@ mod tests {
         let ack = SettingsFrame::try_from((0x01, 0, &[][..])).unwrap();
 
         assert!(settings.settings.is_empty());
-        assert!(settings.settings.is_empty());
         assert!(ack.settings.is_empty());
+        assert!(!settings.is_ack());
+        assert!(ack.is_ack());
         assert_eq!(
             serde_json::to_value(ack).unwrap(),
             json!({

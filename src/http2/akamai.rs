@@ -30,18 +30,22 @@ fn compute_fingerprint(sent_frames: &Http2Frame) -> String {
     let mut window_update_group = None;
     let mut priority_group = None;
     let mut headers_group = Vec::with_capacity(4);
+    let mut has_initial_settings = false;
 
     for (_, frame) in sent_frames.iter() {
         match frame {
-            Frame::Settings(frame) => {
+            Frame::Settings(frame) if !has_initial_settings && !frame.is_ack() => {
+                has_initial_settings = true;
                 for setting in &frame.settings {
                     let (id, value) = setting.value();
                     setting_group.push(format!("{id}:{value}"));
                 }
             }
-            Frame::WindowUpdate(frame) => {
+            Frame::Settings(_) => {}
+            Frame::WindowUpdate(frame) if frame.stream_id == 0 && window_update_group.is_none() => {
                 window_update_group = Some(frame.increment);
             }
+            Frame::WindowUpdate(_) => {}
             Frame::Priority(frame) => {
                 let priority_group = priority_group.get_or_insert_with(Vec::new);
                 priority_group.push(format!(
@@ -70,7 +74,7 @@ fn compute_fingerprint(sent_frames: &Http2Frame) -> String {
 
     let window_update_group = window_update_group
         .map(|window_update| window_update.to_string())
-        .unwrap_or_default();
+        .unwrap_or_else(|| "00".to_owned());
     let priority_group = priority_group
         .map(|priority| priority.join(","))
         .unwrap_or_else(|| "0".to_owned());
@@ -153,6 +157,67 @@ mod tests {
 
         assert_eq!(fingerprint.fingerprint, "1:65536;3:1000|983041|0|");
         assert_eq!(fingerprint.hash, "fc449c09e9d86239792bc6798d859012");
+    }
+
+    #[test]
+    fn akamai_fingerprint_uses_initial_settings_and_connection_window_update() {
+        let frames = Arc::new(boxcar::Vec::new());
+        push_frame(
+            &frames,
+            &[
+                0x00, 0x00, 0x0c, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00,
+                0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0xe8,
+            ],
+        );
+        push_frame(
+            &frames,
+            &[0x00, 0x00, 0x00, 0x04, 0x01, 0x00, 0x00, 0x00, 0x00],
+        );
+        push_frame(
+            &frames,
+            &[
+                0x00, 0x00, 0x06, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00,
+                0x01,
+            ],
+        );
+        push_frame(
+            &frames,
+            &[
+                0x00, 0x00, 0x04, 0x08, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02,
+            ],
+        );
+        push_frame(
+            &frames,
+            &[
+                0x00, 0x00, 0x04, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03,
+            ],
+        );
+        push_frame(
+            &frames,
+            &[
+                0x00, 0x00, 0x04, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04,
+            ],
+        );
+
+        let fingerprint = AkamaiFingerprint::from_frames(&frames).unwrap();
+
+        assert_eq!(fingerprint.fingerprint, "1:65536;3:1000|3|0|");
+    }
+
+    #[test]
+    fn akamai_fingerprint_uses_zero_marker_without_window_update() {
+        let frames = Arc::new(boxcar::Vec::new());
+        push_frame(
+            &frames,
+            &[
+                0x00, 0x00, 0x0c, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00,
+                0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0xe8,
+            ],
+        );
+
+        let fingerprint = AkamaiFingerprint::from_frames(&frames).unwrap();
+
+        assert_eq!(fingerprint.fingerprint, "1:65536;3:1000|00|0|");
     }
 
     fn push_frame(frames: &Http2Frame, data: &[u8]) {
