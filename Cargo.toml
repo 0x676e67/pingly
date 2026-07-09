@@ -2,7 +2,7 @@
 name = "pingly"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.70"
+rust-version = "1.96"
 license = "MIT"
 description = "Analysis server for TLS and HTTP/1/2/3"
 keywords = ["http", "server", "web", "ja3", "ja4"]
