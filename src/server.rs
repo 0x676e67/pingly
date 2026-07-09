@@ -23,10 +23,7 @@ use tower_http::{
 };
 use tracing::Level;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
-use tracker::{
-    accept::TrackAcceptor,
-    info::{ConnectionTrack, Track, TrackInfo},
-};
+use tracker::{ConnectionTrack, Track, TrackAcceptor, TrackInfo};
 
 #[cfg(target_os = "linux")]
 use crate::tcp::TcpCaptureTrack;
