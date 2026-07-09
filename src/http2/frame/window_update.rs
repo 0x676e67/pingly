@@ -34,6 +34,10 @@ impl TryFrom<(u32, &[u8])> for WindowUpdateFrame {
 
         let window_size_increment =
             u32::from_be_bytes([payload[0] & 0x7f, payload[1], payload[2], payload[3]]);
+        if window_size_increment == 0 {
+            return Err(Error::InvalidWindowIncrement);
+        }
+
         Ok(WindowUpdateFrame {
             frame_type: FrameType::WindowUpdate,
             stream_id,
@@ -46,6 +50,15 @@ impl TryFrom<(u32, &[u8])> for WindowUpdateFrame {
 #[cfg(test)]
 mod tests {
     use super::WindowUpdateFrame;
+    use crate::http2::frame::error::Error;
+
+    #[test]
+    fn window_update_rejects_zero_increment() {
+        assert_eq!(
+            WindowUpdateFrame::try_from((0, &[0; 4][..])).unwrap_err(),
+            Error::InvalidWindowIncrement
+        );
+    }
 
     #[test]
     fn window_update_retains_stream_and_ignores_reserved_bit() {

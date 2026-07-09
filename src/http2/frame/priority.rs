@@ -2,10 +2,10 @@ use serde::Serialize;
 
 use super::{error::Error, FrameType};
 
-/// The PRIORITY frame (type=0x2) specifies the sender-advised priority
-/// of a stream [Section 5.3].  It can be sent in any stream state,
-/// including idle or closed streams.
-/// [Section 5.3]: <https://tools.ietf.org/html/rfc7540#section-5.3>
+/// A decoded HTTP/2 PRIORITY frame.
+///
+/// This frame is deprecated but its wire format remains defined by
+/// [RFC 9113, Section 6.3](https://www.rfc-editor.org/rfc/rfc9113#section-6.3).
 #[derive(Debug, Serialize)]
 pub struct PriorityFrame {
     /// The type of the frame, which is always `FrameType::Priority`.
@@ -42,10 +42,14 @@ impl TryFrom<(u32, &[u8])> for PriorityFrame {
     type Error = Error;
 
     fn try_from((stream_id, buf): (u32, &[u8])) -> Result<Self, Self::Error> {
+        if stream_id == 0 {
+            return Err(Error::InvalidStreamId);
+        }
+
         let priority = StreamDependency::try_from(buf)?;
 
         if stream_id == priority.depends_on {
-            return Err(Error::InvalidStreamId);
+            return Err(Error::InvalidStreamDependency);
         }
 
         Ok(PriorityFrame {
@@ -86,5 +90,30 @@ impl TryFrom<&[u8]> for StreamDependency {
             depends_on,
             exclusive: exclusive as u8,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PriorityFrame, StreamDependency};
+    use crate::http2::frame::error::Error;
+
+    #[test]
+    fn priority_requires_a_nonzero_distinct_stream_dependency() {
+        assert_eq!(
+            PriorityFrame::try_from((0, &[0; 5][..])).unwrap_err(),
+            Error::InvalidStreamId
+        );
+        assert_eq!(
+            PriorityFrame::try_from((3, &[0, 0, 0, 3, 0][..])).unwrap_err(),
+            Error::InvalidStreamDependency
+        );
+    }
+
+    #[test]
+    fn priority_weight_is_one_more_than_the_wire_value() {
+        let priority = StreamDependency::try_from(&[0, 0, 0, 0, 0xff][..]).unwrap();
+
+        assert_eq!(priority.weight, 256);
     }
 }

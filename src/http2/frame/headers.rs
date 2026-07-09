@@ -333,13 +333,17 @@ impl TryFrom<(u8, u32, &[u8])> for PendingHeaders {
     type Error = Error;
 
     fn try_from((flags, stream_id, payload): (u8, u32, &[u8])) -> Result<Self, Self::Error> {
+        if stream_id == 0 {
+            return Err(Error::InvalidStreamId);
+        }
+
         let flags = HeadersFlags::from(flags);
         let padded = flags.has_padding();
         let priority_offset = usize::from(padded);
         let fragment_offset = priority_offset + if flags.has_priority() { 5 } else { 0 };
 
         if payload.len() < fragment_offset {
-            return Err(Error::TooMuchPadding);
+            return Err(Error::BadFrameSize);
         }
 
         let padding_len = if padded { payload[0] as usize } else { 0 };
@@ -357,6 +361,13 @@ impl TryFrom<(u8, u32, &[u8])> for PendingHeaders {
         } else {
             None
         };
+
+        if priority
+            .as_ref()
+            .is_some_and(|priority| priority.depends_on == stream_id)
+        {
+            return Err(Error::InvalidStreamDependency);
+        }
 
         Ok(Self {
             stream_id,
@@ -401,7 +412,7 @@ mod tests {
         into_boxed_utf8_lossy, HeaderField, HeadersFlag, HeadersFlagName, HeadersFlags,
         HeadersFrame,
     };
-    use crate::http2::frame::FrameType;
+    use crate::http2::frame::{error::Error, FrameType};
 
     #[test]
     fn header_field_serializes_name_and_value_separately() {
@@ -491,5 +502,25 @@ mod tests {
             name: HeadersFlagName::Priority,
         }));
         assert_eq!(deserialized.raw, 0x28);
+    }
+
+    #[test]
+    fn headers_require_a_nonzero_distinct_stream_dependency() {
+        assert_eq!(
+            super::PendingHeaders::try_from((0x04, 0, &[0x82][..])).unwrap_err(),
+            Error::InvalidStreamId
+        );
+        assert_eq!(
+            super::PendingHeaders::try_from((0x24, 1, &[0, 0, 0, 1, 0][..])).unwrap_err(),
+            Error::InvalidStreamDependency
+        );
+    }
+
+    #[test]
+    fn headers_require_complete_optional_prefix_fields() {
+        assert_eq!(
+            super::PendingHeaders::try_from((0x24, 1, &[0; 4][..])).unwrap_err(),
+            Error::BadFrameSize
+        );
     }
 }
