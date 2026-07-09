@@ -156,7 +156,7 @@ mod tests {
     }
 
     fn push_frame(frames: &Http2Frame, data: &[u8]) {
-        let (_, frame) = frame::parse(data);
+        let (_, frame) = frame::FrameParser::default().parse(data);
         frames.push(frame.unwrap());
     }
 }

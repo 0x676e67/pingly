@@ -258,6 +258,7 @@ pin_project! {
         inner: TlsStream<TlsInspector<I>>,
         buf: Vec<u8>,
         frames: Http2Frame,
+        parser: frame::FrameParser,
     }
 }
 
@@ -272,6 +273,7 @@ where
             inner,
             buf: Vec::new(),
             frames: Arc::new(boxcar::Vec::new()),
+            parser: frame::FrameParser::default(),
         }
     }
 
@@ -308,7 +310,7 @@ where
                 if matches!(last, Some(Frame::Headers(_))) {
                     break;
                 }
-                let (frame_len, frame) = frame::parse(&this.buf[plen..]);
+                let (frame_len, frame) = this.parser.parse(&this.buf[plen..]);
                 if frame_len > 0 {
                     this.buf.drain(plen..plen + frame_len);
                     if let Some(frame) = frame {
