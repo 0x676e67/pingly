@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::{borrow::Cow, net::SocketAddr};
 
 use axum::{
     body::Body,
@@ -16,9 +16,9 @@ use super::inspector::{ClientHello, Http1Headers, Http2Frame, LazyClientHello};
 
 /// A captured HTTP header field, preserving the original order.
 #[derive(Serialize)]
-pub struct HeaderField {
-    name: String,
-    value: String,
+pub struct HeaderField<'a> {
+    name: Cow<'a, str>,
+    value: Cow<'a, str>,
 }
 
 /// TLS handshake tracking information, which includes the client hello payload.
@@ -136,8 +136,8 @@ impl Serialize for Http1TrackInfo {
         let mut seq = serializer.serialize_seq(Some(self.0.count()))?;
         for (_, (name, value)) in self.0.iter() {
             seq.serialize_element(&HeaderField {
-                name: String::from_utf8_lossy(name).into_owned(),
-                value: String::from_utf8_lossy(value).into_owned(),
+                name: String::from_utf8_lossy(name),
+                value: String::from_utf8_lossy(value),
             })?;
         }
         seq.end()

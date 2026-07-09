@@ -162,7 +162,7 @@ enum_builder! {
 enum_builder! {
     @U8
     pub enum PskKeyExchangeMode {
-        /// See https://www.rfc-editor.org/rfc/rfc8446#section-4.2.9
+        /// See <https://www.rfc-editor.org/rfc/rfc8446#section-4.2.9>
         psk_ke => 0,
         psk_dhe_ke => 1
     }

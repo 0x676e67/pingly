@@ -1,16 +1,24 @@
 use httlib_hpack::Decoder;
-use serde::{ser::SerializeSeq, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 
 use super::{error::Error, priority::StreamDependency, FrameType};
 
-/// A decoded HTTP header field, preserving the wire order.
+/// A decoded HTTP/2 field, preserving its position in the field section.
+///
+/// HTTP/2 field handling is defined by
+/// [RFC 9113, Section 8.2](https://www.rfc-editor.org/rfc/rfc9113#section-8.2).
 #[derive(Debug, Serialize)]
 pub struct HeaderField {
-    pub name: String,
-    pub value: String,
+    /// The decoded field name, including the leading `:` for pseudo-fields.
+    pub name: Box<str>,
+
+    /// The decoded field value.
+    pub value: Box<str>,
 }
 
-/// Header frame
+/// A decoded HTTP/2 HEADERS frame.
+///
+/// See [RFC 9113, Section 6.2](https://www.rfc-editor.org/rfc/rfc9113#section-6.2).
 #[derive(Debug, Serialize)]
 pub struct HeadersFrame {
     /// The type of the frame
@@ -37,135 +45,116 @@ pub struct HeadersFrame {
     pub priority: Option<StreamDependency>,
 }
 
-/// HTTP/2 HEADERS frame flags decoded from the wire bitmask.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// An HTTP/2 HEADERS flag byte and the set bits decoded from it.
+///
+/// HEADERS defines four known flags; unused set bits remain visible as
+/// [`HeadersFlagName::Unknown`]. See
+/// [RFC 9113, Section 6.2](https://www.rfc-editor.org/rfc/rfc9113#section-6.2).
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HeadersFlags {
     raw: u8,
+    values: Vec<HeadersFlag>,
 }
 
-/// A single known HTTP/2 HEADERS frame flag.
+/// One set bit from an HTTP/2 HEADERS frame flag byte.
+///
+/// The ID retains the original bit value, including bits unused by
+/// [RFC 9113, Section 6.2](https://www.rfc-editor.org/rfc/rfc9113#section-6.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HeadersFlag {
+    /// The set bit as a numeric mask, such as `0x04` for `END_HEADERS`.
     pub id: u8,
+
+    /// The RFC-defined meaning of the bit for a HEADERS frame.
     pub name: HeadersFlagName,
 }
 
-/// A human-readable name for a known HTTP/2 HEADERS frame flag.
+/// The meaning of a flag bit in an HTTP/2 HEADERS frame.
+///
+/// These meanings are specific to HEADERS frames. See
+/// [RFC 9113, Section 6.2](https://www.rfc-editor.org/rfc/rfc9113#section-6.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
+#[repr(u8)]
 pub enum HeadersFlagName {
-    EndStream,
-    EndHeaders,
-    Padded,
-    Priority,
-    Unknown,
+    /// A set bit with no defined HEADERS-frame meaning.
+    Unknown = 0,
+
+    /// `END_STREAM` (`0x01`) marks the last field section sent on the stream.
+    EndStream = 0x01,
+
+    /// `END_HEADERS` (`0x04`) marks the end of the compressed field block.
+    EndHeaders = 0x04,
+
+    /// `PADDED` (`0x08`) indicates that padding fields are present.
+    Padded = 0x08,
+
+    /// `PRIORITY` (`0x20`) indicates that legacy priority fields are present.
+    Priority = 0x20,
 }
 
 // ==== impl HeadersFlags ====
 
 impl HeadersFlags {
-    // RFC 9113 Section 6.2 defines the known HEADERS frame flags.
-    // See: <https://www.rfc-editor.org/rfc/rfc9113#section-6.2>
-    const END_STREAM: HeadersFlag = HeadersFlag {
-        id: 0x1,
-        name: HeadersFlagName::EndStream,
-    };
-    const END_HEADERS: HeadersFlag = HeadersFlag {
-        id: 0x4,
-        name: HeadersFlagName::EndHeaders,
-    };
-    const PADDED: HeadersFlag = HeadersFlag {
-        id: 0x8,
-        name: HeadersFlagName::Padded,
-    };
-    const PRIORITY: HeadersFlag = HeadersFlag {
-        id: 0x20,
-        name: HeadersFlagName::Priority,
-    };
-    const KNOWN: [HeadersFlag; 4] = [
-        Self::END_STREAM,
-        Self::END_HEADERS,
-        Self::PADDED,
-        Self::PRIORITY,
-    ];
-
     #[inline]
-    pub fn raw(self) -> u8 {
-        self.raw
+    fn contains(&self, flag: HeadersFlagName) -> bool {
+        self.raw & flag.id() != 0
     }
 
     #[inline]
-    fn contains(self, flag: HeadersFlag) -> bool {
-        self.raw & flag.id != 0
+    fn has_padding(&self) -> bool {
+        self.contains(HeadersFlagName::Padded)
     }
 
     #[inline]
-    fn has_padding(self) -> bool {
-        self.contains(Self::PADDED)
-    }
-
-    #[inline]
-    fn has_priority(self) -> bool {
-        self.contains(Self::PRIORITY)
-    }
-
-    #[inline]
-    fn flag_by_id(id: u8) -> HeadersFlag {
-        Self::KNOWN
-            .iter()
-            .copied()
-            .find(|flag| flag.id == id)
-            .unwrap_or(HeadersFlag {
-                id,
-                name: HeadersFlagName::Unknown,
-            })
+    fn has_priority(&self) -> bool {
+        self.contains(HeadersFlagName::Priority)
     }
 }
 
 impl From<u8> for HeadersFlags {
     fn from(raw: u8) -> Self {
-        Self { raw }
-    }
-}
-
-impl Serialize for HeadersFlags {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let len = self.raw().count_ones() as usize;
-        let mut seq = serializer.serialize_seq(Some(len))?;
+        let mut values = Vec::with_capacity(raw.count_ones() as usize);
 
         for bit in 0..u8::BITS {
             let id = 1u8 << bit;
-            if self.raw() & id != 0 {
-                seq.serialize_element(&Self::flag_by_id(id))?;
+            if raw & id != 0 {
+                values.push(HeadersFlag::from(id));
             }
         }
 
-        seq.end()
+        Self { raw, values }
     }
 }
 
-impl<'de> Deserialize<'de> for HeadersFlags {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let flags = Vec::<HeadersFlag>::deserialize(deserializer)?;
-        let mut raw = 0u8;
-
-        for flag in flags {
-            if !flag.id.is_power_of_two() {
-                return Err(serde::de::Error::custom(format!(
-                    "invalid HTTP/2 flag id {}",
-                    flag.id
-                )));
-            }
-            raw |= flag.id;
+impl From<u8> for HeadersFlag {
+    fn from(id: u8) -> Self {
+        Self {
+            id,
+            name: HeadersFlagName::from(id),
         }
+    }
+}
 
-        Ok(Self { raw })
+impl HeadersFlagName {
+    #[inline]
+    const fn id(self) -> u8 {
+        self as u8
+    }
+}
+
+impl From<u8> for HeadersFlagName {
+    fn from(id: u8) -> Self {
+        // RFC 9113 Section 6.2 defines four flags for HEADERS frames. Every
+        // other bit is unused for this frame type and remains visible as Unknown.
+        // See: <https://www.rfc-editor.org/rfc/rfc9113#section-6.2>
+        match id {
+            0x01 => Self::EndStream,
+            0x04 => Self::EndHeaders,
+            0x08 => Self::Padded,
+            0x20 => Self::Priority,
+            _ => Self::Unknown,
+        }
     }
 }
 
@@ -176,16 +165,9 @@ impl TryFrom<(u8, u32, &[u8])> for HeadersFrame {
 
     fn try_from((flags, stream_id, payload): (u8, u32, &[u8])) -> Result<Self, Self::Error> {
         let flags = HeadersFlags::from(flags);
-        let mut fragment_offset = 0;
         let padded = flags.has_padding();
-
-        if flags.has_priority() {
-            fragment_offset += 5;
-        }
-
-        if padded {
-            fragment_offset += 1;
-        }
+        let priority_offset = usize::from(padded);
+        let fragment_offset = priority_offset + if flags.has_priority() { 5 } else { 0 };
 
         if payload.len() < fragment_offset {
             return Err(Error::TooMuchPadding);
@@ -198,17 +180,26 @@ impl TryFrom<(u8, u32, &[u8])> for HeadersFrame {
             return Err(Error::TooMuchPadding);
         }
 
-        let mut decoder = Decoder::default();
-        let mut buf = data[..data.len() - padding_len].to_vec();
-        let mut dst = Vec::new();
+        let priority = if flags.has_priority() {
+            let priority_end = priority_offset + 5;
+            Some(StreamDependency::try_from(
+                &payload[priority_offset..priority_end],
+            )?)
+        } else {
+            None
+        };
 
-        if decoder.decode(&mut buf, &mut dst).is_err() {
+        let mut decoder = Decoder::default();
+        let mut block = data[..data.len() - padding_len].to_vec();
+        let mut decoded = Vec::new();
+
+        if decoder.decode(&mut block, &mut decoded).is_err() {
             return Err(Error::MalformedMessage);
         }
 
-        let mut headers = Vec::with_capacity(dst.len());
+        let mut headers = Vec::with_capacity(decoded.len());
         let mut pseudo_headers = Vec::with_capacity(4);
-        for (name, value, _) in dst {
+        for (name, value, _) in decoded {
             if name.starts_with(b":") {
                 if let Some(first_char) = name.get(1).copied() {
                     pseudo_headers.push(first_char as char);
@@ -219,18 +210,10 @@ impl TryFrom<(u8, u32, &[u8])> for HeadersFrame {
             }
 
             headers.push(HeaderField {
-                name: String::from_utf8_lossy(&name).into_owned(),
-                value: String::from_utf8_lossy(&value).into_owned(),
+                name: into_boxed_utf8_lossy(name),
+                value: into_boxed_utf8_lossy(value),
             });
         }
-
-        let priority = if flags.has_priority() {
-            let buf = &payload[fragment_offset - 5..fragment_offset];
-            let priority = StreamDependency::try_from(buf)?;
-            Some(priority)
-        } else {
-            None
-        };
 
         Ok(HeadersFrame {
             frame_type: FrameType::Headers,
@@ -244,17 +227,30 @@ impl TryFrom<(u8, u32, &[u8])> for HeadersFrame {
     }
 }
 
+fn into_boxed_utf8_lossy(value: Vec<u8>) -> Box<str> {
+    match String::from_utf8(value) {
+        Ok(value) => value.into_boxed_str(),
+        Err(error) => String::from_utf8_lossy(&error.into_bytes())
+            .into_owned()
+            .into_boxed_str(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
-    use super::{HeaderField, HeadersFlag, HeadersFlagName, HeadersFlags};
+    use super::{
+        into_boxed_utf8_lossy, HeaderField, HeadersFlag, HeadersFlagName, HeadersFlags,
+        HeadersFrame,
+    };
+    use crate::http2::frame::FrameType;
 
     #[test]
     fn header_field_serializes_name_and_value_separately() {
         let header = HeaderField {
-            name: ":method".to_owned(),
-            value: "GET".to_owned(),
+            name: Box::from(":method"),
+            value: Box::from("GET"),
         };
 
         assert_eq!(
@@ -266,34 +262,76 @@ mod tests {
     #[test]
     fn headers_flags_serialize_known_and_unknown_bits() {
         let flags = HeadersFlags::from(0x2f);
-        let value = serde_json::to_value(flags).unwrap();
+        let value = serde_json::to_value(&flags).unwrap();
 
         assert_eq!(
             value,
-            json!([
-                {"id": 1, "name": "EndStream"},
-                {"id": 2, "name": "Unknown"},
-                {"id": 4, "name": "EndHeaders"},
-                {"id": 8, "name": "Padded"},
-                {"id": 32, "name": "Priority"}
-            ])
+            json!({
+                "raw": 47,
+                "values": [
+                    {"id": 1, "name": "EndStream"},
+                    {"id": 2, "name": "Unknown"},
+                    {"id": 4, "name": "EndHeaders"},
+                    {"id": 8, "name": "Padded"},
+                    {"id": 32, "name": "Priority"}
+                ]
+            })
         );
     }
 
     #[test]
-    fn headers_flags_roundtrip_from_serialized_flags() {
-        let flags: HeadersFlags = serde_json::from_value(json!([
-            {"id": 8, "name": "Padded"},
-            {"id": 32, "name": "Priority"}
-        ]))
-        .unwrap();
+    fn header_text_is_boxed_with_lossy_utf8_fallback() {
+        assert_eq!(
+            &*into_boxed_utf8_lossy(b"content-type".to_vec()),
+            "content-type"
+        );
+        assert_eq!(&*into_boxed_utf8_lossy(vec![0xff]), "\u{fffd}");
+    }
 
-        assert!(flags.has_padding());
-        assert!(flags.has_priority());
-        assert!(flags.contains(HeadersFlag {
+    #[test]
+    fn headers_frame_serializes_raw_and_decoded_flags() {
+        let frame = HeadersFrame {
+            frame_type: FrameType::Headers,
+            stream_id: 1,
+            length: 0,
+            pseudo_headers: Vec::new(),
+            headers: Vec::new(),
+            flags: HeadersFlags::from(0x25),
+            priority: None,
+        };
+
+        assert_eq!(
+            serde_json::to_value(frame).unwrap(),
+            json!({
+                "frame_type": "Headers",
+                "stream_id": 1,
+                "length": 0,
+                "headers": [],
+                "flags": {
+                    "raw": 37,
+                    "values": [
+                        {"id": 1, "name": "EndStream"},
+                        {"id": 4, "name": "EndHeaders"},
+                        {"id": 32, "name": "Priority"}
+                    ]
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn headers_flags_roundtrip_with_derived_serde() {
+        let flags = HeadersFlags::from(0x28);
+        let serialized = serde_json::to_value(&flags).unwrap();
+        let deserialized: HeadersFlags = serde_json::from_value(serialized).unwrap();
+
+        assert_eq!(deserialized, flags);
+        assert!(deserialized.has_padding());
+        assert!(deserialized.has_priority());
+        assert!(deserialized.values.contains(&HeadersFlag {
             id: 0x20,
             name: HeadersFlagName::Priority,
         }));
-        assert_eq!(flags.raw(), 0x28);
+        assert_eq!(deserialized.raw, 0x28);
     }
 }
