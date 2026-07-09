@@ -2,6 +2,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value as JsonValue;
 
+use crate::encoding::hex_encode;
+
 use super::CapturedPacket;
 
 pub fn parse_packet_with_pktparse(data: &[u8]) -> Option<JsonValue> {
@@ -39,7 +41,7 @@ pub fn parse_packet_with_pktparse(data: &[u8]) -> Option<JsonValue> {
                                         let preview_len = std::cmp::min(payload.len(), 64);
                                         parsed["application_data"] = json!({
                                             "length": payload.len(),
-                                            "preview_hex": hex::encode(&payload[..preview_len]),
+                                            "preview_hex": hex_encode(&payload[..preview_len]),
                                             "preview_ascii": payload[..preview_len].iter()
                                                 .map(|&b| if b.is_ascii_graphic() || b == b' ' { b as char } else { '.' })
                                                 .collect::<String>()
@@ -76,7 +78,7 @@ pub fn parse_packet_with_pktparse(data: &[u8]) -> Option<JsonValue> {
                                         let preview_len = std::cmp::min(payload.len(), 64);
                                         parsed["application_data"] = json!({
                                             "length": payload.len(),
-                                            "preview_hex": hex::encode(&payload[..preview_len]),
+                                            "preview_hex": hex_encode(&payload[..preview_len]),
                                             "preview_ascii": payload[..preview_len].iter()
                                                 .map(|&b| if b.is_ascii_graphic() || b == b' ' { b as char } else { '.' })
                                                 .collect::<String>()
@@ -106,7 +108,7 @@ pub fn parse_packet_with_pktparse(data: &[u8]) -> Option<JsonValue> {
         Err(_) => Some(json!({
             "parse_error": "Failed to parse ethernet frame",
             "raw_data_length": data.len(),
-            "raw_data_preview": hex::encode(&data[..std::cmp::min(data.len(), 32)])
+            "raw_data_preview": hex_encode(&data[..std::cmp::min(data.len(), 32)])
         })),
     }
 }

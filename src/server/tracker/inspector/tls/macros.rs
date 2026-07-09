@@ -24,6 +24,16 @@ macro_rules! enum_builder {
             }
         }
 
+        impl $enum_name {
+            #[allow(dead_code)]
+            pub(crate) fn value(self) -> u8 {
+                match self {
+                    $($enum_name::$enum_var => $enum_val),*
+                    ,$enum_name::Unknown(x) => x,
+                }
+            }
+        }
+
         impl ::std::fmt::Display for $enum_name {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 match self {
@@ -68,11 +78,21 @@ macro_rules! enum_builder {
             }
         }
 
+        impl $enum_name {
+            #[allow(dead_code)]
+            pub(crate) fn value(self) -> u16 {
+                match self {
+                    $($enum_name::$enum_var => $enum_val),*
+                    ,$enum_name::Unknown(x) => x,
+                }
+            }
+        }
+
         impl ::std::fmt::Display for $enum_name {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> ::std::fmt::Result {
                 match self {
                     $( $enum_name::$enum_var => write!(f, stringify!($enum_var))),*
-                    ,$enum_name::Unknown(x) => if x & 0x0f0f == 0x0a0a {
+                    ,$enum_name::Unknown(x) => if is_grease(*x) {
                         write!(f, "GREASE ({x:#06x})")
                         } else {
                         write!(f, "Unknown ({x:#06x})")
@@ -116,6 +136,16 @@ macro_rules! enum_builder2 {
                 match x {
                     $($enum_val => $enum_name::$enum_var),*
                     , x => $enum_name::Unknown(x),
+                }
+            }
+        }
+
+        impl $enum_name {
+            #[allow(dead_code)]
+            pub(crate) fn value(self) -> u16 {
+                match self {
+                    $($enum_name::$enum_var => $enum_val),*
+                    ,$enum_name::Unknown(x) => x,
                 }
             }
         }
