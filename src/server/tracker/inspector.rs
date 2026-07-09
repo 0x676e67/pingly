@@ -16,6 +16,51 @@ pub use crate::tls::{ClientHello, LazyClientHello};
 
 pub type Http1Headers = Arc<boxcar::Vec<(Bytes, Bytes)>>;
 
+const HTTP2_CAPTURE_MAX_BYTES: usize = 1024 * 1024;
+const HTTP2_CAPTURE_MAX_FRAMES: usize = 128;
+
+#[derive(Default)]
+struct Http2CaptureBudget {
+    bytes: usize,
+    frames: usize,
+    stopped: bool,
+}
+
+impl Http2CaptureBudget {
+    #[inline]
+    fn is_active(&self) -> bool {
+        !self.stopped
+    }
+
+    fn accept_bytes(&mut self, requested: usize) -> usize {
+        if self.stopped {
+            return 0;
+        }
+
+        let accepted = requested.min(HTTP2_CAPTURE_MAX_BYTES.saturating_sub(self.bytes));
+        self.bytes += accepted;
+        accepted
+    }
+
+    #[inline]
+    fn byte_limit_reached(&self) -> bool {
+        self.bytes >= HTTP2_CAPTURE_MAX_BYTES
+    }
+
+    /// Records one complete wire frame and reports whether capture may continue.
+    fn record_frame(&mut self) -> bool {
+        if self.frames < HTTP2_CAPTURE_MAX_FRAMES {
+            self.frames += 1;
+        }
+        self.frames < HTTP2_CAPTURE_MAX_FRAMES
+    }
+
+    #[inline]
+    fn stop(&mut self) {
+        self.stopped = true;
+    }
+}
+
 /// `Inspector` is an enum that wraps protocol-specific inspectors (such as `Http1Inspector` and
 /// `Http2Inspector`) to provide a unified interface for inspecting and tracking different protocol
 /// streams. Implements `AsyncRead` and `AsyncWrite` by delegating to the underlying
@@ -259,6 +304,7 @@ pin_project! {
         buf: Vec<u8>,
         frames: Http2Frame,
         parser: frame::FrameParser,
+        capture_budget: Http2CaptureBudget,
     }
 }
 
@@ -274,6 +320,7 @@ where
             buf: Vec::new(),
             frames: Arc::new(boxcar::Vec::new()),
             parser: frame::FrameParser::default(),
+            capture_budget: Http2CaptureBudget::default(),
         }
     }
 
@@ -300,26 +347,50 @@ where
         let this = self.project();
         let poll = this.inner.poll_read(cx, buf);
 
+        if !this.capture_budget.is_active() {
+            return poll;
+        }
+
+        let new_data = &buf.filled()[len..];
+        let inspected_len = this.capture_budget.accept_bytes(new_data.len());
+        this.buf.extend_from_slice(&new_data[..inspected_len]);
+        let byte_limit_reached = this.capture_budget.byte_limit_reached();
+        let mut stop_capture = false;
+
         let plen = HTTP2_PREFACE.len();
         let not_http2 = this.buf.len() >= plen && !this.buf.starts_with(HTTP2_PREFACE);
-        if !not_http2 {
-            this.buf.extend(&buf.filled()[len..]);
+        if not_http2 {
+            stop_capture = true;
+        } else {
             let frames = this.frames.deref();
             while this.buf.len() > plen {
-                let last = frames.iter().last().map(|f| f.1);
-                if matches!(last, Some(Frame::Headers(_))) {
-                    break;
-                }
                 let (frame_len, frame) = this.parser.parse(&this.buf[plen..]);
                 if frame_len > 0 {
                     this.buf.drain(plen..plen + frame_len);
+                    if !this.capture_budget.record_frame() {
+                        stop_capture = true;
+                    }
+
+                    let headers_complete = matches!(frame, Some(Frame::Headers(_)));
                     if let Some(frame) = frame {
                         frames.push(frame);
+                    }
+                    if headers_complete {
+                        stop_capture = true;
+                    }
+                    if stop_capture {
+                        break;
                     }
                 } else {
                     break;
                 }
             }
+        }
+
+        if stop_capture || byte_limit_reached {
+            this.capture_budget.stop();
+            *this.buf = Vec::new();
+            *this.parser = frame::FrameParser::default();
         }
 
         poll
@@ -347,5 +418,34 @@ where
     #[inline]
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<io::Result<()>> {
         self.project().inner.poll_shutdown(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Http2CaptureBudget, HTTP2_CAPTURE_MAX_BYTES, HTTP2_CAPTURE_MAX_FRAMES};
+
+    #[test]
+    fn http2_capture_budget_caps_cumulative_bytes() {
+        let mut budget = Http2CaptureBudget::default();
+
+        assert_eq!(
+            budget.accept_bytes(HTTP2_CAPTURE_MAX_BYTES - 1),
+            HTTP2_CAPTURE_MAX_BYTES - 1
+        );
+        assert_eq!(budget.accept_bytes(usize::MAX), 1);
+        assert!(budget.byte_limit_reached());
+        assert_eq!(budget.accept_bytes(1), 0);
+    }
+
+    #[test]
+    fn http2_capture_budget_caps_wire_frames() {
+        let mut budget = Http2CaptureBudget::default();
+
+        for _ in 1..HTTP2_CAPTURE_MAX_FRAMES {
+            assert!(budget.record_frame());
+        }
+        assert!(!budget.record_frame());
+        assert!(!budget.record_frame());
     }
 }
