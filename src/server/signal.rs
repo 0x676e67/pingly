@@ -5,7 +5,7 @@ use tokio::time::sleep;
 use tracing::info;
 
 #[cfg(target_os = "linux")]
-use crate::tcp::TcpCaptureTrack;
+use crate::proto::tcp::TcpCaptureTrack;
 
 pub(super) async fn graceful_shutdown<A: Address>(
     handle: Handle<A>,

@@ -432,7 +432,7 @@ mod tests {
         into_boxed_utf8_lossy, HeaderField, HeadersFlag, HeadersFlagName, HeadersFlags,
         HeadersFrame,
     };
-    use crate::http2::frame::{error::Error, FrameType};
+    use crate::proto::http2::frame::{error::Error, FrameType};
 
     #[test]
     fn header_field_serializes_name_and_value_separately() {

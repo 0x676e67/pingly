@@ -10,9 +10,9 @@ use pin_project_lite::pin_project;
 use tokio::io::{self, AsyncRead, AsyncWrite, ReadBuf};
 use tokio_rustls::server::TlsStream;
 
-pub use crate::http2::Http2Frame;
-use crate::http2::{frame, frame::Frame};
-pub use crate::tls::{ClientHello, LazyClientHello};
+pub use crate::proto::http2::Http2Frame;
+use crate::proto::http2::{frame, frame::Frame};
+pub use crate::proto::tls::{ClientHello, LazyClientHello};
 
 pub type Http1Headers = Arc<boxcar::Vec<(Bytes, Bytes)>>;
 
