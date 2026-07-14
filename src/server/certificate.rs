@@ -1,6 +1,5 @@
 use std::{io, path::Path, sync::Arc};
 
-use axum_server::tls_rustls::RustlsConfig;
 use rcgen::{
     date_time_ymd, BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair,
     KeyUsagePurpose, SanType,
@@ -11,8 +10,10 @@ use tokio_rustls::rustls::{
     ServerConfig,
 };
 
-// Load TLS configuration from self-signed PEM files
-pub async fn config_self_signed() -> crate::Result<RustlsConfig> {
+use super::tls::rustls::RustlsConfig;
+
+/// Loads the reusable self-signed certificate generated for local development.
+pub(super) fn config_self_signed() -> crate::Result<RustlsConfig> {
     let (cert, key) = get_self_signed_cert()?;
     let cert = rustls_pemfile::certs(&mut cert.as_ref())
         .map(|it| it.map(|it| it.to_vec()))
@@ -44,17 +45,14 @@ pub async fn config_self_signed() -> crate::Result<RustlsConfig> {
     Ok(config_from_der(cert, key)?)
 }
 
-/// Load TLS configuration from PEM files
-pub async fn config_from_pem_chain_file(
-    cert: impl AsRef<Path>,
-    chain: impl AsRef<Path>,
-) -> crate::Result<RustlsConfig> {
-    let cert = tokio::fs::read(cert.as_ref()).await?;
+/// Loads a certificate chain and private key from PEM files.
+pub(super) fn config_from_pem_chain_file(cert: &Path, key: &Path) -> crate::Result<RustlsConfig> {
+    let cert = std::fs::read(cert)?;
     let cert = rustls_pemfile::certs(&mut cert.as_ref())
         .map(|it| it.map(|it| CertificateDer::from(it.to_vec())))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let key = tokio::fs::read(chain.as_ref()).await?;
+    let key = std::fs::read(key)?;
     let key_cert: PrivateKeyDer = match rustls_pemfile::read_one(&mut key.as_ref())?
         .ok_or_else(|| io::Error::other("could not parse pem file"))?
     {
@@ -78,6 +76,8 @@ fn config_from_der(
         .with_single_cert(cert_chain, key_der)
         .map_err(io::Error::other)?;
 
+    // ALPN lets clients select HTTP/2 or HTTP/1.x during the TLS handshake.
+    // https://www.rfc-editor.org/rfc/rfc7301
     config.alpn_protocols = vec![
         b"h2".to_vec(),
         b"http/1.1".to_vec(),
