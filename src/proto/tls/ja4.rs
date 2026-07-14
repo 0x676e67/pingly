@@ -138,7 +138,7 @@ fn first_last(value: &str) -> (Option<char>, Option<char>) {
 #[cfg(test)]
 mod tests {
     use super::{hash12, Ja4Fingerprint};
-    use crate::tls::{
+    use crate::proto::tls::{
         enums::{is_grease, ECPointFormat, NamesGroup, SignatureAlgorithm, TlsVersion},
         hello::{ClientHello, TlsExtension},
     };

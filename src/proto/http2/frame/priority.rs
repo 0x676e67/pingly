@@ -96,7 +96,7 @@ impl TryFrom<&[u8]> for StreamDependency {
 #[cfg(test)]
 mod tests {
     use super::{PriorityFrame, StreamDependency};
-    use crate::http2::frame::error::Error;
+    use crate::proto::http2::frame::error::Error;
 
     #[test]
     fn priority_requires_a_nonzero_distinct_stream_dependency() {

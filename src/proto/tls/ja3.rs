@@ -87,7 +87,7 @@ fn md5_hex(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::Ja3Fingerprint;
-    use crate::tls::{
+    use crate::proto::tls::{
         enums::{ECPointFormat, NamesGroup, SignatureAlgorithm, TlsVersion},
         hello::{ClientHello, TlsExtension},
     };

@@ -50,7 +50,7 @@ impl TryFrom<(u32, &[u8])> for WindowUpdateFrame {
 #[cfg(test)]
 mod tests {
     use super::WindowUpdateFrame;
-    use crate::http2::frame::error::Error;
+    use crate::proto::http2::frame::error::Error;
 
     #[test]
     fn window_update_rejects_zero_increment() {

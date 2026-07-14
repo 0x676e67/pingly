@@ -7,10 +7,10 @@ use axum::{
 use serde::{Serialize, Serializer};
 use tokio_rustls::rustls::ProtocolVersion;
 
-use crate::http2::AkamaiFingerprint;
+use crate::proto::http2::AkamaiFingerprint;
 
 #[cfg(target_os = "linux")]
-use crate::tcp::CapturedPacket;
+use crate::proto::tcp::CapturedPacket;
 
 use super::inspector::{ClientHello, Http1Headers, Http2Frame, LazyClientHello};
 

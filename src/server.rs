@@ -29,7 +29,7 @@ use tracker::{
 };
 
 #[cfg(target_os = "linux")]
-use crate::tcp::TcpCaptureTrack;
+use crate::proto::tcp::TcpCaptureTrack;
 use crate::{error::Error, Args, Result};
 
 #[tokio::main]

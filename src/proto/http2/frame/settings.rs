@@ -235,7 +235,7 @@ mod tests {
     use serde_json::json;
 
     use super::{Setting, SettingsFrame};
-    use crate::http2::frame::error::Error;
+    use crate::proto::http2::frame::error::Error;
 
     #[test]
     fn settings_serialize_numeric_and_boolean_values() {
