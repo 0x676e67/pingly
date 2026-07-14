@@ -14,6 +14,12 @@ pub enum Error {
     /// with the connection stream identifier zero.
     InvalidStreamId,
 
+    /// A field block was interrupted before its CONTINUATION frame arrived.
+    ExpectedContinuation,
+
+    /// A CONTINUATION frame did not match an open field block.
+    UnexpectedContinuation,
+
     /// A request is malformed.
     MalformedMessage,
 }
