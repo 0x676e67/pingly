@@ -14,6 +14,12 @@ pub enum Error {
     /// with the connection stream identifier zero.
     InvalidStreamId,
 
+    /// A stream was declared as depending on itself.
+    InvalidStreamDependency,
+
+    /// A WINDOW_UPDATE frame used the prohibited zero increment.
+    InvalidWindowIncrement,
+
     /// A field block was interrupted before its CONTINUATION frame arrived.
     ExpectedContinuation,
 
