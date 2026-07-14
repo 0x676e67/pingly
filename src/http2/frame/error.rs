@@ -1,7 +1,7 @@
 /// Errors that can occur during parsing an HTTP/2 frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
-    /// A length value other than 8 was set on a PING message.
+    /// A frame payload did not satisfy the size required by its frame type.
     BadFrameSize,
 
     /// The padding length was larger than the frame-header-specified
@@ -10,8 +10,8 @@ pub enum Error {
 
     /// An invalid stream identifier was provided.
     ///
-    /// This is returned if a SETTINGS or PING frame is received with a stream
-    /// identifier other than zero.
+    /// This includes connection frames sent on a stream and stream frames sent
+    /// with the connection stream identifier zero.
     InvalidStreamId,
 
     /// A request is malformed.

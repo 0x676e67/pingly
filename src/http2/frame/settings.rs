@@ -77,6 +77,9 @@ pub struct SettingsFrame {
     /// The frame type, always [`FrameType::Settings`].
     pub frame_type: FrameType,
 
+    /// The connection-level stream identifier, which must be zero.
+    pub stream_id: u32,
+
     /// The payload length, excluding the 9-byte frame header.
     pub length: usize,
 
@@ -176,11 +179,23 @@ impl Setting {
 
 // ==== impl SettingsFrame ====
 
-impl TryFrom<&[u8]> for SettingsFrame {
+impl TryFrom<(u8, u32, &[u8])> for SettingsFrame {
     type Error = Error;
 
-    fn try_from(payload: &[u8]) -> Result<Self, Self::Error> {
-        if payload.is_empty() {
+    fn try_from((flags, stream_id, payload): (u8, u32, &[u8])) -> Result<Self, Self::Error> {
+        if stream_id != 0 {
+            return Err(Error::InvalidStreamId);
+        }
+
+        // SETTINGS defines only ACK (0x01); unknown flag bits are ignored.
+        // See: <https://www.rfc-editor.org/rfc/rfc9113#section-6.5>
+        let is_ack = flags & 0x01 != 0;
+        if is_ack && !payload.is_empty() {
+            tracing::debug!("Invalid SETTINGS frame size: {}", payload.len());
+            return Err(Error::BadFrameSize);
+        }
+
+        if payload.len() % 6 != 0 {
             tracing::debug!("Invalid SETTINGS frame size: {}", payload.len());
             return Err(Error::BadFrameSize);
         }
@@ -196,6 +211,7 @@ impl TryFrom<&[u8]> for SettingsFrame {
 
         Ok(SettingsFrame {
             frame_type: FrameType::Settings,
+            stream_id,
             length: payload.len(),
             settings,
         })
@@ -206,7 +222,8 @@ impl TryFrom<&[u8]> for SettingsFrame {
 mod tests {
     use serde_json::json;
 
-    use super::Setting;
+    use super::{Setting, SettingsFrame};
+    use crate::http2::frame::error::Error;
 
     #[test]
     fn settings_serialize_numeric_and_boolean_values() {
@@ -240,6 +257,41 @@ mod tests {
         assert_eq!(
             serde_json::to_value(setting).unwrap(),
             json!({"EnablePush": {"id": 2, "value": 2}})
+        );
+    }
+
+    #[test]
+    fn empty_settings_and_ack_frames_are_valid() {
+        let settings = SettingsFrame::try_from((0x00, 0, &[][..])).unwrap();
+        let ack = SettingsFrame::try_from((0x01, 0, &[][..])).unwrap();
+
+        assert!(settings.settings.is_empty());
+        assert!(settings.settings.is_empty());
+        assert!(ack.settings.is_empty());
+        assert_eq!(
+            serde_json::to_value(ack).unwrap(),
+            json!({
+                "frame_type": "Settings",
+                "stream_id": 0,
+                "length": 0,
+                "settings": []
+            })
+        );
+    }
+
+    #[test]
+    fn settings_reject_invalid_frame_boundaries() {
+        assert_eq!(
+            SettingsFrame::try_from((0x01, 0, &[0; 6][..])).unwrap_err(),
+            Error::BadFrameSize
+        );
+        assert_eq!(
+            SettingsFrame::try_from((0x00, 0, &[0; 5][..])).unwrap_err(),
+            Error::BadFrameSize
+        );
+        assert_eq!(
+            SettingsFrame::try_from((0x00, 1, &[][..])).unwrap_err(),
+            Error::InvalidStreamId
         );
     }
 }
