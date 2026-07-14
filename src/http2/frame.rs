@@ -125,7 +125,7 @@ impl TryFrom<(u8, u8, u32, &[u8])> for Frame {
             0x1 => HeadersFrame::try_from((flags, stream_id, payload)).map(Frame::Headers),
             0x2 => PriorityFrame::try_from((stream_id, payload)).map(Frame::Priority),
             0x4 => SettingsFrame::try_from((flags, stream_id, payload)).map(Frame::Settings),
-            0x8 => WindowUpdateFrame::try_from(payload).map(Frame::WindowUpdate),
+            0x8 => WindowUpdateFrame::try_from((stream_id, payload)).map(Frame::WindowUpdate),
             0x9 => Err(error::Error::UnexpectedContinuation),
             _ => {
                 // If the frame type is unknown, we create an UnknownFrame
