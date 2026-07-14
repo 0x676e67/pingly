@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::{borrow::Cow, net::SocketAddr};
 
 use axum::{
     body::Body,
@@ -13,6 +13,13 @@ use crate::http2::AkamaiFingerprint;
 use crate::tcp::CapturedPacket;
 
 use super::inspector::{ClientHello, Http1Headers, Http2Frame, LazyClientHello};
+
+/// A captured HTTP header field, preserving the original order.
+#[derive(Serialize)]
+pub struct HeaderField<'a> {
+    name: Cow<'a, str>,
+    value: Cow<'a, str>,
+}
 
 /// TLS handshake tracking information, which includes the client hello payload.
 #[derive(Serialize)]
@@ -128,12 +135,10 @@ impl Serialize for Http1TrackInfo {
         use serde::ser::SerializeSeq;
         let mut seq = serializer.serialize_seq(Some(self.0.count()))?;
         for (_, (name, value)) in self.0.iter() {
-            let s = format!(
-                "{}: {}",
-                String::from_utf8_lossy(name),
-                String::from_utf8_lossy(value)
-            );
-            seq.serialize_element(&s)?;
+            seq.serialize_element(&HeaderField {
+                name: String::from_utf8_lossy(name),
+                value: String::from_utf8_lossy(value),
+            })?;
         }
         seq.end()
     }
@@ -329,4 +334,27 @@ where
     S: Serializer,
 {
     serializer.serialize_str(method.as_str())
+}
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+    use serde_json::json;
+    use std::sync::Arc;
+
+    use super::Http1TrackInfo;
+
+    #[test]
+    fn http1_headers_serialize_name_and_value_separately() {
+        let headers = Arc::new(boxcar::Vec::new());
+        headers.push((
+            Bytes::from_static(b"user-agent"),
+            Bytes::from_static(b"curl"),
+        ));
+
+        assert_eq!(
+            serde_json::to_value(Http1TrackInfo::new(headers)).unwrap(),
+            json!([{"name": "user-agent", "value": "curl"}])
+        );
+    }
 }

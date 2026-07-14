@@ -24,9 +24,9 @@ pub struct PriorityFrame {
 /// Represents a stream dependency in HTTP/2 priority frames.
 #[derive(Debug, Serialize)]
 pub struct StreamDependency {
-    /// The stream weight as received in the PRIORITY frame (0~255).
-    /// According to RFC 7540 5.3.2, the actual weight is always `weight + 1` (range 1~256).
-    /// That is, a value of 0 means weight 1, 255 means weight 256.
+    /// The effective stream weight after decoding the wire value (range 1..=256).
+    /// RFC 7540 Section 5.3.2 encodes weights as one less than their effective value:
+    /// <https://www.rfc-editor.org/rfc/rfc7540#section-5.3.2>
     pub weight: u16,
 
     /// The stream identifier this stream depends on.

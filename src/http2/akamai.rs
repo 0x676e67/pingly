@@ -49,11 +49,10 @@ fn compute_fingerprint(sent_frames: &Http2Frame) -> String {
                     frame.stream_id,
                     frame.priority.exclusive,
                     frame.priority.depends_on,
-                    frame.priority.weight + 1
+                    frame.priority.weight
                 ));
             }
             Frame::Headers(frame) => {
-                headers_group.push(format!("{}", frame.stream_id));
                 headers_group.push(
                     frame
                         .pseudo_headers
@@ -62,13 +61,6 @@ fn compute_fingerprint(sent_frames: &Http2Frame) -> String {
                         .collect::<Vec<_>>()
                         .join(","),
                 );
-                headers_group.push(format!("{}", frame.flags.0));
-                if let Some(ref priority) = frame.priority {
-                    headers_group.push(format!(
-                        "{}:{}:{}",
-                        priority.exclusive, priority.depends_on, priority.weight
-                    ));
-                }
             }
             Frame::Unknown(value) => {
                 tracing::trace!("Unknown http2 frame: {:?}", value);
@@ -76,21 +68,20 @@ fn compute_fingerprint(sent_frames: &Http2Frame) -> String {
         }
     }
 
-    let mut fingerprint = Vec::with_capacity(4);
+    let window_update_group = window_update_group
+        .map(|window_update| window_update.to_string())
+        .unwrap_or_default();
+    let priority_group = priority_group
+        .map(|priority| priority.join(","))
+        .unwrap_or_else(|| "0".to_owned());
 
-    fingerprint.push(setting_group.join(";"));
-
-    if let Some(window_update_group) = window_update_group {
-        fingerprint.push(window_update_group.to_string());
-    }
-
-    if let Some(priority_group) = priority_group {
-        fingerprint.push(priority_group.join(","));
-    }
-
-    fingerprint.push(headers_group.join(";"));
-
-    fingerprint.join("|")
+    format!(
+        "{}|{}|{}|{}",
+        setting_group.join(";"),
+        window_update_group,
+        priority_group,
+        headers_group.join(";")
+    )
 }
 
 #[cfg(test)]
@@ -124,8 +115,8 @@ mod tests {
 
         let fingerprint = AkamaiFingerprint::from_frames(&frames).unwrap();
 
-        assert_eq!(fingerprint.fingerprint, "1:65536;3:1000|983041|3:0:0:202|");
-        assert_eq!(fingerprint.hash, "ba2883d991a97ee2e0cdff59b10df98e");
+        assert_eq!(fingerprint.fingerprint, "1:65536;3:1000|983041|3:0:0:201|");
+        assert_eq!(fingerprint.hash, "acc97607debc130f466a9f588ee3a2ba");
     }
 
     #[test]
@@ -133,6 +124,35 @@ mod tests {
         let frames = Arc::new(boxcar::Vec::new());
 
         assert!(AkamaiFingerprint::from_frames(&frames).is_none());
+    }
+
+    #[test]
+    fn akamai_fingerprint_ignores_headers_priority_values() {
+        let frames = Arc::new(boxcar::Vec::new());
+        push_frame(
+            &frames,
+            &[
+                0x00, 0x00, 0x0c, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00,
+                0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0xe8,
+            ],
+        );
+        push_frame(
+            &frames,
+            &[
+                0x00, 0x00, 0x04, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0f, 0x00, 0x01,
+            ],
+        );
+        push_frame(
+            &frames,
+            &[
+                0x00, 0x00, 0x05, 0x01, 0x24, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0xc8,
+            ],
+        );
+
+        let fingerprint = AkamaiFingerprint::from_frames(&frames).unwrap();
+
+        assert_eq!(fingerprint.fingerprint, "1:65536;3:1000|983041|0|");
+        assert_eq!(fingerprint.hash, "fc449c09e9d86239792bc6798d859012");
     }
 
     fn push_frame(frames: &Http2Frame, data: &[u8]) {
