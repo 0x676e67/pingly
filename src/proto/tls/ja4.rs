@@ -4,20 +4,23 @@ use sha2::{Digest, Sha256};
 use tls_parser::TlsExtensionType;
 
 use super::{
-    enums::{is_grease, TlsVersion},
+    enums::{is_grease_value, TlsVersion},
     hello::{ClientHello, TlsExtension},
 };
 
 /// JA4 TLS client fingerprint, plus the raw material used to produce the hash chunks.
 pub(super) struct Ja4Fingerprint {
+    /// The final three-chunk JA4 fingerprint.
     pub(super) fingerprint: String,
+    /// The unhashed JA4 form used to inspect each chunk's source material.
     pub(super) raw: String,
 }
 
 impl Ja4Fingerprint {
+    /// Builds a JA4 fingerprint from client-advertised ClientHello fields.
     pub(super) fn from_client_hello(client_hello: &ClientHello) -> Self {
         let mut ciphers = client_hello.cipher_values.clone();
-        ciphers.retain(|value| !is_grease(*value));
+        ciphers.retain(|value| !is_grease_value(*value));
 
         let mut extensions = Vec::with_capacity(client_hello.extensions.len());
         let mut supported_versions = Vec::new();
@@ -27,10 +30,10 @@ impl Ja4Fingerprint {
         let mut has_server_name = false;
 
         for extension in &client_hello.extensions {
-            let value = extension.value();
-            if is_grease(value) {
+            if extension.is_grease() {
                 continue;
             }
+            let value = extension.value();
 
             let extension_type = TlsExtensionType::from_u16(value);
             extension_count += 1;
@@ -38,7 +41,7 @@ impl Ja4Fingerprint {
 
             match extension {
                 TlsExtension::SupportedVersions { data, .. } => {
-                    supported_versions.extend(data.iter().map(|version| version.value()));
+                    supported_versions.extend(data.iter().copied());
                 }
                 TlsExtension::SignatureAlgorithms { data, .. } => {
                     signature_algorithms.extend(data.iter().map(|algorithm| algorithm.value()));
@@ -82,7 +85,7 @@ impl Ja4Fingerprint {
             "{transport}{version}{sni}{cipher_count:02}{extension_count:02}{alpn_first}{alpn_last}",
             transport = 't',
             version = TlsVersion::ja4_code_from_client_hello(
-                client_hello.tls_version.value(),
+                client_hello.tls_version,
                 supported_versions
             ),
             sni = if has_server_name { 'd' } else { 'i' },
@@ -139,7 +142,7 @@ fn first_last(value: &str) -> (Option<char>, Option<char>) {
 mod tests {
     use super::{hash12, Ja4Fingerprint};
     use crate::proto::tls::{
-        enums::{is_grease, ECPointFormat, NamesGroup, SignatureAlgorithm, TlsVersion},
+        enums::{ECPointFormat, NamesGroup, SignatureAlgorithm, TlsVersion},
         hello::{ClientHello, TlsExtension},
     };
     use tls_parser::TlsExtensionType;
@@ -248,8 +251,10 @@ mod tests {
         );
         let fingerprint = Ja4Fingerprint::from_client_hello(&client_hello);
 
-        assert!(is_grease(0x0a0a));
-        assert!(!is_grease(0x0a0b));
+        assert!(client_hello
+            .extensions
+            .first()
+            .is_some_and(TlsExtension::is_grease));
         assert_eq!(fingerprint.raw, "t12d0103h2_1301_000d");
     }
 

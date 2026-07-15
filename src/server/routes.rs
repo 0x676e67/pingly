@@ -25,6 +25,17 @@ impl IntoResponse for Error {
     }
 }
 
+fn spawn_blocking_analysis<F, R>(analysis: F) -> tokio::task::JoinHandle<R>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    let span = tracing::Span::current();
+
+    // Blocking tasks do not automatically inherit the request's current tracing span.
+    tokio::task::spawn_blocking(move || span.in_scope(analysis))
+}
+
 #[inline]
 pub(crate) async fn track(
     Extension(ConnectInfo(addr)): Extension<ConnectInfo<SocketAddr>>,
@@ -48,7 +59,7 @@ pub(crate) async fn track(
 
     #[cfg(target_os = "linux")]
     {
-        tokio::task::spawn_blocking(move || {
+        spawn_blocking_analysis(move || {
             TrackInfo::new_with_tcp(Track::All, addr, req, track, tcp_packets)
         })
         .await
@@ -58,7 +69,7 @@ pub(crate) async fn track(
 
     #[cfg(not(target_os = "linux"))]
     {
-        tokio::task::spawn_blocking(move || TrackInfo::new(Track::All, addr, req, track))
+        spawn_blocking_analysis(move || TrackInfo::new(Track::All, addr, req, track))
             .await
             .map(ErasedJson::pretty)
             .map_err(Error::from)
@@ -71,7 +82,7 @@ pub(crate) async fn tls_track(
     Extension(track): Extension<ConnectionTrack>,
     req: Request<Body>,
 ) -> Result<ErasedJson> {
-    tokio::task::spawn_blocking(move || TrackInfo::new(Track::Tls, addr, req, track))
+    spawn_blocking_analysis(move || TrackInfo::new(Track::Tls, addr, req, track))
         .await
         .map(ErasedJson::pretty)
         .map_err(Error::from)
@@ -83,7 +94,7 @@ pub(crate) async fn http1_track(
     Extension(track): Extension<ConnectionTrack>,
     req: Request<Body>,
 ) -> Result<ErasedJson> {
-    tokio::task::spawn_blocking(move || TrackInfo::new(Track::HTTP1, addr, req, track))
+    spawn_blocking_analysis(move || TrackInfo::new(Track::HTTP1, addr, req, track))
         .await
         .map(ErasedJson::pretty)
         .map_err(Error::from)
@@ -95,7 +106,7 @@ pub(crate) async fn http2_track(
     Extension(track): Extension<ConnectionTrack>,
     req: Request<Body>,
 ) -> Result<ErasedJson> {
-    tokio::task::spawn_blocking(move || TrackInfo::new(Track::HTTP2, addr, req, track))
+    spawn_blocking_analysis(move || TrackInfo::new(Track::HTTP2, addr, req, track))
         .await
         .map(ErasedJson::pretty)
         .map_err(Error::from)

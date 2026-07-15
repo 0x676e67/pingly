@@ -12,7 +12,9 @@ macro_rules! enum_builder {
                 $(#[$enum_meta])*
                 $enum_var
             ),*
-            ,Unknown(u8)
+            ,
+            /// An identifier that is not recognized by this build.
+            Unknown(u8)
         }
 
         impl From<u8> for $enum_name {
@@ -26,6 +28,7 @@ macro_rules! enum_builder {
 
         impl $enum_name {
             #[allow(dead_code)]
+            /// Returns the numeric identifier observed on the wire.
             pub(crate) fn value(self) -> u8 {
                 match self {
                     $($enum_name::$enum_var => $enum_val),*
@@ -66,7 +69,9 @@ macro_rules! enum_builder {
                 $(#[$enum_meta])*
                 $enum_var
             ),*
-            ,Unknown(u16)
+            ,
+            /// An identifier that is not recognized by this build.
+            Unknown(u16)
         }
 
         impl From<u16> for $enum_name {
@@ -80,6 +85,7 @@ macro_rules! enum_builder {
 
         impl $enum_name {
             #[allow(dead_code)]
+            /// Returns the numeric identifier observed on the wire.
             pub(crate) fn value(self) -> u16 {
                 match self {
                     $($enum_name::$enum_var => $enum_val),*
@@ -92,7 +98,7 @@ macro_rules! enum_builder {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> ::std::fmt::Result {
                 match self {
                     $( $enum_name::$enum_var => write!(f, stringify!($enum_var))),*
-                    ,$enum_name::Unknown(x) => if is_grease(*x) {
+                    ,$enum_name::Unknown(x) => if is_grease_value(*x) {
                         write!(f, "GREASE ({x:#06x})")
                         } else {
                         write!(f, "Unknown ({x:#06x})")
@@ -128,7 +134,9 @@ macro_rules! enum_builder2 {
                 $(#[$enum_meta])*
                 $enum_var
             ),*
-            ,Unknown(u16)
+            ,
+            /// An identifier that is not recognized by this build.
+            Unknown(u16)
         }
 
         impl From<u16> for $enum_name {
@@ -142,6 +150,7 @@ macro_rules! enum_builder2 {
 
         impl $enum_name {
             #[allow(dead_code)]
+            /// Returns the numeric identifier observed on the wire.
             pub(crate) fn value(self) -> u16 {
                 match self {
                     $($enum_name::$enum_var => $enum_val),*

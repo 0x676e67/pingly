@@ -1,9 +1,12 @@
 #![allow(non_camel_case_types)]
 
 enum_builder! {
-    /// The `TlsVersion` TLS protocol enum.  Values in this enum are taken
-    /// from the various RFCs covering TLS, and are listed by IANA.
-    /// The `Unknown` item is used when processing unrecognised ordinals.
+    /// A TLS or DTLS protocol version identifier.
+    ///
+    /// Unrecognized wire values are retained in `Unknown`.
+    ///
+    /// See [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846.html) and
+    /// [RFC 9147](https://www.rfc-editor.org/rfc/rfc9147.html).
     @U16
     pub enum TlsVersion {
         SSLv2 => 0x0200,
@@ -19,6 +22,14 @@ enum_builder! {
 }
 
 impl TlsVersion {
+    /// Returns whether this version is reserved for GREASE.
+    ///
+    /// See [RFC 8701, Section 2](https://www.rfc-editor.org/rfc/rfc8701.html#section-2).
+    pub fn is_grease(self) -> bool {
+        is_grease_value(self.value())
+    }
+
+    /// Returns the two-character TLS version code used by JA4.
     pub(crate) fn ja4_code(self) -> &'static str {
         match self {
             TlsVersion::TLSv1_3 => "13",
@@ -31,24 +42,25 @@ impl TlsVersion {
         }
     }
 
+    /// Selects the highest non-GREASE advertised version and returns its JA4 code.
     pub(crate) fn ja4_code_from_client_hello(
-        legacy_version: u16,
-        supported_versions: impl IntoIterator<Item = u16>,
+        legacy_version: Self,
+        supported_versions: impl IntoIterator<Item = Self>,
     ) -> &'static str {
-        let version = supported_versions
+        supported_versions
             .into_iter()
-            .filter(|version| !is_grease(*version))
-            .max()
-            .unwrap_or(legacy_version);
-
-        TlsVersion::from(version).ja4_code()
+            .filter(|version| !version.is_grease())
+            .max_by_key(|version| version.value())
+            .unwrap_or(legacy_version)
+            .ja4_code()
     }
 }
 
 enum_builder! {
-    /// The `SignatureAlgorithm` TLS protocol enum.  Values in this enum are taken
-    /// from the various RFCs covering TLS, and are listed by IANA.
-    /// The `Unknown` item is used when processing unrecognised ordinals.
+    /// A TLS signature scheme identifier advertised by the client.
+    ///
+    /// Unrecognized wire values are retained in `Unknown`.
+    /// See [RFC 9846, Section 4.3.3](https://www.rfc-editor.org/rfc/rfc9846.html#section-4.3.3).
     @U16
     pub enum SignatureAlgorithm {
         rsa_pkcs1_sha1 => 513,
@@ -91,10 +103,21 @@ enum_builder! {
     }
 }
 
+impl SignatureAlgorithm {
+    /// Returns whether this signature algorithm is reserved for GREASE.
+    ///
+    /// See [RFC 8701, Section 2](https://www.rfc-editor.org/rfc/rfc8701.html#section-2).
+    #[allow(dead_code)]
+    pub fn is_grease(self) -> bool {
+        is_grease_value(self.value())
+    }
+}
+
 enum_builder! {
-    /// The `CompressionAlgorithm` TLS protocol enum.  Values in this enum are taken
-    /// from the various RFCs covering TLS, and are listed by IANA.
-    /// The `Unknown` item is used when processing unrecognised ordinals.
+    /// A legacy ClientHello compression-method identifier.
+    ///
+    /// TLS 1.3 clients must offer only `Null`.
+    /// See [RFC 9846, Section 4.2.2](https://www.rfc-editor.org/rfc/rfc9846.html#section-4.2.2).
     @U8
     pub enum CompressionAlgorithm {
         Null => 0x00,
@@ -103,9 +126,10 @@ enum_builder! {
 }
 
 enum_builder! {
-    /// The `ECPointFormat` TLS protocol enum.  Values in this enum are taken
-    /// from the various RFCs covering TLS, and are listed by IANA.
-    /// The `Unknown` item is used when processing unrecognised ordinals.
+    /// An elliptic-curve point format advertised by a pre-TLS 1.3 client.
+    ///
+    /// Unrecognized wire values are retained in `Unknown`.
+    /// See [RFC 8422, Section 5.1.2](https://www.rfc-editor.org/rfc/rfc8422.html#section-5.1.2).
     @U8
     pub enum ECPointFormat {
         Uncompressed => 0x00,
@@ -115,7 +139,9 @@ enum_builder! {
 }
 
 enum_builder! {
-    /// Key derivation function used in hybrid public key encryption
+    /// An HPKE key derivation function identifier.
+    ///
+    /// See [RFC 9180, Section 7.2.2](https://www.rfc-editor.org/rfc/rfc9180.html#section-7.2.2).
     @U16
     pub enum KeyDerivationFunction {
         HKDF_SHA256 => 0x0001,
@@ -125,7 +151,9 @@ enum_builder! {
 }
 
 enum_builder! {
-    /// Authenticated encryption with associated data (AEAD) used in hybrid public key encryption
+    /// An HPKE authenticated-encryption algorithm identifier.
+    ///
+    /// See [RFC 9180, Section 7.2.3](https://www.rfc-editor.org/rfc/rfc9180.html#section-7.2.3).
     @U16
     pub enum AuthenticatedEncryptionWithAssociatedData {
         AES_128_GCM => 0x0001,
@@ -136,8 +164,9 @@ enum_builder! {
 }
 
 enum_builder! {
-    /// The `CertificateCompressionAlgorithm` TLS protocol enum, the algorithm used to compress the certificate.
-    /// The algorithm MUST be one of the algorithms listed in the peer's compress_certificate extension.
+    /// A certificate compression algorithm advertised by the client.
+    ///
+    /// See [RFC 8879, Section 3](https://www.rfc-editor.org/rfc/rfc8879.html#section-3).
     @U16
     pub enum CertificateCompressionAlgorithm {
         Zlib => 0x0001,
@@ -147,11 +176,9 @@ enum_builder! {
 }
 
 enum_builder! {
-    ///  The `CertificateStatusType` TLS protocol enum, used in the status_request extension.
-    /// Values in this enum are taken from the various RFCs covering TLS, and are listed
-    /// by IANA. The `Unknown` item is used when processing unrecognised ordinals.
-    /// The `OCSP` value is used to indicate that the certificate status is provided
-    /// using the Online Certificate Status Protocol (OCSP).
+    /// A certificate status protocol requested through `status_request`.
+    ///
+    /// See [RFC 6066, Section 8](https://www.rfc-editor.org/rfc/rfc6066.html#section-8).
     #[allow(clippy::upper_case_acronyms)]
     @U8
     pub enum CertificateStatusType {
@@ -160,18 +187,36 @@ enum_builder! {
 }
 
 enum_builder! {
+    /// A pre-shared-key key exchange mode advertised by the client.
+    ///
+    /// See [RFC 9846, Section 4.3.9](https://www.rfc-editor.org/rfc/rfc9846.html#section-4.3.9).
     @U8
     pub enum PskKeyExchangeMode {
-        /// See <https://www.rfc-editor.org/rfc/rfc8446#section-4.2.9>
+        /// Authentication based only on the pre-shared key.
         psk_ke => 0,
+        /// Authentication based on the pre-shared key with ephemeral Diffie-Hellman.
         psk_dhe_ke => 1
     }
 }
 
+impl PskKeyExchangeMode {
+    /// Returns whether this PSK key exchange mode is reserved for GREASE.
+    ///
+    /// See [RFC 8701, Section 2](https://www.rfc-editor.org/rfc/rfc8701.html#section-2).
+    #[allow(dead_code)]
+    pub fn is_grease(self) -> bool {
+        matches!(
+            self.value(),
+            0x0b | 0x2a | 0x49 | 0x68 | 0x87 | 0xa6 | 0xc5 | 0xe4
+        )
+    }
+}
+
 enum_builder2! {
-    /// The `NamesGroup` TLS protocol enum.  Values in this enum are taken
-    /// from the various RFCs covering TLS, and are listed by IANA.
-    /// The `Unknown` item is used when processing unrecognised ordinals.
+    /// A named group identifier used for TLS key establishment.
+    ///
+    /// Unrecognized wire values are retained in `Unknown`.
+    /// See [RFC 9846, Section 4.3.7](https://www.rfc-editor.org/rfc/rfc9846.html#section-4.3.7).
     @U16
     pub enum NamesGroup {
         sect163k1 => 1,
@@ -226,6 +271,15 @@ enum_builder2! {
     }
 }
 
+impl NamesGroup {
+    /// Returns whether this named group is reserved for GREASE.
+    ///
+    /// See [RFC 8701, Section 2](https://www.rfc-editor.org/rfc/rfc8701.html#section-2).
+    pub fn is_grease(self) -> bool {
+        is_grease_value(self.value())
+    }
+}
+
 impl ::std::fmt::Display for NamesGroup {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         match self {
@@ -234,7 +288,7 @@ impl ::std::fmt::Display for NamesGroup {
             NamesGroup::P_384 => f.write_str("P-384"),
             NamesGroup::P_521 => f.write_str("P-521"),
             NamesGroup::Unknown(x) => {
-                if is_grease(*x) {
+                if self.is_grease() {
                     write!(f, "GREASE ({x:#06x})")
                 } else {
                     write!(f, "Unknown ({x:#06x})")
@@ -247,21 +301,26 @@ impl ::std::fmt::Display for NamesGroup {
 
 /// RFC 8701 reserves these patterned values so clients can keep TLS extension points flexible.
 ///
-/// See: <https://www.rfc-editor.org/rfc/rfc8701#section-2>
-pub(crate) fn is_grease(value: u16) -> bool {
+/// See [RFC 8701, Section 2](https://www.rfc-editor.org/rfc/rfc8701.html#section-2).
+pub(super) const fn is_grease_value(value: u16) -> bool {
     value & 0x0f0f == 0x0a0a && value >> 8 == value & 0x00ff
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{is_grease, TlsVersion};
+    use super::{NamesGroup, PskKeyExchangeMode, SignatureAlgorithm, TlsVersion};
 
     #[test]
-    fn grease_uses_rfc8701_pattern() {
-        assert!(is_grease(0x0a0a));
-        assert!(is_grease(0xfafa));
-        assert!(!is_grease(0x0a0b));
-        assert!(!is_grease(0x0a1a));
+    fn grease_detection_is_available_on_tls_identifier_types() {
+        assert!(TlsVersion::from(0x0a0a).is_grease());
+        assert!(SignatureAlgorithm::from(0xfafa).is_grease());
+        assert!(NamesGroup::from(0x2a2a).is_grease());
+        assert!(PskKeyExchangeMode::from(0x0b).is_grease());
+        assert!(PskKeyExchangeMode::from(0xe4).is_grease());
+        assert!(!TlsVersion::from(0x0a0b).is_grease());
+        assert!(!SignatureAlgorithm::from(0x0a1a).is_grease());
+        assert!(!NamesGroup::X25519.is_grease());
+        assert!(!PskKeyExchangeMode::psk_dhe_ke.is_grease());
     }
 
     #[test]
@@ -275,9 +334,22 @@ mod tests {
     #[test]
     fn ja4_client_hello_version_prefers_supported_versions() {
         assert_eq!(
-            TlsVersion::ja4_code_from_client_hello(0x0303, [0x0a0a, 0x0304]),
+            TlsVersion::ja4_code_from_client_hello(
+                TlsVersion::TLSv1_2,
+                [TlsVersion::from(0x0a0a), TlsVersion::TLSv1_3]
+            ),
             "13"
         );
-        assert_eq!(TlsVersion::ja4_code_from_client_hello(0x0303, []), "12");
+        assert_eq!(
+            TlsVersion::ja4_code_from_client_hello(TlsVersion::TLSv1_2, []),
+            "12"
+        );
+        assert_eq!(
+            TlsVersion::ja4_code_from_client_hello(
+                TlsVersion::TLSv1_2,
+                [TlsVersion::TLSv1_3, TlsVersion::from(0x0001)]
+            ),
+            "13"
+        );
     }
 }
