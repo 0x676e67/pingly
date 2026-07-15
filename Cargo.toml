@@ -58,7 +58,7 @@ bytes = "1.9.0"
 hex = "0.4.3"
 md5 = "0.8.0"
 nom = "8.0.0"
-sha2 = { version = "0.10.9", default-features = false }
+sha2 = { version = "0.11.0", default-features = false }
 
 tokio-rustls = "0.26"
 rustls-pemfile = "2.0"
