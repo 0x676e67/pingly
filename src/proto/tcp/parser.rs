@@ -2,7 +2,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value as JsonValue;
 
-use crate::encoding::hex_encode;
+use hex::encode as hex_encode;
 
 use super::CapturedPacket;
 

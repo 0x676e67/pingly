@@ -4,7 +4,6 @@ mod alloc;
 mod args;
 #[cfg(target_family = "unix")]
 mod daemon;
-mod encoding;
 mod error;
 mod proto;
 mod server;

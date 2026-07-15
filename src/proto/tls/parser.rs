@@ -6,7 +6,7 @@ use nom::{
     IResult, Parser,
 };
 
-use crate::encoding::hex_encode;
+use hex::encode as hex_encode;
 
 use super::hello::{ECHClientHello, ECHClientHelloOuter, HpkeSymmetricCipherSuite, TlsExtension};
 

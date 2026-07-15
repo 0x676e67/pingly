@@ -4,7 +4,7 @@ use serde::Serialize;
 use tls_parser::{TlsCipherSuite, TlsExtensionType, TlsMessage, TlsMessageHandshake};
 use tokio_rustls::rustls::ProtocolVersion;
 
-use crate::encoding::hex_encode;
+use hex::encode as hex_encode;
 
 use super::{
     enums::{
