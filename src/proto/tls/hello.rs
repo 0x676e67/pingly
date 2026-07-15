@@ -1,32 +1,38 @@
-//! See: <https://www.rfc-editor.org/rfc/rfc8446#section-4.2>
+//! TLS ClientHello data captured from the wire.
+//!
+//! See [RFC 9846, Section 4.2.2](https://www.rfc-editor.org/rfc/rfc9846.html#section-4.2.2)
+//! for the ClientHello layout and [Section 4.3](https://www.rfc-editor.org/rfc/rfc9846.html#section-4.3)
+//! for its extension block.
 
 use serde::Serialize;
 use tls_parser::{TlsCipherSuite, TlsExtensionType, TlsMessage, TlsMessageHandshake};
 use tokio_rustls::rustls::ProtocolVersion;
 
-use crate::encoding::hex_encode;
+use hex::encode as hex_encode;
 
 use super::{
     enums::{
-        AuthenticatedEncryptionWithAssociatedData, CertificateCompressionAlgorithm,
-        CertificateStatusType, CompressionAlgorithm, ECPointFormat, KeyDerivationFunction,
-        NamesGroup, PskKeyExchangeMode, SignatureAlgorithm, TlsVersion,
+        is_grease_value, AuthenticatedEncryptionWithAssociatedData,
+        CertificateCompressionAlgorithm, CertificateStatusType, CompressionAlgorithm,
+        ECPointFormat, KeyDerivationFunction, NamesGroup, PskKeyExchangeMode, SignatureAlgorithm,
+        TlsVersion,
     },
     ja3::Ja3Fingerprint,
     ja4::Ja4Fingerprint,
     parser,
 };
 
-/// `LazyClientHello` is a buffer for accumulating raw TLS ClientHello data during the handshake
-/// phase. It allows incremental appending of data and supports deferred (lazy) parsing into a
-/// structured `ClientHello` only when needed, without interfering with the TLS handshake process.
+/// Buffers raw TLS record bytes so the ClientHello can be parsed after the handshake.
+///
+/// Deferring parsing keeps fingerprint analysis out of the handshake path. The buffer may be filled
+/// incrementally when the ClientHello spans multiple reads.
 #[derive(Clone)]
 pub struct LazyClientHello {
     buf: Vec<u8>,
 }
 
 impl LazyClientHello {
-    /// Creates a new, empty buffer for accumulating ClientHello data.
+    /// Creates an empty ClientHello buffer with capacity for a typical browser handshake.
     pub fn new() -> LazyClientHello {
         LazyClientHello {
             // Buffer size is set to match typical ClientHello message sizes sent by most browsers.
@@ -36,150 +42,328 @@ impl LazyClientHello {
         }
     }
 
-    /// Attempts to parse a TLS ClientHello message from the buffered data.
-    /// Returns `Some(ClientHello)` if parsing succeeds, otherwise `None`.
+    /// Consumes the buffer and attempts to parse its first complete TLS ClientHello record.
+    ///
+    /// Returns `None` when the record, handshake message, or extension block is incomplete or
+    /// malformed, or when the buffered record does not contain a ClientHello.
     pub fn parse(self) -> Option<ClientHello> {
         ClientHello::parse(&self.buf)
     }
 
-    /// Returns `true` if the buffered data has reached the maximum TLS record length.
-    /// This can be used to determine if further buffering is unnecessary.
+    /// Returns whether the buffer has reached the maximum record length accepted by `tls-parser`.
+    ///
+    /// Callers use this as a stop condition; [`Self::extend`] does not enforce the limit itself.
     pub fn is_max_record_len(&self) -> bool {
         self.buf.len() >= tls_parser::MAX_RECORD_LEN.into()
     }
 
-    /// Appends additional data to the internal buffer.
+    /// Appends the next bytes read from the TLS connection.
     pub fn extend(&mut self, data: &[u8]) {
         self.buf.extend(data);
     }
 }
 
-/// Represents a TLS Client Hello message.
+/// A decoded TLS ClientHello and the negotiated version observed after the handshake.
+///
+/// Client-advertised vectors retain their wire order because order is significant to TLS client
+/// fingerprinting.
+///
+/// See [RFC 9846, Section 4.2.2](https://www.rfc-editor.org/rfc/rfc9846.html#section-4.2.2).
 #[derive(Clone, Serialize)]
 pub struct ClientHello {
-    /// TLS version of message
+    /// The wire `legacy_version` field.
+    ///
+    /// A TLS 1.3 client normally sends TLS 1.2 (`0x0303`) here and advertises its real preferences
+    /// through the `supported_versions` extension.
     pub(super) tls_version: TlsVersion,
-    /// The final TLS version negotiated during the handshake
+    /// The protocol version selected by the server, or `None` before negotiation completes.
     pub(super) tls_version_negotiated: Option<TlsVersion>,
+    /// Raw cipher-suite identifiers in client-advertised order.
+    ///
+    /// This includes unknown and GREASE values and is omitted from JSON because it is retained for
+    /// fingerprint calculations.
     #[serde(skip)]
     pub(super) cipher_values: Vec<u16>,
+    /// The 32-byte ClientHello random value encoded as lowercase hexadecimal.
     pub(super) client_random: String,
+    /// The legacy session identifier encoded as lowercase hexadecimal, when present.
     pub(super) session_id: Option<String>,
-    /// A list of compression methods supported by client
+    /// Compression methods in client-advertised order.
     pub(super) compression_algorithms: Vec<CompressionAlgorithm>,
-    /// A list of ciphers supported by client
+    /// Names of recognized cipher suites in client-advertised order.
+    ///
+    /// Unknown and GREASE identifiers remain available in `cipher_values` but have no entry here.
     pub(super) ciphers: Vec<&'static str>,
-    /// A list of extensions supported by client
+    /// Decoded extensions in the order sent by the client.
     pub(super) extensions: Vec<TlsExtension>,
 }
 
-/// Extensions that can be set in a [`ClientHello`] message by a TLS client.
+/// A decoded or preserved extension from a [`ClientHello`].
+///
+/// Every `value` field is the numeric `ExtensionType` observed on the wire. Byte-oriented payloads
+/// are serialized as lowercase hexadecimal unless a variant documents another representation.
+///
+/// See [RFC 9846, Section 4.3](https://www.rfc-editor.org/rfc/rfc9846.html#section-4.3).
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TlsExtension {
-    /// Server Name Indication (SNI), used for virtual hosting.
-    ServerName { value: u16, data: Vec<String> },
-
-    /// Supported elliptic curve groups for key exchange.
-    SupportedGroups { value: u16, data: Vec<NamesGroup> },
-
-    /// Supported EC point formats for key exchange.
-    EcPointFormats {
+    /// Server names advertised through Server Name Indication (SNI).
+    ///
+    /// See [RFC 6066, Section 3](https://www.rfc-editor.org/rfc/rfc6066.html#section-3).
+    ServerName {
+        /// Numeric extension type as observed on the wire.
         value: u16,
+        /// Advertised names decoded as UTF-8, replacing malformed byte sequences when necessary.
+        data: Vec<String>,
+    },
+
+    /// Named groups supported for key establishment.
+    ///
+    /// See [RFC 9846, Section 4.3.7](https://www.rfc-editor.org/rfc/rfc9846.html#section-4.3.7).
+    SupportedGroups {
+        /// Numeric extension type as observed on the wire.
+        value: u16,
+        /// Named groups in client preference order.
+        data: Vec<NamesGroup>,
+    },
+
+    /// Elliptic-curve point formats advertised by a pre-TLS 1.3 client.
+    ///
+    /// See [RFC 8422, Section 5.1.2](https://www.rfc-editor.org/rfc/rfc8422.html#section-5.1.2).
+    EcPointFormats {
+        /// Numeric extension type as observed on the wire.
+        value: u16,
+        /// Point formats in client preference order.
         data: Vec<ECPointFormat>,
     },
 
-    /// Supported signature algorithms for authentication.
+    /// Signature schemes accepted by the client.
+    ///
+    /// See [RFC 9846, Section 4.3.3](https://www.rfc-editor.org/rfc/rfc9846.html#section-4.3.3).
     SignatureAlgorithms {
+        /// Numeric extension type as observed on the wire.
         value: u16,
+        /// Signature schemes in client preference order.
         data: Vec<SignatureAlgorithm>,
     },
 
-    /// OCSP stapling support (status request).
-    StatusRequest { value: u16, data: StatusRequest },
+    /// A request for a stapled certificate status response.
+    ///
+    /// See [RFC 6066, Section 8](https://www.rfc-editor.org/rfc/rfc6066.html#section-8).
+    StatusRequest {
+        /// Numeric extension type as observed on the wire.
+        value: u16,
+        /// Parsed OCSP status request parameters.
+        data: StatusRequest,
+    },
 
-    /// Application-Layer Protocol Negotiation (ALPN), e.g., for HTTP/2.
-    ApplicationLayerProtocolNegotiation { value: u16, data: Vec<String> },
+    /// Application protocols offered through ALPN, such as `h2`.
+    ///
+    /// See [RFC 7301, Section 3.1](https://www.rfc-editor.org/rfc/rfc7301.html#section-3.1).
+    ApplicationLayerProtocolNegotiation {
+        /// Numeric extension type as observed on the wire.
+        value: u16,
+        /// Protocol names in client preference order, decoded as UTF-8.
+        data: Vec<String>,
+    },
 
-    /// Old Application Settings extension (non-standard).
-    ApplicationSettingsOld { value: u16, data: Vec<String> },
+    /// Protocol names from the former `0x4469` Application Settings code point.
+    ///
+    /// ALPS remains an Internet-Draft; see
+    /// [draft-vvv-tls-alps](https://datatracker.ietf.org/doc/html/draft-vvv-tls-alps).
+    ApplicationSettingsOld {
+        /// Numeric extension type as observed on the wire.
+        value: u16,
+        /// Application protocol names carried by the extension.
+        data: Vec<String>,
+    },
 
-    /// Application Settings extension (used for ALPS in HTTP/2/3).
-    ApplicationSettings { value: u16, data: Vec<String> },
+    /// Protocol names from the current `0x44cd` Application Settings code point.
+    ///
+    /// ALPS remains an Internet-Draft; see
+    /// [draft-vvv-tls-alps](https://datatracker.ietf.org/doc/html/draft-vvv-tls-alps).
+    ApplicationSettings {
+        /// Numeric extension type as observed on the wire.
+        value: u16,
+        /// Application protocol names carried by the extension.
+        data: Vec<String>,
+    },
 
-    /// Supported TLS protocol versions.
-    SupportedVersions { value: u16, data: Vec<TlsVersion> },
+    /// TLS versions the client is prepared to negotiate.
+    ///
+    /// See [RFC 9846, Section 4.3.1](https://www.rfc-editor.org/rfc/rfc9846.html#section-4.3.1).
+    SupportedVersions {
+        /// Numeric extension type as observed on the wire.
+        value: u16,
+        /// Versions in client preference order.
+        data: Vec<TlsVersion>,
+    },
 
-    /// Session ticket for session resumption.
-    SessionTicket { value: u16, data: String },
+    /// A TLS 1.2 session ticket offered for resumption.
+    ///
+    /// See [RFC 5077, Section 3.2](https://www.rfc-editor.org/rfc/rfc5077.html#section-3.2).
+    SessionTicket {
+        /// Numeric extension type as observed on the wire.
+        value: u16,
+        /// Opaque ticket bytes encoded as lowercase hexadecimal.
+        data: String,
+    },
 
     /// Supported certificate compression algorithms.
+    ///
+    /// See [RFC 8879, Section 3](https://www.rfc-editor.org/rfc/rfc8879.html#section-3).
     CertificateCompression {
+        /// Numeric extension type as observed on the wire.
         value: u16,
+        /// Compression algorithms in client preference order.
         data: Vec<CertificateCompressionAlgorithm>,
     },
 
-    /// Record size limit for TLS records.
-    RecordSizeLimit { value: u16, data: u16 },
-
-    /// Delegated credentials for authentication.
-    DelegatedCredentials {
+    /// Maximum protected record size accepted by the client.
+    ///
+    /// See [RFC 8449, Section 4](https://www.rfc-editor.org/rfc/rfc8449.html#section-4).
+    RecordSizeLimit {
+        /// Numeric extension type as observed on the wire.
         value: u16,
+        /// Advertised record size limit in bytes.
+        data: u16,
+    },
+
+    /// Signature schemes accepted for delegated credentials.
+    ///
+    /// See [RFC 9345, Section 4.1](https://www.rfc-editor.org/rfc/rfc9345.html#section-4.1).
+    DelegatedCredentials {
+        /// Numeric extension type as observed on the wire.
+        value: u16,
+        /// Supported delegated-credential signature schemes.
         data: Vec<SignatureAlgorithm>,
     },
 
-    /// Encrypted ClientHello (ECH) extension.
-    EncryptedClientHello { value: u16, data: ECHClientHello },
-
-    /// Signed Certificate Timestamp (SCT) for certificate transparency.
-    SignedCertificateTimestamp {
+    /// An Encrypted ClientHello (ECH) offer.
+    ///
+    /// See [RFC 9849, Section 5](https://www.rfc-editor.org/rfc/rfc9849.html#section-5).
+    EncryptedClientHello {
+        /// Numeric extension type as observed on the wire.
         value: u16,
+        /// Parsed outer or inner ECH payload.
+        data: ECHClientHello,
+    },
+
+    /// A request for Signed Certificate Timestamps through the TLS extension.
+    ///
+    /// See [RFC 6962, Section 3.3.1](https://www.rfc-editor.org/rfc/rfc6962.html#section-3.3.1).
+    SignedCertificateTimestamp {
+        /// Numeric extension type as observed on the wire.
+        value: u16,
+        /// Raw payload encoded as lowercase hexadecimal when one was present.
         #[serde(skip_serializing_if = "Option::is_none")]
         data: Option<String>,
     },
 
-    /// Renegotiation info for secure renegotiation.
-    RenegotiationInfo { value: u16 },
-
-    /// Extended Master Secret extension for improved security.
-    ExtendedMasterSecret { value: u16 },
-
-    /// Padding extension to obscure ClientHello length.
-    Padding { value: u16, data: String },
-
-    /// Key share entries for key exchange (TLS 1.3).
-    KeyShare { value: u16, data: Vec<KeyShare> },
-
-    /// PSK key exchange modes (TLS 1.3).
-    PskKeyExchangeModes {
+    /// The secure renegotiation indication used by TLS 1.2 and earlier.
+    ///
+    /// See [RFC 5746, Section 3.2](https://www.rfc-editor.org/rfc/rfc5746.html#section-3.2).
+    RenegotiationInfo {
+        /// Numeric extension type as observed on the wire.
         value: u16,
+    },
+
+    /// The Extended Master Secret indication used by TLS 1.2 and earlier.
+    ///
+    /// See [RFC 7627, Section 3](https://www.rfc-editor.org/rfc/rfc7627.html#section-3).
+    ExtendedMasterSecret {
+        /// Numeric extension type as observed on the wire.
+        value: u16,
+    },
+
+    /// ClientHello padding used to alter the message length.
+    ///
+    /// See [RFC 7685, Section 3](https://www.rfc-editor.org/rfc/rfc7685.html#section-3).
+    Padding {
+        /// Numeric extension type as observed on the wire.
+        value: u16,
+        /// Padding bytes encoded as lowercase hexadecimal.
+        data: String,
+    },
+
+    /// Ephemeral key shares offered for TLS 1.3 key establishment.
+    ///
+    /// See [RFC 9846, Section 4.3.8](https://www.rfc-editor.org/rfc/rfc9846.html#section-4.3.8).
+    KeyShare {
+        /// Numeric extension type as observed on the wire.
+        value: u16,
+        /// Parsed key shares in client preference order.
+        data: Vec<KeyShare>,
+    },
+
+    /// Key exchange modes the client permits for pre-shared keys.
+    ///
+    /// See [RFC 9846, Section 4.3.9](https://www.rfc-editor.org/rfc/rfc9846.html#section-4.3.9).
+    PskKeyExchangeModes {
+        /// Numeric extension type as observed on the wire.
+        value: u16,
+        /// Parsed PSK key exchange modes.
         data: PskKeyExchangeModes,
     },
 
-    /// Pre-shared key for session resumption or 0-RTT.
-    PreSharedKey { value: u16, data: String },
-
-    /// Encrypted Server Name Indication (ESNI) extension.
-    EncryptedServerName {
+    /// Pre-shared key identities and binders offered for resumption or 0-RTT.
+    ///
+    /// See [RFC 9846, Section 4.3.11](https://www.rfc-editor.org/rfc/rfc9846.html#section-4.3.11).
+    PreSharedKey {
+        /// Numeric extension type as observed on the wire.
         value: u16,
+        /// Complete opaque extension payload encoded as lowercase hexadecimal.
+        data: String,
+    },
+
+    /// A legacy experimental Encrypted Server Name Indication (ESNI) offer.
+    ///
+    /// ESNI was replaced by ECH; see
+    /// [draft-ietf-tls-esni-00](https://datatracker.ietf.org/doc/html/draft-ietf-tls-esni-00).
+    EncryptedServerName {
+        /// Numeric extension type as observed on the wire.
+        value: u16,
+        /// Recognized TLS cipher-suite name, or `Unknown`.
         ciphersuite: &'static str,
+        /// Named group used for the key share.
         group: NamesGroup,
+        /// Key share bytes encoded as lowercase hexadecimal.
         key_share: String,
+        /// ESNIKeys record digest encoded as lowercase hexadecimal.
         record_digest: String,
+        /// Encrypted server-name bytes encoded as lowercase hexadecimal.
         encrypted_sni: String,
     },
 
-    /// Oid filters for certificate extensions.
-    OidFilters { value: u16, data: Vec<OidFilter> },
+    /// Filters applied to certificate extension object identifiers.
+    ///
+    /// See [RFC 9846, Section 4.3.5](https://www.rfc-editor.org/rfc/rfc9846.html#section-4.3.5).
+    OidFilters {
+        /// Numeric extension type as observed on the wire.
+        value: u16,
+        /// Requested certificate extension filters.
+        data: Vec<OidFilter>,
+    },
 
-    /// GREASE value for protocol extensibility testing.
-    Grease { value: u16 },
+    /// A reserved GREASE extension used to exercise protocol extensibility.
+    ///
+    /// See [RFC 8701, Section 3](https://www.rfc-editor.org/rfc/rfc8701.html#section-3).
+    Grease {
+        /// GREASE extension type as observed on the wire.
+        value: u16,
+    },
 
-    /// Any unknown or unsupported extension.
-    Opaque { value: u16, data: Option<String> },
+    /// An extension that is valid to preserve but is not decoded into a dedicated variant.
+    Opaque {
+        /// Numeric extension type as observed on the wire.
+        value: u16,
+        /// Raw payload encoded as lowercase hexadecimal, or `None` for an empty payload.
+        data: Option<String>,
+    },
 }
 
 impl TlsExtension {
+    /// Returns the numeric `ExtensionType` observed on the wire.
     pub(super) fn value(&self) -> u16 {
         match self {
             TlsExtension::ServerName { value, .. }
@@ -209,91 +393,186 @@ impl TlsExtension {
             | TlsExtension::Opaque { value, .. } => *value,
         }
     }
+
+    /// Returns whether this extension uses an RFC 8701 GREASE type.
+    ///
+    /// See [RFC 8701, Section 3](https://www.rfc-editor.org/rfc/rfc8701.html#section-3).
+    pub fn is_grease(&self) -> bool {
+        is_grease_value(self.value())
+    }
 }
 
-/// StatusRequest extension data
+/// The OCSP parameters carried by a ClientHello `status_request` extension.
 ///
-/// See: <https://www.rfc-editor.org/rfc/rfc6066#section-8>
+/// See [RFC 6066, Section 8](https://www.rfc-editor.org/rfc/rfc6066.html#section-8).
 #[derive(Clone, Serialize, Hash)]
 pub struct StatusRequest {
+    /// The certificate status protocol requested by the client.
     certificate_status_type: CertificateStatusType,
+    /// Declared byte length of the OCSP responder ID list.
     responder_id_list: u16,
+    /// Declared byte length of the OCSP request extensions.
     request_extensions: u16,
 }
 
-/// Client Hello contents send by ECH
+/// The outer or inner form of an Encrypted ClientHello extension.
+///
+/// See [RFC 9849, Section 5](https://www.rfc-editor.org/rfc/rfc9849.html#section-5).
 #[derive(Clone, Serialize, Hash)]
 pub enum ECHClientHello {
-    /// Send when message is in the outer (unencrypted) part of client hello. It contains
-    /// encryption data and the encrypted client hello.
+    /// The public ClientHelloOuter payload carrying the encrypted ClientHelloInner.
     Outer(ECHClientHelloOuter),
-    /// The inner extension has an empty payload, which is included because TLS servers are
-    /// not allowed to provide extensions in ServerHello which were not included in ClientHello.
-    /// And when using encrypted client hello the server will discard the outer unencrypted one,
-    /// and only look at the encrypted client hello. So we have to add this extension again there
-    /// so the server knows ECH is supported by the client.
+    /// The empty marker repeated inside ClientHelloInner.
+    ///
+    /// Including this marker permits the server to respond with ECH-related extensions after it
+    /// discards ClientHelloOuter.
     Inner,
 }
 
-/// Data send by ech hello message when it is in the outer part
+/// Encryption metadata and ciphertext carried by an ECH ClientHelloOuter.
+///
+/// See [RFC 9849, Section 5](https://www.rfc-editor.org/rfc/rfc9849.html#section-5).
 #[derive(Clone, Serialize, Hash)]
 pub struct ECHClientHelloOuter {
+    /// The HPKE KDF and AEAD pair used to encrypt ClientHelloInner.
     pub cipher_suite: HpkeSymmetricCipherSuite,
+    /// The selected ECH configuration identifier.
     pub config_id: u8,
+    /// The HPKE encapsulated key encoded as lowercase hexadecimal.
+    ///
+    /// This can be empty in a ClientHelloOuter sent after HelloRetryRequest.
     pub enc: String,
+    /// The encoded `uint16` length of the encrypted payload in bytes.
+    ///
+    /// This is retained explicitly because `payload` is exposed as hexadecimal text.
+    pub payload_length: u16,
+    /// The encrypted EncodedClientHelloInner bytes encoded as lowercase hexadecimal.
+    ///
+    /// Its decoded byte length is recorded in `payload_length`.
     pub payload: String,
 }
 
-/// HPKE KDF and AEAD pair used to encrypt ClientHello
+/// The HPKE KDF and AEAD pair selected for ECH encryption.
+///
+/// See [RFC 9849, Section 4](https://www.rfc-editor.org/rfc/rfc9849.html#section-4) and
+/// [RFC 9180, Section 7.2](https://www.rfc-editor.org/rfc/rfc9180.html#section-7.2).
 #[derive(Clone, Serialize, Hash)]
 pub struct HpkeSymmetricCipherSuite {
+    /// The HPKE key derivation function identifier.
     pub kdf_id: KeyDerivationFunction,
+    /// The HPKE authenticated-encryption algorithm identifier.
     pub aead_id: AuthenticatedEncryptionWithAssociatedData,
 }
 
-/// Key shares used in ClientHello
+/// An ephemeral key share offered by the client.
 ///
-/// See: <https://www.rfc-editor.org/rfc/rfc8446#section-4.2.8>
+/// See [RFC 9846, Section 4.3.8](https://www.rfc-editor.org/rfc/rfc9846.html#section-4.3.8).
 #[derive(Clone, Serialize, Hash)]
 pub struct KeyShare {
+    /// The named group for which the key was generated.
     pub name: NamesGroup,
+    /// The opaque `key_exchange` bytes encoded as lowercase hexadecimal.
     pub value: String,
 }
 
-/// PSK Key Exchange Modes
+/// Pre-shared-key key exchange modes offered by the client.
+///
+/// See [RFC 9846, Section 4.3.9](https://www.rfc-editor.org/rfc/rfc9846.html#section-4.3.9).
 #[derive(Clone, Serialize, Hash)]
 pub struct PskKeyExchangeModes {
+    /// Modes in client preference order.
     pub ke_modes: Vec<PskKeyExchangeMode>,
 }
 
-/// Represents a filter for OID extensions in certificates.
+/// A certificate-extension filter from the ClientHello `oid_filters` extension.
+///
+/// See [RFC 9846, Section 4.3.5](https://www.rfc-editor.org/rfc/rfc9846.html#section-4.3.5).
 #[derive(Clone, Debug, PartialEq, Serialize, Hash)]
 pub struct OidFilter {
+    /// The DER-encoded certificate extension OID, represented as lowercase hexadecimal.
     pub cert_ext_oid: String,
+    /// The required certificate extension value, represented as lowercase hexadecimal.
     pub cert_ext_val: String,
 }
 
+struct ClientHelloParseError {
+    stage: &'static str,
+    extension_id: Option<u16>,
+    payload_len: Option<usize>,
+}
+
+impl ClientHelloParseError {
+    const fn new(stage: &'static str) -> Self {
+        Self {
+            stage,
+            extension_id: None,
+            payload_len: None,
+        }
+    }
+
+    const fn extension(stage: &'static str, extension_id: u16, payload_len: usize) -> Self {
+        Self {
+            stage,
+            extension_id: Some(extension_id),
+            payload_len: Some(payload_len),
+        }
+    }
+}
+
 impl ClientHello {
-    /// Sets the negotiated TLS version for this `ClientHello`.
+    /// Records the protocol version selected by rustls after the handshake.
     ///
-    /// # Parameters
-    /// - `version`: An `Option<ProtocolVersion>` representing the negotiated TLS version. If
-    ///   `Some`, the version is set; if `None`, no version was negotiated.
+    /// Passing `None` clears a previously recorded negotiated version.
     pub fn set_tls_version_negotiated(&mut self, version: Option<ProtocolVersion>) {
         self.tls_version_negotiated = version.map(u16::from).map(TlsVersion::from);
     }
 
+    /// Parses the first ClientHello from a complete TLS record.
+    ///
+    /// Returns `None` if the record or handshake is malformed, no ClientHello is present, the
+    /// extension block is absent, or a supported extension cannot be decoded. Unknown cipher-suite
+    /// identifiers are retained for fingerprinting but omitted from the human-readable cipher list.
     pub fn parse(buf: &[u8]) -> Option<Self> {
-        let (_, r) = tls_parser::parse_tls_raw_record(buf).ok()?;
-        let (_, msg_list) = tls_parser::parse_tls_record_with_header(r.data, &r.hdr).ok()?;
-
-        let payload = msg_list.into_iter().find_map(|msg| {
-            if let TlsMessage::Handshake(TlsMessageHandshake::ClientHello(payload)) = msg {
-                Some(payload)
-            } else {
+        match Self::try_parse(buf) {
+            Ok(client_hello) => {
+                tracing::debug!(
+                    record_len = buf.len(),
+                    legacy_version = %client_hello.tls_version,
+                    cipher_count = client_hello.cipher_values.len(),
+                    extension_count = client_hello.extensions.len(),
+                    "parsed TLS ClientHello",
+                );
+                Some(client_hello)
+            }
+            Err(error) => {
+                tracing::debug!(
+                    record_len = buf.len(),
+                    stage = error.stage,
+                    extension_id = ?error.extension_id,
+                    payload_len = ?error.payload_len,
+                    "failed to parse TLS ClientHello",
+                );
                 None
             }
-        })?;
+        }
+    }
+
+    fn try_parse(buf: &[u8]) -> Result<Self, ClientHelloParseError> {
+        let (_, r) = tls_parser::parse_tls_raw_record(buf)
+            .map_err(|_| ClientHelloParseError::new("tls_record"))?;
+        let (_, msg_list) = tls_parser::parse_tls_record_with_header(r.data, &r.hdr)
+            .map_err(|_| ClientHelloParseError::new("record_messages"))?;
+
+        let payload = msg_list
+            .into_iter()
+            .find_map(|msg| {
+                if let TlsMessage::Handshake(TlsMessageHandshake::ClientHello(payload)) = msg {
+                    Some(payload)
+                } else {
+                    None
+                }
+            })
+            .ok_or(ClientHelloParseError::new("client_hello"))?;
 
         let mut cipher_values = Vec::with_capacity(payload.ciphers.len());
         let mut ciphers = Vec::with_capacity(payload.ciphers.len());
@@ -319,16 +598,18 @@ impl ClientHello {
             extensions: Vec::with_capacity(5),
         };
 
-        let ext = payload.ext?;
-        let (_, ext_list) = tls_parser::parse_tls_client_hello_extensions(ext).ok()?;
+        let ext = payload
+            .ext
+            .ok_or(ClientHelloParseError::new("extension_block"))?;
+        let (_, ext_list) = tls_parser::parse_tls_client_hello_extensions(ext)
+            .map_err(|_| ClientHelloParseError::new("extensions"))?;
 
         for ext in ext_list {
             let extension_id = TlsExtensionType::from(&ext).0;
+            tracing::trace!(extension_id, "decoding TLS ClientHello extension");
 
             match ext {
                 tls_parser::TlsExtension::SNI(name) => {
-                    tracing::debug!("ClientHello: SNI extension: {name:?}");
-
                     client_hello.extensions.push(TlsExtension::ServerName {
                         value: extension_id,
                         data: name
@@ -339,16 +620,12 @@ impl ClientHello {
                     });
                 }
                 tls_parser::TlsExtension::EllipticCurves(groups) => {
-                    tracing::debug!("ClientHello: EllipticCurves extension: {groups:?}");
-
                     client_hello.extensions.push(TlsExtension::SupportedGroups {
                         value: extension_id,
                         data: groups.into_iter().map(|g| NamesGroup::from(g.0)).collect(),
                     });
                 }
                 tls_parser::TlsExtension::SupportedVersions(versions) => {
-                    tracing::debug!("ClientHello: SupportedVersions extension: {versions:?}");
-
                     client_hello
                         .extensions
                         .push(TlsExtension::SupportedVersions {
@@ -360,16 +637,12 @@ impl ClientHello {
                         });
                 }
                 tls_parser::TlsExtension::SessionTicket(data) => {
-                    tracing::debug!("ClientHello: SessionTicket extension: {data:?}");
-
                     client_hello.extensions.push(TlsExtension::SessionTicket {
                         value: extension_id,
                         data: hex_encode(data),
                     });
                 }
                 tls_parser::TlsExtension::SignatureAlgorithms(algorithms) => {
-                    tracing::debug!("ClientHello: SignatureAlgorithms extension: {algorithms:?}");
-
                     client_hello
                         .extensions
                         .push(TlsExtension::SignatureAlgorithms {
@@ -381,11 +654,15 @@ impl ClientHello {
                         });
                 }
                 tls_parser::TlsExtension::StatusRequest(data) => {
-                    tracing::debug!("ClientHello: StatusRequest extension: {data:?}");
-
                     if let Some((status, data)) = data {
                         let (_, (responder_id_list, request_extensions)) =
-                            parser::parse_ocsp_status_request_lengths(data).ok()?;
+                            parser::parse_ocsp_status_request_lengths(data).map_err(|_| {
+                                ClientHelloParseError::extension(
+                                    "status_request",
+                                    extension_id,
+                                    data.len(),
+                                )
+                            })?;
                         client_hello.extensions.push(TlsExtension::StatusRequest {
                             value: extension_id,
                             data: StatusRequest {
@@ -397,16 +674,12 @@ impl ClientHello {
                     }
                 }
                 tls_parser::TlsExtension::EcPointFormats(formats) => {
-                    tracing::debug!("ClientHello: ECPointFormats extension: {formats:?}");
-
                     client_hello.extensions.push(TlsExtension::EcPointFormats {
                         value: extension_id,
                         data: formats.iter().map(|f| ECPointFormat::from(*f)).collect(),
                     });
                 }
                 tls_parser::TlsExtension::ALPN(protocols) => {
-                    tracing::debug!("ClientHello: ALPN extension: {protocols:?}");
-
                     client_hello.extensions.push(
                         TlsExtension::ApplicationLayerProtocolNegotiation {
                             value: extension_id,
@@ -418,8 +691,6 @@ impl ClientHello {
                     );
                 }
                 tls_parser::TlsExtension::SignedCertificateTimestamp(timestamps) => {
-                    tracing::debug!("ClientHello: SCT extension: {timestamps:?}");
-
                     client_hello
                         .extensions
                         .push(TlsExtension::SignedCertificateTimestamp {
@@ -427,9 +698,7 @@ impl ClientHello {
                             data: timestamps.map(hex_encode),
                         });
                 }
-                tls_parser::TlsExtension::RenegotiationInfo(data) => {
-                    tracing::debug!("ClientHello: RenegotiationInfo extension: {data:?}");
-
+                tls_parser::TlsExtension::RenegotiationInfo(_) => {
                     client_hello
                         .extensions
                         .push(TlsExtension::RenegotiationInfo {
@@ -437,51 +706,64 @@ impl ClientHello {
                         });
                 }
                 tls_parser::TlsExtension::Unknown(TlsExtensionType(34), algorithms) => {
-                    tracing::debug!("ClientHello: DelegatedCredentials extension: {algorithms:?}");
-
                     let extension =
                         parser::parse_tls_extension_delegated_credentials(extension_id, algorithms)
-                            .ok()?
+                            .map_err(|_| {
+                                ClientHelloParseError::extension(
+                                    "delegated_credentials",
+                                    extension_id,
+                                    algorithms.len(),
+                                )
+                            })?
                             .1;
                     client_hello.extensions.push(extension);
                 }
                 tls_parser::TlsExtension::RecordSizeLimit(limit) => {
-                    tracing::debug!("ClientHello: RecordSizeLimit extension: {limit:?}");
-
                     client_hello.extensions.push(TlsExtension::RecordSizeLimit {
                         value: extension_id,
                         data: limit,
                     });
                 }
                 tls_parser::TlsExtension::Unknown(TlsExtensionType(27), data) => {
-                    tracing::debug!("ClientHello: CertificateCompression extension: {data:?}");
-
                     let extension =
                         parser::parse_tls_extension_certificate_compression(extension_id, data)
-                            .ok()?
+                            .map_err(|_| {
+                                ClientHelloParseError::extension(
+                                    "certificate_compression",
+                                    extension_id,
+                                    data.len(),
+                                )
+                            })?
                             .1;
                     client_hello.extensions.push(extension);
                 }
                 tls_parser::TlsExtension::Unknown(TlsExtensionType(65037), data) => {
-                    tracing::debug!("ClientHello: EncryptedClientHello extension: {data:?}");
-
-                    let extension = parser::parse_tls_extension_ech(extension_id, data).ok()?.1;
+                    let extension = parser::parse_tls_extension_ech(extension_id, data)
+                        .map_err(|_| {
+                            ClientHelloParseError::extension(
+                                "encrypted_client_hello",
+                                extension_id,
+                                data.len(),
+                            )
+                        })?
+                        .1;
                     client_hello.extensions.push(extension);
                 }
                 tls_parser::TlsExtension::Padding(padding) => {
-                    tracing::debug!("ClientHello: Padding extension");
-
                     client_hello.extensions.push(TlsExtension::Padding {
                         value: extension_id,
                         data: hex_encode(padding),
                     });
                 }
                 tls_parser::TlsExtension::KeyShare(data) => {
-                    tracing::debug!("ClientHello: KeyShare extension: {data:?}");
-
                     client_hello.extensions.push(TlsExtension::KeyShare {
                         value: extension_id,
-                        data: parser::parse_key_share(data)?
+                        data: parser::parse_key_share(data)
+                            .ok_or(ClientHelloParseError::extension(
+                                "key_share",
+                                extension_id,
+                                data.len(),
+                            ))?
                             .into_iter()
                             .map(|data| KeyShare {
                                 name: NamesGroup::from(data.0),
@@ -491,8 +773,6 @@ impl ClientHello {
                     });
                 }
                 tls_parser::TlsExtension::PskExchangeModes(data) => {
-                    tracing::debug!("ClientHello: PskExchangeModes extension: {data:?}");
-
                     client_hello
                         .extensions
                         .push(TlsExtension::PskKeyExchangeModes {
@@ -503,18 +783,12 @@ impl ClientHello {
                         });
                 }
                 tls_parser::TlsExtension::PreSharedKey(data) => {
-                    tracing::debug!("ClientHello: PreSharedKey extension: {data:?}");
-
                     client_hello.extensions.push(TlsExtension::PreSharedKey {
                         value: extension_id,
                         data: hex_encode(data),
                     });
                 }
                 tls_parser::TlsExtension::Unknown(TlsExtensionType(17513), protocols) => {
-                    tracing::debug!(
-                        "ClientHello: Old Application Settings extension: {protocols:?}"
-                    );
-
                     client_hello
                         .extensions
                         .push(TlsExtension::ApplicationSettingsOld {
@@ -523,8 +797,6 @@ impl ClientHello {
                         });
                 }
                 tls_parser::TlsExtension::Unknown(TlsExtensionType(17613), protocols) => {
-                    tracing::debug!("ClientHello: Application Settings extension: {protocols:?}");
-
                     client_hello
                         .extensions
                         .push(TlsExtension::ApplicationSettings {
@@ -533,73 +805,55 @@ impl ClientHello {
                         });
                 }
                 tls_parser::TlsExtension::ExtendedMasterSecret => {
-                    tracing::debug!("ClientHello: ExtendedMasterSecret extension");
-
                     client_hello
                         .extensions
                         .push(TlsExtension::ExtendedMasterSecret {
                             value: extension_id,
                         });
                 }
-                tls_parser::TlsExtension::Grease(id, data) => {
-                    tracing::debug!("ClientHello: Grease extension: {id:?}, {data:?}");
-
+                tls_parser::TlsExtension::Grease(..) => {
                     client_hello.extensions.push(TlsExtension::Grease {
                         value: extension_id,
                     });
                 }
 
                 tls_parser::TlsExtension::MaxFragmentLength(data) => {
-                    tracing::debug!("ClientHello: MaxFragmentLength extension");
-
                     client_hello.extensions.push(TlsExtension::Opaque {
                         value: extension_id,
                         data: Some(hex_encode(data.to_be_bytes())),
                     });
                 }
                 tls_parser::TlsExtension::KeyShareOld(items) => {
-                    tracing::debug!("ClientHello: KeyShareOld extension: {items:?}");
-
                     client_hello.extensions.push(TlsExtension::Opaque {
                         value: extension_id,
                         data: Some(hex_encode(items)),
                     });
                 }
                 tls_parser::TlsExtension::EarlyData(data) => {
-                    tracing::debug!("ClientHello: EarlyData extension: {data:?}");
-
                     client_hello.extensions.push(TlsExtension::Opaque {
                         value: extension_id,
                         data: data.map(|d| hex_encode(d.to_be_bytes())),
                     });
                 }
                 tls_parser::TlsExtension::Cookie(items) => {
-                    tracing::debug!("ClientHello: Cookie extension: {items:?}");
-
                     client_hello.extensions.push(TlsExtension::Opaque {
                         value: extension_id,
                         data: Some(hex_encode(items)),
                     });
                 }
                 tls_parser::TlsExtension::Heartbeat(data) => {
-                    tracing::debug!("ClientHello: Heartbeat extension: {data:?}");
-
                     client_hello.extensions.push(TlsExtension::Opaque {
                         value: extension_id,
                         data: Some(hex_encode(data.to_be_bytes())),
                     });
                 }
                 tls_parser::TlsExtension::EncryptThenMac => {
-                    tracing::debug!("ClientHello: EncryptThenMac extension");
-
                     client_hello.extensions.push(TlsExtension::Opaque {
                         value: extension_id,
                         data: None,
                     });
                 }
                 tls_parser::TlsExtension::OidFilters(oid_filters) => {
-                    tracing::debug!("ClientHello: OidFilters extension: {oid_filters:?}");
-
                     client_hello.extensions.push(TlsExtension::OidFilters {
                         value: extension_id,
                         data: oid_filters
@@ -612,16 +866,12 @@ impl ClientHello {
                     });
                 }
                 tls_parser::TlsExtension::PostHandshakeAuth => {
-                    tracing::debug!("ClientHello: PostHandshakeAuth extension");
-
                     client_hello.extensions.push(TlsExtension::Opaque {
                         value: extension_id,
                         data: None,
                     });
                 }
                 tls_parser::TlsExtension::NextProtocolNegotiation => {
-                    tracing::debug!("ClientHello: NextProtocolNegotiation extension");
-
                     client_hello.extensions.push(TlsExtension::Opaque {
                         value: extension_id,
                         data: None,
@@ -634,8 +884,6 @@ impl ClientHello {
                     record_digest,
                     encrypted_sni,
                 } => {
-                    tracing::debug!("ClientHello: EncryptedServerName extension");
-
                     client_hello
                         .extensions
                         .push(TlsExtension::EncryptedServerName {
@@ -650,9 +898,7 @@ impl ClientHello {
                         });
                 }
 
-                tls_parser::TlsExtension::Unknown(id, data) => {
-                    tracing::debug!("ClientHello: Unknown extension: {id:?}, {data:?}");
-
+                tls_parser::TlsExtension::Unknown(_, data) => {
                     client_hello.extensions.push(TlsExtension::Opaque {
                         value: extension_id,
                         data: Some(hex_encode(data)),
@@ -661,16 +907,40 @@ impl ClientHello {
             }
         }
 
-        Some(client_hello)
+        Ok(client_hello)
     }
 
+    /// Calculates the JA4 fingerprint and its unhashed source form.
     pub(crate) fn ja4_fingerprint(&self) -> (String, String) {
         let ja4 = Ja4Fingerprint::from_client_hello(self);
         (ja4.fingerprint, ja4.raw)
     }
 
+    /// Calculates the JA3 source string and MD5 digest.
     pub(crate) fn ja3_fingerprint(&self) -> (String, String) {
         let ja3 = Ja3Fingerprint::from_client_hello(self);
         (ja3.raw, ja3.hash)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ClientHello;
+
+    #[test]
+    fn malformed_client_hello_reports_parse_stages() {
+        let Err(record_error) = ClientHello::try_parse(&[]) else {
+            panic!("expected malformed TLS record to fail");
+        };
+        assert_eq!(record_error.stage, "tls_record");
+        assert_eq!(record_error.extension_id, None);
+        assert_eq!(record_error.payload_len, None);
+
+        let Err(message_error) = ClientHello::try_parse(&[0; 5]) else {
+            panic!("expected malformed TLS messages to fail");
+        };
+        assert_eq!(message_error.stage, "record_messages");
+        assert_eq!(message_error.extension_id, None);
+        assert_eq!(message_error.payload_len, None);
     }
 }

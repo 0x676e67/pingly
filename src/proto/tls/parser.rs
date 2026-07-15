@@ -1,4 +1,5 @@
 use nom::{
+    bytes::streaming::take,
     combinator::{map, map_opt, map_parser},
     error::{make_error, ErrorKind},
     multi::length_data,
@@ -6,11 +7,14 @@ use nom::{
     IResult, Parser,
 };
 
-use crate::encoding::hex_encode;
+use hex::encode as hex_encode;
 
 use super::hello::{ECHClientHello, ECHClientHelloOuter, HpkeSymmetricCipherSuite, TlsExtension};
 
-/// Parse KeyShare extension in TLS 1.3 (RFC 8446) with 4-byte length and 4-byte fields.
+/// Parses the client form of the TLS 1.3 `key_share` extension.
+///
+/// Each entry starts with a two-byte named-group ID and a two-byte key length.
+/// See [RFC 9846, Section 4.3.8](https://www.rfc-editor.org/rfc/rfc9846.html#section-4.3.8).
 pub fn parse_key_share(data: &[u8]) -> Option<Vec<(u16, Vec<u8>)>> {
     if data.len() < 2 {
         return None;
@@ -35,12 +39,16 @@ pub fn parse_key_share(data: &[u8]) -> Option<Vec<(u16, Vec<u8>)>> {
     Some(res)
 }
 
-/// Parse the OCSP status request extension from the ClientHello.
+/// Parses the length fields from a ClientHello OCSP `status_request` payload.
+///
+/// See [RFC 6066, Section 8](https://www.rfc-editor.org/rfc/rfc6066.html#section-8).
 pub fn parse_ocsp_status_request_lengths(data: &[u8]) -> IResult<&[u8], (u16, u16)> {
     (be_u16, be_u16).parse(data)
 }
 
-/// Parse extension for delegated credentials.
+/// Parses the client form of the delegated-credentials extension.
+///
+/// See [RFC 9345, Section 4.1](https://www.rfc-editor.org/rfc/rfc9345.html#section-4.1).
 pub fn parse_tls_extension_delegated_credentials(
     id: u16,
     data: &[u8],
@@ -55,7 +63,9 @@ pub fn parse_tls_extension_delegated_credentials(
     .parse(data)
 }
 
-/// Parses extension for certificate compression
+/// Parses the client form of the certificate-compression extension.
+///
+/// See [RFC 8879, Section 3](https://www.rfc-editor.org/rfc/rfc8879.html#section-3).
 pub fn parse_tls_extension_certificate_compression(
     id: u16,
     data: &[u8],
@@ -72,7 +82,10 @@ pub fn parse_tls_extension_certificate_compression(
     .parse(data)
 }
 
-/// Parses extension for encrypted client hello (ECH).
+/// Parses an outer or inner Encrypted ClientHello extension.
+///
+/// The outer form retains the encoded two-byte payload length next to its hexadecimal payload.
+/// See [RFC 9849, Section 5](https://www.rfc-editor.org/rfc/rfc9849.html#section-5).
 pub fn parse_tls_extension_ech(id: u16, data: &[u8]) -> IResult<&[u8], TlsExtension> {
     let (input, is_outer) = map_opt(be_u8, |v| match v {
         0 => Some(true),
@@ -85,7 +98,8 @@ pub fn parse_tls_extension_ech(id: u16, data: &[u8]) -> IResult<&[u8], TlsExtens
         true => {
             let (input, (kdf_id, aead_id, config_id)) = (be_u16, be_u16, be_u8).parse(input)?;
             let (input, enc) = length_data(be_u16).parse(input)?;
-            let (input, payload) = length_data(be_u16).parse(input)?;
+            let (input, payload_length) = be_u16(input)?;
+            let (input, payload) = take(payload_length).parse(input)?;
 
             Ok((
                 input,
@@ -98,6 +112,7 @@ pub fn parse_tls_extension_ech(id: u16, data: &[u8]) -> IResult<&[u8], TlsExtens
                         },
                         config_id,
                         enc: hex_encode(enc),
+                        payload_length,
                         payload: hex_encode(payload),
                     }),
                 },
@@ -113,9 +128,10 @@ pub fn parse_tls_extension_ech(id: u16, data: &[u8]) -> IResult<&[u8], TlsExtens
     }
 }
 
-/// The alpn_protocol_name field MUST match the protocol negotiated by ALPN.
-/// The extension is only sent by the server, and only for the selected protocol.
-/// See <https://datatracker.ietf.org/doc/html/draft-vvv-tls-alps>
+/// Parses protocol names from an Application-Layer Protocol Settings payload.
+///
+/// ALPS remains an Internet-Draft; see
+/// [draft-vvv-tls-alps](https://datatracker.ietf.org/doc/html/draft-vvv-tls-alps).
 pub fn parse_alps_packet(d: &[u8]) -> Vec<String> {
     let mut protocols = Vec::new();
 
@@ -169,4 +185,40 @@ fn parse_u16_type<T: From<u16>>(i: &[u8]) -> IResult<&[u8], Vec<T>> {
         .map(|chunk| T::from(((chunk[0] as u16) << 8) | chunk[1] as u16))
         .collect();
     Ok((&i[len..], v))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_tls_extension_ech;
+    use crate::proto::tls::hello::{ECHClientHello, TlsExtension};
+
+    #[test]
+    fn ech_outer_preserves_payload_length() {
+        let data = [
+            0x00, // outer
+            0x00, 0x01, // HKDF-SHA256
+            0x00, 0x01, // AES-128-GCM
+            0x07, // config_id
+            0x00, 0x02, 0xaa, 0xbb, // enc
+            0x00, 0x03, 0xcc, 0xdd, 0xee, // payload
+        ];
+
+        let (remaining, extension) =
+            parse_tls_extension_ech(0xfe0d, &data).expect("valid ECH outer extension");
+        assert!(remaining.is_empty());
+
+        let TlsExtension::EncryptedClientHello {
+            data: ECHClientHello::Outer(outer),
+            ..
+        } = extension
+        else {
+            panic!("expected an ECH outer extension");
+        };
+
+        assert_eq!(outer.payload_length, 3);
+        assert_eq!(outer.payload, "ccddee");
+
+        let json = serde_json::to_value(outer).expect("ECH outer serializes");
+        assert_eq!(json["payload_length"], 3);
+    }
 }

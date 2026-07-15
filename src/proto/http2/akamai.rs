@@ -1,4 +1,4 @@
-use crate::encoding::hex_encode;
+use hex::encode as hex_encode;
 
 use super::{frame::Frame, Http2Frame};
 

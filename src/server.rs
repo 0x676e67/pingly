@@ -1,248 +1,227 @@
+//! Axum routes served through Hyper connections.
+//!
+//! Axum owns routing and middleware. Hyper serves accepted sockets. Pingora runtime scheduling is
+//! kept in [`runtime`].
+
+mod accept;
 mod certificate;
-mod signal;
+mod handle;
+pub(crate) mod routes;
+mod tls;
 mod tracker;
 
-use std::{net::SocketAddr, str::FromStr, time::Duration};
+pub(crate) mod runtime;
+
+pub(crate) use handle::Handle;
+pub(crate) use tracker::accept::TrackAcceptor;
+
+use std::{convert::Infallible, io, net::SocketAddr, path::Path, time::Duration};
 
 use axum::{
-    body::Body,
-    extract::ConnectInfo,
-    http::{Request, StatusCode},
-    response::IntoResponse,
-    routing::any,
-    Extension, Router,
+    body::Body, extract::ConnectInfo, http::Request, middleware::AddExtension, response::Response,
+    Router,
 };
-use axum_extra::response::ErasedJson;
-use axum_server::Handle;
-use hyper_util::rt::TokioTimer;
-use tower::{limit::ConcurrencyLimitLayer, ServiceBuilder};
-
-use tower_http::{
-    cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer},
-    trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnResponse, TraceLayer},
+use hyper::body::Incoming;
+use hyper_util::{
+    rt::{TokioExecutor, TokioIo, TokioTimer},
+    server::conn::auto::Builder,
+    service::TowerToHyperService,
 };
-use tracing::Level;
-use tracing_subscriber::{EnvFilter, FmtSubscriber};
-use tracker::{
-    accept::TrackAcceptor,
-    info::{ConnectionTrack, Track, TrackInfo},
+use pingora_runtime::current_handle;
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    net::{TcpListener, TcpStream},
 };
+use tower::{Service, ServiceExt};
 
-#[cfg(target_os = "linux")]
-use crate::proto::tcp::TcpCaptureTrack;
-use crate::{error::Error, Args, Result};
+use self::{
+    accept::{Accept, DefaultAcceptor},
+    tls::rustls::RustlsAcceptor,
+};
+use crate::Result;
 
-#[tokio::main]
-pub async fn run(args: Args) -> Result<()> {
-    tracing::subscriber::set_global_default(
-        FmtSubscriber::builder()
-            .with_env_filter(EnvFilter::from_default_env())
-            .with_max_level(Level::from_str(&args.log).unwrap_or(Level::INFO))
-            .finish(),
-    )?;
+const MAX_HEADER_LIST_SIZE: usize = 8 * 1024;
+const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(50);
 
-    tracing::info!("OS: {}", std::env::consts::OS);
-    tracing::info!("Arch: {}", std::env::consts::ARCH);
-    tracing::info!("Version: {}", env!("CARGO_PKG_VERSION"));
-    tracing::info!("Concurrent limit: {}", args.concurrent);
-    tracing::info!("Bind address: {}", args.bind);
+type ConnectInfoService = AddExtension<Router, ConnectInfo<SocketAddr>>;
 
-    // Init global layer
-    let global_layer = ServiceBuilder::new()
-        .layer(
-            TraceLayer::new_for_http()
-                .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
-                .on_response(DefaultOnResponse::new().level(Level::INFO))
-                .on_failure(DefaultOnFailure::new().level(Level::WARN)),
-        )
-        .layer(
-            CorsLayer::new()
-                .allow_credentials(true)
-                .allow_headers(AllowHeaders::mirror_request())
-                .allow_methods(AllowMethods::mirror_request())
-                .allow_origin(AllowOrigin::mirror_request()),
-        )
-        .layer(ConcurrencyLimitLayer::new(args.concurrent));
+/// HTTP accept loop for a concrete stream acceptor.
+pub(crate) struct HttpServer<A = DefaultAcceptor> {
+    listener: TcpListener,
+    router: Router,
+    acceptor: A,
+    builder: Builder<TokioExecutor>,
+}
 
-    // Create the router with the tracking endpoints
-    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
-    let mut router = Router::new()
-        .route("/api/all", any(track))
-        .route("/api/tls", any(tls_track))
-        .route("/api/http1", any(http1_track))
-        .route("/api/http2", any(http2_track));
+impl HttpServer<DefaultAcceptor> {
+    /// Binds the TCP listener and builds the shared Hyper connection settings.
+    pub(crate) async fn new(
+        bind: SocketAddr,
+        router: Router,
+        keep_alive_timeout: u64,
+    ) -> Result<Self> {
+        let mut builder = Builder::new(TokioExecutor::new());
+        let keep_alive_timeout = Duration::from_secs(keep_alive_timeout);
 
-    // Signal the server to shutdown using Handle.
-    let handle = Handle::new();
+        builder
+            .http1()
+            .max_buf_size(MAX_HEADER_LIST_SIZE)
+            .timer(TokioTimer::new());
+        let mut http2 = builder.http2();
+        http2
+            .max_header_list_size(MAX_HEADER_LIST_SIZE as _)
+            .timer(TokioTimer::new())
+            .auto_date_header(true);
+        if !keep_alive_timeout.is_zero() {
+            http2
+                .keep_alive_interval(keep_alive_timeout)
+                .keep_alive_timeout(keep_alive_timeout);
+        }
 
-    // Add TCP tracking layer
-    #[cfg(target_os = "linux")]
-    {
-        let mut tcp_capture_track: Option<TcpCaptureTrack> = None;
-        if args.tcp_capture_packet {
-            tracing::info!("Enabling TCP/IP packet capture (requires root)");
-            let capture = TcpCaptureTrack::new(128, args.bind.port());
-            if let Err(err) = capture.start_capture(args.tcp_capture_interface.clone()) {
-                tracing::error!("Failed to start TCP/IP packet capture: {err}");
-            } else {
-                if let Some(iface) = args.tcp_capture_interface {
-                    tracing::info!(
-                        "TCP/IP packet capture started successfully on interface {iface}"
-                    );
+        Ok(Self {
+            listener: TcpListener::bind(bind).await?,
+            router,
+            acceptor: DefaultAcceptor,
+            builder,
+        })
+    }
+
+    /// Configures HTTPS from the supplied PEM files or a reusable self-signed certificate.
+    pub(crate) fn with_rustls(
+        self,
+        files: Option<(&Path, &Path)>,
+    ) -> Result<HttpServer<RustlsAcceptor>> {
+        let config = match files {
+            Some((cert, key)) => certificate::config_from_pem_chain_file(cert, key)?,
+            None => certificate::config_self_signed()?,
+        };
+
+        Ok(self.map_acceptor(|_| RustlsAcceptor::new(config)))
+    }
+}
+
+impl<A> HttpServer<A> {
+    /// Replaces the stream acceptor while preserving the listener, router, and Hyper settings.
+    pub(crate) fn map_acceptor<B>(self, map: impl FnOnce(A) -> B) -> HttpServer<B> {
+        HttpServer {
+            listener: self.listener,
+            router: self.router,
+            acceptor: map(self.acceptor),
+            builder: self.builder,
+        }
+    }
+}
+
+impl<A> HttpServer<A>
+where
+    A: Accept<TcpStream, ConnectInfoService> + Clone + Send + Sync + 'static,
+    A::Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    A::Service:
+        Service<Request<Body>, Response = Response, Error = Infallible> + Clone + Send + 'static,
+    <A::Service as Service<Request<Body>>>::Future: Send + 'static,
+    A::Future: Send,
+{
+    /// Waits for the next TCP connection.
+    ///
+    /// Transient listener errors are logged and retried after a short backoff, matching the
+    /// approach used by axum-server. This keeps a temporary accept failure from stopping the
+    /// whole server; shutdown is handled by the `serve` select loop that polls this future.
+    async fn accept(&self) -> (TcpStream, SocketAddr) {
+        loop {
+            match self.listener.accept().await {
+                Ok(stream) => return stream,
+                Err(error) => {
+                    // axum-server retries transient listener accept errors after a short backoff.
+                    // https://docs.rs/axum-server/0.8.0/src/axum_server/server.rs.html#370-376
+                    tracing::warn!(%error, "failed to accept TCP connection");
+                    tokio::time::sleep(ACCEPT_ERROR_BACKOFF).await;
                 }
-                tcp_capture_track = Some(capture);
             }
         }
+    }
 
-        if let Some(capture) = tcp_capture_track.clone() {
-            router = router
-                .route("/api/tcp", any(tcp_track))
-                .layer(Extension(capture));
+    /// Runs the accept loop until graceful shutdown starts.
+    ///
+    /// Each accepted socket is configured, passed through the selected stream acceptor, and then
+    /// served on a runtime worker. Per-connection accept and Hyper serve errors are logged in the
+    /// spawned task instead of being returned, so one bad connection does not stop the server.
+    pub(crate) async fn serve(self, handle: Handle) {
+        loop {
+            tokio::select! {
+                _ = handle.wait_graceful_shutdown() => {
+                    break;
+                }
+                accepted = self.accept() => {
+                    let (stream, remote_addr) = accepted;
+                    if let Err(error) = stream.set_nodelay(true) {
+                        tracing::warn!(%error, %remote_addr, "failed to enable TCP_NODELAY");
+                    }
+
+                    let acceptor = self.acceptor.clone();
+                    let builder = self.builder.clone();
+                    let router = self.router.clone();
+                    let handle = handle.clone();
+
+                    // Pingora strategy: inside a no-steal runtime, `current_handle()` randomly
+                    // selects a worker from the runtime pool.
+                    // https://docs.rs/pingora-runtime/0.8.1/src/pingora_runtime/lib.rs.html#88-102
+                    current_handle().spawn(async move {
+                        let service = router
+                            .into_make_service_with_connect_info::<SocketAddr>()
+                            .oneshot(remote_addr)
+                            .await
+                            .unwrap_or_else(|error| match error {});
+
+                        match acceptor.accept(stream, service).await {
+                            Ok((stream, service)) => {
+                                if let Err(error) = serve_connection(
+                                    builder,
+                                    stream,
+                                    service,
+                                    handle,
+                                )
+                                .await
+                                {
+                                    tracing::warn!(%error, %remote_addr, "failed to serve connection stream");
+                                }
+                            }
+                            Err(error) => {
+                                tracing::warn!(%error, %remote_addr, "failed to accept connection stream");
+                            }
+                        }
+                    });
+                }
+            }
         }
-
-        tokio::spawn(signal::graceful_shutdown(
-            handle.clone(),
-            tcp_capture_track.clone(),
-        ));
     }
+}
 
-    // Spawn a task to gracefully shutdown server.
-    #[cfg(not(target_os = "linux"))]
-    tokio::spawn(signal::graceful_shutdown(handle.clone()));
+async fn serve_connection<I, S>(
+    builder: Builder<TokioExecutor>,
+    stream: I,
+    service: S,
+    handle: Handle,
+) -> io::Result<()>
+where
+    I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    S: Service<Request<Body>, Response = Response, Error = Infallible> + Clone + Send + 'static,
+    S::Future: Send + 'static,
+{
+    let service = service.map_request(|request: Request<Incoming>| request.map(Body::new));
+    let service = TowerToHyperService::new(service);
+    let connection = builder.serve_connection_with_upgrades(TokioIo::new(stream), service);
+    tokio::pin!(connection);
+    let mut shutting_down = false;
 
-    // Load TLS configuration with HTTP/2 ALPN preference
-    let config = match (args.tls_cert.as_ref(), args.tls_key.as_ref()) {
-        (Some(cert_path), Some(key_path)) => {
-            // Load TLS configuration from PEM files
-            certificate::config_from_pem_chain_file(cert_path, key_path).await?
+    loop {
+        tokio::select! {
+            result = connection.as_mut() => {
+                return result.map_err(io::Error::other);
+            }
+            _ = handle.wait_graceful_shutdown(), if !shutting_down => {
+                shutting_down = true;
+                connection.as_mut().graceful_shutdown();
+            }
         }
-        _ => {
-            // Generate self-signed certificate configuration
-            certificate::config_self_signed().await?
-        }
-    };
-
-    // Use TLS configuration to create a secure server
-    let mut server = axum_server::bind_rustls(args.bind, config);
-    server
-        .http_builder()
-        .http2()
-        .timer(TokioTimer::new())
-        .auto_date_header(true)
-        .keep_alive_interval(Duration::from_secs(0))
-        .keep_alive_timeout(Duration::from_secs(0));
-
-    server
-        .handle(handle)
-        .map(TrackAcceptor::new)
-        .serve(
-            router
-                .layer(global_layer)
-                .into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await
-        .map_err(Into::into)
-}
-
-impl IntoResponse for Error {
-    fn into_response(self) -> axum::response::Response {
-        tracing::warn!("server track error: {}", self);
-        (StatusCode::INTERNAL_SERVER_ERROR).into_response()
     }
-}
-
-#[inline]
-pub async fn track(
-    Extension(ConnectInfo(addr)): Extension<ConnectInfo<SocketAddr>>,
-    Extension(track): Extension<ConnectionTrack>,
-    #[cfg(target_os = "linux")] tcp_capture: Option<Extension<TcpCaptureTrack>>,
-    req: Request<Body>,
-) -> Result<ErasedJson> {
-    // get TCP packets if capture is available
-    #[cfg(target_os = "linux")]
-    let tcp_packets = if let Some(Extension(capture)) = tcp_capture {
-        // small delay to capture packets
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
-        let client_ip = addr.ip().to_string();
-        let client_port = addr.port();
-
-        let packets = capture.get_packets_for_client(&client_ip, client_port);
-        capture.clear_packets_for_client(&client_ip, client_port);
-        packets
-    } else {
-        Vec::new()
-    };
-
-    #[cfg(target_os = "linux")]
-    {
-        tokio::task::spawn_blocking(move || {
-            TrackInfo::new_with_tcp(Track::All, addr, req, track, tcp_packets)
-        })
-        .await
-        .map(ErasedJson::pretty)
-        .map_err(Error::from)
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        tokio::task::spawn_blocking(move || TrackInfo::new(Track::All, addr, req, track))
-            .await
-            .map(ErasedJson::pretty)
-            .map_err(Error::from)
-    }
-}
-
-#[inline]
-pub async fn tls_track(
-    Extension(ConnectInfo(addr)): Extension<ConnectInfo<SocketAddr>>,
-    Extension(track): Extension<ConnectionTrack>,
-    req: Request<Body>,
-) -> Result<ErasedJson> {
-    tokio::task::spawn_blocking(move || TrackInfo::new(Track::Tls, addr, req, track))
-        .await
-        .map(ErasedJson::pretty)
-        .map_err(Error::from)
-}
-
-#[inline]
-pub async fn http1_track(
-    Extension(ConnectInfo(addr)): Extension<ConnectInfo<SocketAddr>>,
-    Extension(track): Extension<ConnectionTrack>,
-    req: Request<Body>,
-) -> Result<ErasedJson> {
-    tokio::task::spawn_blocking(move || TrackInfo::new(Track::HTTP1, addr, req, track))
-        .await
-        .map(ErasedJson::pretty)
-        .map_err(Error::from)
-}
-
-#[inline]
-pub async fn http2_track(
-    Extension(ConnectInfo(addr)): Extension<ConnectInfo<SocketAddr>>,
-    Extension(track): Extension<ConnectionTrack>,
-    req: Request<Body>,
-) -> Result<ErasedJson> {
-    tokio::task::spawn_blocking(move || TrackInfo::new(Track::HTTP2, addr, req, track))
-        .await
-        .map(ErasedJson::pretty)
-        .map_err(Error::from)
-}
-
-#[inline]
-#[cfg(target_os = "linux")]
-pub async fn tcp_track(
-    Extension(ConnectInfo(addr)): Extension<ConnectInfo<SocketAddr>>,
-    Extension(capture): Extension<TcpCaptureTrack>,
-) -> Result<ErasedJson> {
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    let client_ip = addr.ip().to_string();
-    let client_port = addr.port();
-
-    let packets = capture.get_packets_for_client(&client_ip, client_port);
-
-    capture.clear_packets_for_client(&client_ip, client_port);
-
-    Ok(ErasedJson::pretty(&packets))
 }

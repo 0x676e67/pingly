@@ -1,19 +1,22 @@
 use std::fmt::Write;
 
-use crate::encoding::hex_encode;
+use hex::encode as hex_encode;
 
 use super::{
-    enums::is_grease,
+    enums::is_grease_value,
     hello::{ClientHello, TlsExtension},
 };
 
 /// JA3 TLS client fingerprint and its MD5 hash.
 pub(super) struct Ja3Fingerprint {
+    /// The comma-delimited JA3 source string.
     pub(super) raw: String,
+    /// The lowercase MD5 digest of `raw`.
     pub(super) hash: String,
 }
 
 impl Ja3Fingerprint {
+    /// Builds a JA3 fingerprint from client-advertised ClientHello fields.
     pub(super) fn from_client_hello(client_hello: &ClientHello) -> Self {
         let mut cipher_list = String::new();
         push_dec_list(
@@ -22,7 +25,7 @@ impl Ja3Fingerprint {
                 .cipher_values
                 .iter()
                 .copied()
-                .filter(|value| !is_grease(*value)),
+                .filter(|value| !is_grease_value(*value)),
         );
 
         let mut extension_list = String::new();
@@ -30,10 +33,10 @@ impl Ja3Fingerprint {
         let mut point_format_list = String::new();
 
         for extension in &client_hello.extensions {
-            let value = extension.value();
-            if is_grease(value) {
+            if extension.is_grease() {
                 continue;
             }
+            let value = extension.value();
 
             push_dec_list(&mut extension_list, [value]);
 
@@ -42,8 +45,8 @@ impl Ja3Fingerprint {
                     push_dec_list(
                         &mut supported_group_list,
                         data.iter()
-                            .map(|group| group.value())
-                            .filter(|value| !is_grease(*value)),
+                            .filter(|group| !group.is_grease())
+                            .map(|group| group.value()),
                     );
                 }
                 TlsExtension::EcPointFormats { data, .. } => {
