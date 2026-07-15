@@ -56,11 +56,24 @@ fn main() -> Result<()> {
     }
 }
 
+fn log_filter(default_level: &str) -> EnvFilter {
+    let directives = std::env::var(EnvFilter::DEFAULT_ENV).unwrap_or_default();
+    log_filter_from(default_level, &directives)
+}
+
+fn log_filter_from(default_level: &str, directives: &str) -> EnvFilter {
+    let default_level = Level::from_str(default_level).unwrap_or(Level::INFO);
+    if directives.is_empty() {
+        EnvFilter::new(default_level.as_str())
+    } else {
+        EnvFilter::builder().parse_lossy(format!("{default_level},{directives}"))
+    }
+}
+
 pub(crate) fn run(args: ServerArgs) -> Result<()> {
     tracing::subscriber::set_global_default(
         FmtSubscriber::builder()
-            .with_env_filter(EnvFilter::from_default_env())
-            .with_max_level(Level::from_str(&args.log).unwrap_or(Level::INFO))
+            .with_env_filter(log_filter(&args.log))
             .finish(),
     )?;
 
@@ -140,4 +153,22 @@ pub(crate) fn run(args: ServerArgs) -> Result<()> {
         server.serve(handle).await;
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::log_filter_from;
+
+    #[test]
+    fn log_filter_keeps_default_and_target_directives() {
+        let filter = log_filter_from("info", "pingly::proto::tls=trace").to_string();
+        assert!(filter.split(',').any(|value| value == "info"));
+        assert!(filter
+            .split(',')
+            .any(|value| value == "pingly::proto::tls=trace"));
+
+        let overridden = log_filter_from("info", "warn,pingly::proto::tls=trace").to_string();
+        assert!(!overridden.split(',').any(|value| value == "info"));
+        assert!(overridden.split(',').any(|value| value == "warn"));
+    }
 }

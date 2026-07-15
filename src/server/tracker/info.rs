@@ -88,11 +88,32 @@ pub struct TrackInfo {
 
 /// Track enum to specify which tracking information to collect.
 #[repr(u8)]
+#[derive(Clone, Copy)]
 pub enum Track {
     All,
     Tls,
     HTTP1,
     HTTP2,
+}
+
+impl Track {
+    const fn includes_tls(self) -> bool {
+        matches!(self, Track::All | Track::Tls)
+    }
+
+    const fn includes_http1(self) -> bool {
+        matches!(self, Track::All | Track::HTTP1)
+    }
+
+    const fn includes_http2(self) -> bool {
+        matches!(self, Track::All | Track::HTTP2)
+    }
+}
+
+struct ProtocolTrackInfo {
+    tls: Option<TlsTrackInfo>,
+    http1: Option<Http1TrackInfo>,
+    http2: Option<Http2TrackInfo>,
 }
 
 // ==== impl Http1TrackInfo ====
@@ -198,6 +219,40 @@ impl ConnectionTrack {
     }
 }
 
+fn protocol_track_info(track: Track, connection_track: ConnectionTrack) -> ProtocolTrackInfo {
+    let ConnectionTrack {
+        tls_version_negotiated,
+        client_hello,
+        http1_headers,
+        http2_frames,
+    } = connection_track;
+
+    let mut tls = if track.includes_tls() {
+        client_hello
+            .and_then(LazyClientHello::parse)
+            .map(TlsTrackInfo::new)
+    } else {
+        None
+    };
+
+    if let Some(tls) = tls.as_mut() {
+        tls.set_tls_version_negotiated(tls_version_negotiated);
+    }
+
+    let http1 = if track.includes_http1() {
+        http1_headers.map(Http1TrackInfo::new)
+    } else {
+        None
+    };
+    let http2 = if track.includes_http2() {
+        http2_frames.and_then(Http2TrackInfo::new)
+    } else {
+        None
+    };
+
+    ProtocolTrackInfo { tls, http1, http2 }
+}
+
 // ==== impl TrackInfo ====
 
 impl TrackInfo {
@@ -216,43 +271,18 @@ impl TrackInfo {
 
         #[cfg(not(target_os = "linux"))]
         {
-            let mut tls = connection_track
-                .client_hello
-                .and_then(LazyClientHello::parse)
-                .map(TlsTrackInfo::new);
+            let ProtocolTrackInfo { tls, http1, http2 } =
+                protocol_track_info(track, connection_track);
 
-            if let Some(tls) = tls.as_mut() {
-                tls.set_tls_version_negotiated(connection_track.tls_version_negotiated);
-            }
-
-            let track_info = TrackInfo {
+            TrackInfo {
                 donate: Self::DONATE_URL,
                 address: addr,
                 http_version: format!("{:?}", req.version()),
                 method: req.method().clone(),
                 user_agent: req.headers().get(USER_AGENT).cloned(),
                 tls,
-                http1: connection_track.http1_headers.map(Http1TrackInfo::new),
-                http2: connection_track.http2_frames.and_then(Http2TrackInfo::new),
-            };
-
-            match track {
-                Track::All => track_info,
-                Track::Tls => TrackInfo {
-                    http1: None,
-                    http2: None,
-                    ..track_info
-                },
-                Track::HTTP1 => TrackInfo {
-                    tls: None,
-                    http2: None,
-                    ..track_info
-                },
-                Track::HTTP2 => TrackInfo {
-                    tls: None,
-                    http1: None,
-                    ..track_info
-                },
+                http1,
+                http2,
             }
         }
     }
@@ -267,50 +297,22 @@ impl TrackInfo {
         connection_track: ConnectionTrack,
         tcp_packets: Vec<CapturedPacket>,
     ) -> TrackInfo {
-        let mut tls = connection_track
-            .client_hello
-            .and_then(LazyClientHello::parse)
-            .map(TlsTrackInfo::new);
+        let ProtocolTrackInfo { tls, http1, http2 } = protocol_track_info(track, connection_track);
 
-        if let Some(tls) = tls.as_mut() {
-            tls.set_tls_version_negotiated(connection_track.tls_version_negotiated);
-        }
-
-        let track_info = TrackInfo {
+        TrackInfo {
             donate: Self::DONATE_URL,
             address: addr,
             http_version: format!("{:?}", req.version()),
             method: req.method().clone(),
             user_agent: req.headers().get(USER_AGENT).cloned(),
             tls,
-            http1: connection_track.http1_headers.map(Http1TrackInfo::new),
-            http2: connection_track.http2_frames.and_then(Http2TrackInfo::new),
+            http1,
+            http2,
             #[cfg(target_os = "linux")]
-            tcp: tcp_packets,
-        };
-
-        match track {
-            Track::All => track_info,
-            Track::Tls => TrackInfo {
-                http1: None,
-                http2: None,
-                #[cfg(target_os = "linux")]
-                tcp: Vec::new(),
-                ..track_info
-            },
-            Track::HTTP1 => TrackInfo {
-                tls: None,
-                http2: None,
-                #[cfg(target_os = "linux")]
-                tcp: Vec::new(),
-                ..track_info
-            },
-            Track::HTTP2 => TrackInfo {
-                tls: None,
-                http1: None,
-                #[cfg(target_os = "linux")]
-                tcp: Vec::new(),
-                ..track_info
+            tcp: if matches!(track, Track::All) {
+                tcp_packets
+            } else {
+                Vec::new()
             },
         }
     }
@@ -342,7 +344,7 @@ mod tests {
     use serde_json::json;
     use std::sync::Arc;
 
-    use super::Http1TrackInfo;
+    use super::{Http1TrackInfo, Track};
 
     #[test]
     fn http1_headers_serialize_name_and_value_separately() {
@@ -356,5 +358,19 @@ mod tests {
             serde_json::to_value(Http1TrackInfo::new(headers)).unwrap(),
             json!([{"name": "user-agent", "value": "curl"}])
         );
+    }
+
+    #[test]
+    fn track_only_includes_requested_protocol_analysis() {
+        assert!(Track::All.includes_tls());
+        assert!(Track::All.includes_http1());
+        assert!(Track::All.includes_http2());
+        assert!(Track::Tls.includes_tls());
+        assert!(Track::HTTP1.includes_http1());
+        assert!(Track::HTTP2.includes_http2());
+        assert!(!Track::HTTP1.includes_tls());
+        assert!(!Track::HTTP2.includes_tls());
+        assert!(!Track::Tls.includes_http1());
+        assert!(!Track::Tls.includes_http2());
     }
 }
