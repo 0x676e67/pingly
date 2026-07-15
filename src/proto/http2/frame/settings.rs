@@ -1,12 +1,12 @@
 use serde::{Deserialize, Serialize};
 
-use super::{error::Error, FrameType};
+use super::{FrameError, FrameType};
 
 /// A decoded parameter from an HTTP/2 SETTINGS frame.
 ///
 /// Every parameter uses a 16-bit identifier and a 32-bit wire value. See
 /// [RFC 9113, Section 6.5.1](https://www.rfc-editor.org/rfc/rfc9113#section-6.5.1).
-#[derive(Debug, Serialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Setting {
     /// `SETTINGS_HEADER_TABLE_SIZE` (`0x01`) controls the HPACK table limit.
     /// See [RFC 9113, Section 6.5.2](https://www.rfc-editor.org/rfc/rfc9113#section-6.5.2).
@@ -72,7 +72,7 @@ pub enum SettingValue {
 /// A decoded HTTP/2 SETTINGS frame.
 ///
 /// See [RFC 9113, Section 6.5](https://www.rfc-editor.org/rfc/rfc9113#section-6.5).
-#[derive(Debug, Serialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SettingsFrame {
     /// The frame type, always [`FrameType::Settings`].
     pub frame_type: FrameType,
@@ -84,8 +84,8 @@ pub struct SettingsFrame {
     pub length: usize,
 
     /// Whether this frame acknowledges the peer's settings.
-    #[serde(skip)]
-    is_ack: bool,
+    #[serde(default, rename = "ack", skip_serializing_if = "is_false")]
+    pub(crate) is_ack: bool,
 
     /// Settings in their original wire order.
     pub settings: Vec<Setting>,
@@ -184,18 +184,19 @@ impl Setting {
 // ==== impl SettingsFrame ====
 
 impl SettingsFrame {
+    /// Returns whether this SETTINGS frame carries the ACK flag.
     #[inline]
-    pub(crate) fn is_ack(&self) -> bool {
+    pub const fn is_ack(&self) -> bool {
         self.is_ack
     }
 }
 
 impl TryFrom<(u8, u32, &[u8])> for SettingsFrame {
-    type Error = Error;
+    type Error = FrameError;
 
     fn try_from((flags, stream_id, payload): (u8, u32, &[u8])) -> Result<Self, Self::Error> {
         if stream_id != 0 {
-            return Err(Error::InvalidStreamId);
+            return Err(FrameError::InvalidStreamId);
         }
 
         // SETTINGS defines only ACK (0x01); unknown flag bits are ignored.
@@ -203,12 +204,12 @@ impl TryFrom<(u8, u32, &[u8])> for SettingsFrame {
         let is_ack = flags & 0x01 != 0;
         if is_ack && !payload.is_empty() {
             tracing::debug!("Invalid SETTINGS frame size: {}", payload.len());
-            return Err(Error::BadFrameSize);
+            return Err(FrameError::BadFrameSize);
         }
 
         if payload.len() % 6 != 0 {
             tracing::debug!("Invalid SETTINGS frame size: {}", payload.len());
-            return Err(Error::BadFrameSize);
+            return Err(FrameError::BadFrameSize);
         }
 
         let settings = payload
@@ -230,12 +231,16 @@ impl TryFrom<(u8, u32, &[u8])> for SettingsFrame {
     }
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::{Setting, SettingsFrame};
-    use crate::proto::http2::frame::error::Error;
+    use crate::proto::http2::frame::FrameError;
 
     #[test]
     fn settings_serialize_numeric_and_boolean_values() {
@@ -281,30 +286,35 @@ mod tests {
         assert!(ack.settings.is_empty());
         assert!(!settings.is_ack());
         assert!(ack.is_ack());
+        let json = serde_json::to_value(&ack).unwrap();
         assert_eq!(
-            serde_json::to_value(ack).unwrap(),
+            json,
             json!({
                 "frame_type": "Settings",
                 "stream_id": 0,
                 "length": 0,
+                "ack": true,
                 "settings": []
             })
         );
+
+        let restored: SettingsFrame = serde_json::from_value(json).unwrap();
+        assert_eq!(restored, ack);
     }
 
     #[test]
     fn settings_reject_invalid_frame_boundaries() {
         assert_eq!(
             SettingsFrame::try_from((0x01, 0, &[0; 6][..])).unwrap_err(),
-            Error::BadFrameSize
+            FrameError::BadFrameSize
         );
         assert_eq!(
             SettingsFrame::try_from((0x00, 0, &[0; 5][..])).unwrap_err(),
-            Error::BadFrameSize
+            FrameError::BadFrameSize
         );
         assert_eq!(
             SettingsFrame::try_from((0x00, 1, &[][..])).unwrap_err(),
-            Error::InvalidStreamId
+            FrameError::InvalidStreamId
         );
     }
 }

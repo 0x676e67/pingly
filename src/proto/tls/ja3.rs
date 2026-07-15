@@ -1,31 +1,31 @@
 use std::fmt::Write;
 
 use hex::encode as hex_encode;
+use serde::{Deserialize, Serialize};
 
-use super::{
-    enums::is_grease_value,
-    hello::{ClientHello, TlsExtension},
-};
+use super::hello::{ClientHello, TlsExtension};
 
 /// JA3 TLS client fingerprint and its MD5 hash.
-pub(super) struct Ja3Fingerprint {
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Ja3Fingerprint {
     /// The comma-delimited JA3 source string.
-    pub(super) raw: String,
+    pub raw: String,
+
     /// The lowercase MD5 digest of `raw`.
-    pub(super) hash: String,
+    pub hash: String,
 }
 
 impl Ja3Fingerprint {
     /// Builds a JA3 fingerprint from client-advertised ClientHello fields.
-    pub(super) fn from_client_hello(client_hello: &ClientHello) -> Self {
+    pub fn from_client_hello(client_hello: &ClientHello) -> Self {
         let mut cipher_list = String::new();
         push_dec_list(
             &mut cipher_list,
             client_hello
-                .cipher_values
+                .cipher_suites
                 .iter()
-                .copied()
-                .filter(|value| !is_grease_value(*value)),
+                .filter(|cipher| !cipher.is_grease())
+                .map(|cipher| cipher.id),
         );
 
         let mut extension_list = String::new();
@@ -46,7 +46,7 @@ impl Ja3Fingerprint {
                         &mut supported_group_list,
                         data.iter()
                             .filter(|group| !group.is_grease())
-                            .map(|group| group.value()),
+                            .map(|group| group.id),
                     );
                 }
                 TlsExtension::EcPointFormats { data, .. } => {
@@ -73,6 +73,12 @@ impl Ja3Fingerprint {
     }
 }
 
+impl From<&ClientHello> for Ja3Fingerprint {
+    fn from(client_hello: &ClientHello) -> Self {
+        Self::from_client_hello(client_hello)
+    }
+}
+
 fn push_dec_list(out: &mut String, values: impl IntoIterator<Item = u16>) {
     for value in values {
         if !out.is_empty() {
@@ -91,8 +97,9 @@ fn md5_hex(input: &str) -> String {
 mod tests {
     use super::Ja3Fingerprint;
     use crate::proto::tls::{
-        enums::{ECPointFormat, NamesGroup, SignatureAlgorithm, TlsVersion},
-        hello::{ClientHello, TlsExtension},
+        enums::{ECPointFormat, SignatureAlgorithm, TlsVersion},
+        hello::{ClientHello, TlsCipherSuite, TlsExtension},
+        NamedGroup,
     };
     use tls_parser::TlsExtensionType;
 
@@ -204,11 +211,10 @@ mod tests {
         ClientHello {
             tls_version: TlsVersion::TLSv1_2,
             tls_version_negotiated: None,
-            cipher_values: ciphers.to_vec(),
+            cipher_suites: ciphers.iter().copied().map(TlsCipherSuite::from).collect(),
             client_random: String::new(),
             session_id: None,
             compression_algorithms: Vec::new(),
-            ciphers: Vec::new(),
             extensions: extensions
                 .iter()
                 .map(|value| match TlsExtensionType::from_u16(*value) {
@@ -219,7 +225,7 @@ mod tests {
                     TlsExtensionType::ApplicationLayerProtocolNegotiation => {
                         TlsExtension::ApplicationLayerProtocolNegotiation {
                             value: *value,
-                            data: vec!["h2".to_owned()],
+                            data: vec!["h2".into()],
                         }
                     }
                     TlsExtensionType::SupportedVersions => TlsExtension::SupportedVersions {
@@ -240,7 +246,7 @@ mod tests {
                         value: *value,
                         data: supported_groups
                             .iter()
-                            .map(|group| NamesGroup::from(*group))
+                            .map(|group| NamedGroup::from(*group))
                             .collect(),
                     },
                     TlsExtensionType::EcPointFormats => TlsExtension::EcPointFormats {

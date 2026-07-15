@@ -1,13 +1,13 @@
 use httlib_hpack::Decoder;
 use serde::{Deserialize, Serialize};
 
-use super::{error::Error, priority::StreamDependency, FrameType};
+use super::{priority::StreamDependency, FrameError, FrameType};
 
 /// A decoded HTTP/2 field, preserving its position in the field section.
 ///
 /// HTTP/2 field handling is defined by
 /// [RFC 9113, Section 8.2](https://www.rfc-editor.org/rfc/rfc9113#section-8.2).
-#[derive(Debug, Serialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HeaderField {
     /// The decoded field name, including the leading `:` for pseudo-fields.
     pub name: Box<str>,
@@ -19,7 +19,7 @@ pub struct HeaderField {
 /// A decoded HTTP/2 HEADERS frame.
 ///
 /// See [RFC 9113, Section 6.2](https://www.rfc-editor.org/rfc/rfc9113#section-6.2).
-#[derive(Debug, Serialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HeadersFrame {
     /// The type of the frame
     pub frame_type: FrameType,
@@ -30,10 +30,6 @@ pub struct HeadersFrame {
     /// The length of the frame payload
     pub length: usize,
 
-    /// The short pseudo-header names
-    #[serde(skip)]
-    pub pseudo_headers: Vec<char>,
-
     /// The headers in the frame
     pub headers: Vec<HeaderField>,
 
@@ -41,18 +37,18 @@ pub struct HeadersFrame {
     pub flags: HeadersFlags,
 
     /// The stream dependency information
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<StreamDependency>,
 
     /// CONTINUATION frames that completed this field block.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub continuations: Vec<ContinuationFrame>,
 }
 
 /// A CONTINUATION frame associated with a decoded HEADERS field block.
 ///
 /// See [RFC 9113, Section 6.10](https://www.rfc-editor.org/rfc/rfc9113#section-6.10).
-#[derive(Debug, Serialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContinuationFrame {
     /// The frame type, always [`FrameType::Continuation`].
     pub frame_type: FrameType,
@@ -68,14 +64,28 @@ pub struct ContinuationFrame {
 }
 
 /// An HTTP/2 CONTINUATION flag byte and the set bits decoded from it.
-#[derive(Debug, Serialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "ContinuationFlagsRepr")]
 pub struct ContinuationFlags {
+    /// The original flag byte from the frame header.
     raw: u8,
+
+    /// The individual set bits decoded from the flag byte.
+    values: Vec<ContinuationFlag>,
+}
+
+/// Deserialization shape used to validate a saved CONTINUATION flag byte and its decoded bits.
+#[derive(Deserialize)]
+struct ContinuationFlagsRepr {
+    /// The original flag byte stored in JSON.
+    raw: u8,
+
+    /// The decoded set bits stored alongside the raw byte.
     values: Vec<ContinuationFlag>,
 }
 
 /// One set bit from an HTTP/2 CONTINUATION frame flag byte.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContinuationFlag {
     /// The set bit as a numeric mask.
     pub id: u8,
@@ -85,7 +95,7 @@ pub struct ContinuationFlag {
 }
 
 /// The meaning of a flag bit in an HTTP/2 CONTINUATION frame.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 #[repr(u8)]
 pub enum ContinuationFlagName {
@@ -99,11 +109,22 @@ pub enum ContinuationFlagName {
 /// A HEADERS field block that may still require CONTINUATION frames.
 #[derive(Debug)]
 pub(super) struct PendingHeaders {
+    /// The stream that owns the incomplete field block.
     stream_id: u32,
+
+    /// The accumulated payload length across HEADERS and CONTINUATION frames.
     length: usize,
+
+    /// The flags from the opening HEADERS frame.
     flags: HeadersFlags,
+
+    /// The optional priority fields from the opening HEADERS frame.
     priority: Option<StreamDependency>,
+
+    /// The compressed field block accumulated so far.
     block: Vec<u8>,
+
+    /// Metadata for the CONTINUATION frames received so far.
     continuations: Vec<ContinuationFrame>,
 }
 
@@ -115,13 +136,20 @@ pub(super) struct PendingHeaders {
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "HeadersFlagsRepr")]
 pub struct HeadersFlags {
+    /// The original flag byte from the frame header.
     raw: u8,
+
+    /// The individual set bits decoded from the flag byte.
     values: Vec<HeadersFlag>,
 }
 
+/// Deserialization shape used to validate a saved HEADERS flag byte and its decoded bits.
 #[derive(Deserialize)]
 struct HeadersFlagsRepr {
+    /// The original flag byte stored in JSON.
     raw: u8,
+
+    /// The decoded set bits stored alongside the raw byte.
     values: Vec<HeadersFlag>,
 }
 
@@ -165,8 +193,24 @@ pub enum HeadersFlagName {
 // ==== impl HeadersFlags ====
 
 impl HeadersFlags {
+    /// Returns the original HEADERS flag byte.
     #[inline]
-    fn contains(&self, flag: HeadersFlagName) -> bool {
+    pub const fn raw(&self) -> u8 {
+        self.raw
+    }
+
+    /// Returns each set flag bit in ascending bit order.
+    #[inline]
+    pub fn values(&self) -> &[HeadersFlag] {
+        &self.values
+    }
+
+    /// Returns whether the requested HEADERS flag is set.
+    ///
+    /// [`HeadersFlagName::Unknown`] has no single wire bit and always returns
+    /// `false`; inspect [`Self::values`] to find unknown set bits.
+    #[inline]
+    pub const fn contains(&self, flag: HeadersFlagName) -> bool {
         self.raw & flag.id() != 0
     }
 
@@ -248,6 +292,18 @@ impl From<u8> for HeadersFlagName {
 // ==== impl ContinuationFlags ====
 
 impl ContinuationFlags {
+    /// Returns the original CONTINUATION flag byte.
+    #[inline]
+    pub const fn raw(&self) -> u8 {
+        self.raw
+    }
+
+    /// Returns each set flag bit in ascending bit order.
+    #[inline]
+    pub fn values(&self) -> &[ContinuationFlag] {
+        &self.values
+    }
+
     #[inline]
     fn has_end_headers(&self) -> bool {
         self.raw & ContinuationFlagName::EndHeaders as u8 != 0
@@ -266,6 +322,19 @@ impl From<u8> for ContinuationFlags {
         }
 
         Self { raw, values }
+    }
+}
+
+impl TryFrom<ContinuationFlagsRepr> for ContinuationFlags {
+    type Error = &'static str;
+
+    fn try_from(repr: ContinuationFlagsRepr) -> Result<Self, Self::Error> {
+        let expected = Self::from(repr.raw);
+        if repr.values != expected.values {
+            return Err("CONTINUATION flag values do not match the raw flag byte");
+        }
+
+        Ok(expected)
     }
 }
 
@@ -292,9 +361,9 @@ impl PendingHeaders {
         flags: u8,
         stream_id: u32,
         payload: &[u8],
-    ) -> Result<bool, Error> {
+    ) -> Result<bool, FrameError> {
         if stream_id != self.stream_id {
-            return Err(Error::UnexpectedContinuation);
+            return Err(FrameError::UnexpectedContinuation);
         }
 
         let flags = ContinuationFlags::from(flags);
@@ -310,24 +379,19 @@ impl PendingHeaders {
         Ok(complete)
     }
 
-    pub(super) fn finish(mut self) -> Result<HeadersFrame, Error> {
+    pub(super) fn finish(mut self) -> Result<HeadersFrame, FrameError> {
         let mut decoder = Decoder::default();
         let mut decoded = Vec::new();
 
         if decoder.decode(&mut self.block, &mut decoded).is_err() {
-            return Err(Error::MalformedMessage);
+            return Err(FrameError::MalformedMessage);
         }
 
         let mut headers = Vec::with_capacity(decoded.len());
-        let mut pseudo_headers = Vec::with_capacity(4);
         for (name, value, _) in decoded {
-            if name.starts_with(b":") {
-                if let Some(first_char) = name.get(1).copied() {
-                    pseudo_headers.push(first_char as char);
-                } else {
-                    tracing::warn!("Invalid pseudo-header: {:?}", name);
-                    return Err(Error::MalformedMessage);
-                }
+            if name == b":" {
+                tracing::warn!("Invalid pseudo-header: {:?}", name);
+                return Err(FrameError::MalformedMessage);
             }
 
             headers.push(HeaderField {
@@ -340,7 +404,6 @@ impl PendingHeaders {
             frame_type: FrameType::Headers,
             stream_id: self.stream_id,
             length: self.length,
-            pseudo_headers,
             headers,
             flags: self.flags,
             priority: self.priority,
@@ -350,11 +413,11 @@ impl PendingHeaders {
 }
 
 impl TryFrom<(u8, u32, &[u8])> for PendingHeaders {
-    type Error = Error;
+    type Error = FrameError;
 
     fn try_from((flags, stream_id, payload): (u8, u32, &[u8])) -> Result<Self, Self::Error> {
         if stream_id == 0 {
-            return Err(Error::InvalidStreamId);
+            return Err(FrameError::InvalidStreamId);
         }
 
         let flags = HeadersFlags::from(flags);
@@ -363,14 +426,14 @@ impl TryFrom<(u8, u32, &[u8])> for PendingHeaders {
         let fragment_offset = priority_offset + if flags.has_priority() { 5 } else { 0 };
 
         if payload.len() < fragment_offset {
-            return Err(Error::BadFrameSize);
+            return Err(FrameError::BadFrameSize);
         }
 
         let padding_len = if padded { payload[0] as usize } else { 0 };
         let data = &payload[fragment_offset..];
 
         if data.len() < padding_len {
-            return Err(Error::TooMuchPadding);
+            return Err(FrameError::TooMuchPadding);
         }
 
         let priority = if flags.has_priority() {
@@ -386,7 +449,7 @@ impl TryFrom<(u8, u32, &[u8])> for PendingHeaders {
             .as_ref()
             .is_some_and(|priority| priority.depends_on == stream_id)
         {
-            return Err(Error::InvalidStreamDependency);
+            return Err(FrameError::InvalidStreamDependency);
         }
 
         Ok(Self {
@@ -403,12 +466,12 @@ impl TryFrom<(u8, u32, &[u8])> for PendingHeaders {
 // ==== impl HeadersFrame ====
 
 impl TryFrom<(u8, u32, &[u8])> for HeadersFrame {
-    type Error = Error;
+    type Error = FrameError;
 
     fn try_from((flags, stream_id, payload): (u8, u32, &[u8])) -> Result<Self, Self::Error> {
         let pending = PendingHeaders::try_from((flags, stream_id, payload))?;
         if !pending.is_complete() {
-            return Err(Error::ExpectedContinuation);
+            return Err(FrameError::ExpectedContinuation);
         }
 
         pending.finish()
@@ -432,7 +495,7 @@ mod tests {
         into_boxed_utf8_lossy, HeaderField, HeadersFlag, HeadersFlagName, HeadersFlags,
         HeadersFrame,
     };
-    use crate::proto::http2::frame::{error::Error, FrameType};
+    use crate::proto::http2::frame::{FrameError, FrameType};
 
     #[test]
     fn header_field_serializes_name_and_value_separately() {
@@ -482,7 +545,6 @@ mod tests {
             frame_type: FrameType::Headers,
             stream_id: 1,
             length: 0,
-            pseudo_headers: Vec::new(),
             headers: Vec::new(),
             flags: HeadersFlags::from(0x25),
             priority: None,
@@ -543,11 +605,11 @@ mod tests {
     fn headers_require_a_nonzero_distinct_stream_dependency() {
         assert_eq!(
             super::PendingHeaders::try_from((0x04, 0, &[0x82][..])).unwrap_err(),
-            Error::InvalidStreamId
+            FrameError::InvalidStreamId
         );
         assert_eq!(
             super::PendingHeaders::try_from((0x24, 1, &[0, 0, 0, 1, 0][..])).unwrap_err(),
-            Error::InvalidStreamDependency
+            FrameError::InvalidStreamDependency
         );
     }
 
@@ -555,7 +617,7 @@ mod tests {
     fn headers_require_complete_optional_prefix_fields() {
         assert_eq!(
             super::PendingHeaders::try_from((0x24, 1, &[0; 4][..])).unwrap_err(),
-            Error::BadFrameSize
+            FrameError::BadFrameSize
         );
     }
 }

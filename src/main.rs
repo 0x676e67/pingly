@@ -1,12 +1,14 @@
-#![cfg_attr(not(test), warn(unused_crate_dependencies))]
-
 mod alloc;
 mod args;
 #[cfg(target_family = "unix")]
 mod daemon;
 mod error;
-mod proto;
 mod server;
+#[cfg(target_os = "linux")]
+#[path = "proto/tcp.rs"]
+mod tcp;
+
+pub(crate) use pingly::proto;
 
 use std::str::FromStr;
 
@@ -33,7 +35,7 @@ use server::{
 };
 
 #[cfg(target_os = "linux")]
-use crate::{proto::tcp::TcpCaptureTrack, server::routes::tcp_track};
+use crate::{server::routes::tcp_track, tcp::TcpCaptureTrack};
 
 const APP_NAME: &str = env!("CARGO_PKG_NAME");
 

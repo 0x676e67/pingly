@@ -1,12 +1,12 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-use super::{error::Error, FrameType};
+use super::{FrameError, FrameType};
 
 /// A decoded HTTP/2 PRIORITY frame.
 ///
 /// This frame is deprecated but its wire format remains defined by
 /// [RFC 9113, Section 6.3](https://www.rfc-editor.org/rfc/rfc9113#section-6.3).
-#[derive(Debug, Serialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PriorityFrame {
     /// The type of the frame, which is always `FrameType::Priority`.
     pub frame_type: FrameType,
@@ -22,7 +22,7 @@ pub struct PriorityFrame {
 }
 
 /// Represents a stream dependency in HTTP/2 priority frames.
-#[derive(Debug, Serialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StreamDependency {
     /// The effective stream weight after decoding the wire value (range 1..=256).
     /// RFC 7540 Section 5.3.2 encodes weights as one less than their effective value:
@@ -39,17 +39,17 @@ pub struct StreamDependency {
 // ==== impl PriorityFrame ====
 
 impl TryFrom<(u32, &[u8])> for PriorityFrame {
-    type Error = Error;
+    type Error = FrameError;
 
     fn try_from((stream_id, buf): (u32, &[u8])) -> Result<Self, Self::Error> {
         if stream_id == 0 {
-            return Err(Error::InvalidStreamId);
+            return Err(FrameError::InvalidStreamId);
         }
 
         let priority = StreamDependency::try_from(buf)?;
 
         if stream_id == priority.depends_on {
-            return Err(Error::InvalidStreamDependency);
+            return Err(FrameError::InvalidStreamDependency);
         }
 
         Ok(PriorityFrame {
@@ -64,12 +64,12 @@ impl TryFrom<(u32, &[u8])> for PriorityFrame {
 // ==== impl StreamDependency ====
 
 impl TryFrom<&[u8]> for StreamDependency {
-    type Error = Error;
+    type Error = FrameError;
 
     fn try_from(buf: &[u8]) -> Result<Self, Self::Error> {
         if buf.len() != 5 {
             tracing::debug!("Invalid PRIORITY frame size: {}", buf.len());
-            return Err(Error::BadFrameSize);
+            return Err(FrameError::BadFrameSize);
         }
 
         let (weight, depends_on, exclusive) = {
@@ -96,17 +96,17 @@ impl TryFrom<&[u8]> for StreamDependency {
 #[cfg(test)]
 mod tests {
     use super::{PriorityFrame, StreamDependency};
-    use crate::proto::http2::frame::error::Error;
+    use crate::proto::http2::frame::FrameError;
 
     #[test]
     fn priority_requires_a_nonzero_distinct_stream_dependency() {
         assert_eq!(
             PriorityFrame::try_from((0, &[0; 5][..])).unwrap_err(),
-            Error::InvalidStreamId
+            FrameError::InvalidStreamId
         );
         assert_eq!(
             PriorityFrame::try_from((3, &[0, 0, 0, 3, 0][..])).unwrap_err(),
-            Error::InvalidStreamDependency
+            FrameError::InvalidStreamDependency
         );
     }
 

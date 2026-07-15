@@ -132,7 +132,7 @@ pub fn parse_tls_extension_ech(id: u16, data: &[u8]) -> IResult<&[u8], TlsExtens
 ///
 /// ALPS remains an Internet-Draft; see
 /// [draft-vvv-tls-alps](https://datatracker.ietf.org/doc/html/draft-vvv-tls-alps).
-pub fn parse_alps_packet(d: &[u8]) -> Vec<String> {
+pub fn parse_alps_packet(d: &[u8]) -> Vec<Box<str>> {
     let mut protocols = Vec::new();
 
     if d.len() < 3 {
@@ -161,7 +161,7 @@ pub fn parse_alps_packet(d: &[u8]) -> Vec<String> {
 
         let proto_bytes = &d[cursor..cursor + len];
         let proto_str = match std::str::from_utf8(proto_bytes) {
-            Ok(s) => s.to_string(),
+            Ok(s) => Box::from(s),
             Err(_) => return protocols,
         };
 

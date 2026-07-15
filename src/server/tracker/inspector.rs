@@ -10,11 +10,11 @@ use pin_project_lite::pin_project;
 use tokio::io::{self, AsyncRead, AsyncWrite, ReadBuf};
 use tokio_rustls::server::TlsStream;
 
-pub use crate::proto::http2::Http2Frame;
-use crate::proto::http2::{frame, frame::Frame};
-pub use crate::proto::tls::{ClientHello, LazyClientHello};
+use crate::proto::http2::{frame, frame::Frame, HTTP2_CLIENT_PREFACE};
+pub use crate::proto::tls::{ClientHello, ClientHelloBuffer};
 
 pub type Http1Headers = Arc<boxcar::Vec<(Bytes, Bytes)>>;
+pub type Http2Frame = Arc<boxcar::Vec<Frame>>;
 
 const HTTP2_CAPTURE_MAX_BYTES: usize = 1024 * 1024;
 const HTTP2_CAPTURE_MAX_FRAMES: usize = 128;
@@ -22,7 +22,9 @@ const HTTP2_CAPTURE_MAX_FRAMES: usize = 128;
 #[derive(Default)]
 struct Http2CaptureBudget {
     bytes: usize,
+
     frames: usize,
+
     stopped: bool,
 }
 
@@ -127,7 +129,8 @@ pin_project! {
     pub struct TlsInspector<I> {
         #[pin]
         inner: I,
-        client_hello: Option<LazyClientHello>,
+
+        client_hello: Option<ClientHelloBuffer>,
     }
 }
 
@@ -139,7 +142,7 @@ where
     pub fn new(inner: I) -> Self {
         Self {
             inner,
-            client_hello: Some(LazyClientHello::new()),
+            client_hello: Some(ClientHelloBuffer::new()),
         }
     }
 
@@ -147,7 +150,7 @@ where
     /// leaving `None` in its place.
     #[inline]
     #[must_use]
-    pub fn client_hello(&mut self) -> Option<LazyClientHello> {
+    pub fn client_hello(&mut self) -> Option<ClientHelloBuffer> {
         self.client_hello.take()
     }
 }
@@ -208,7 +211,9 @@ pin_project! {
     pub struct Http1Inspector<I> {
         #[pin]
         inner: TlsStream<TlsInspector<I>>,
+
         buf: Vec<u8>,
+
         headers: Http1Headers,
     }
 }
@@ -301,9 +306,13 @@ pin_project! {
     pub struct Http2Inspector<I> {
         #[pin]
         inner: TlsStream<TlsInspector<I>>,
+
         buf: Vec<u8>,
+
         frames: Http2Frame,
+
         parser: frame::FrameParser,
+
         capture_budget: Http2CaptureBudget,
     }
 }
@@ -341,8 +350,6 @@ where
         cx: &mut task::Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        const HTTP2_PREFACE: &[u8] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
-
         let len = buf.filled().len();
         let this = self.project();
         let poll = this.inner.poll_read(cx, buf);
@@ -357,14 +364,20 @@ where
         let byte_limit_reached = this.capture_budget.byte_limit_reached();
         let mut stop_capture = false;
 
-        let plen = HTTP2_PREFACE.len();
-        let not_http2 = this.buf.len() >= plen && !this.buf.starts_with(HTTP2_PREFACE);
+        let plen = HTTP2_CLIENT_PREFACE.len();
+        let not_http2 = this.buf.len() >= plen && !this.buf.starts_with(HTTP2_CLIENT_PREFACE);
         if not_http2 {
             stop_capture = true;
         } else {
             let frames = this.frames.deref();
             while this.buf.len() > plen {
-                let (frame_len, frame) = this.parser.parse(&this.buf[plen..]);
+                let (frame_len, frame) = match this.parser.parse(&this.buf[plen..]) {
+                    Ok(parsed) => (parsed.consumed(), parsed.into_frame()),
+                    Err(error) => {
+                        tracing::debug!(?error, "failed to parse HTTP/2 frame");
+                        (error.consumed, None)
+                    }
+                };
                 if frame_len > 0 {
                     this.buf.drain(plen..plen + frame_len);
                     if !this.capture_budget.record_frame() {

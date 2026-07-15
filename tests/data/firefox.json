@@ -1,0 +1,414 @@
+{
+    "donate": "Analysis server for TLS and HTTP/1/2/3, developed by 0x676e67: https://github.com/0x676e67/pingly",
+    "address": "127.0.0.1:59750",
+    "http_version": "HTTP/2.0",
+    "method": "GET",
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0",
+    "tls": {
+        "ja3": "771,4865-4867-4866-49195-49199-52393-52392-49196-49200-49162-49171-49172-156-157-47-53,0-23-65281-10-11-35-16-5-34-18-51-43-13-45-28-27-65037,4588-29-23-24-25-256-257,0",
+        "ja3_hash": "6447ab086255d194909d4013b1a89e87",
+        "ja4": "t13d1617h2_86a278354501_3cbfd9057e0d",
+        "ja4_r": "t13d1617h2_002f,0035,009c,009d,1301,1302,1303,c00a,c013,c014,c02b,c02c,c02f,c030,cca8,cca9_0005,000a,000b,000d,0012,0017,001b,001c,0022,0023,002b,002d,0033,fe0d,ff01_0403,0503,0603,0804,0805,0806,0401,0501,0601,0203,0201",
+        "tls_version": "TLSv1_2",
+        "tls_version_negotiated": "TLSv1_3",
+        "cipher_suites": [
+            {
+                "id": 4865,
+                "name": "TLS_AES_128_GCM_SHA256"
+            },
+            {
+                "id": 4867,
+                "name": "TLS_CHACHA20_POLY1305_SHA256"
+            },
+            {
+                "id": 4866,
+                "name": "TLS_AES_256_GCM_SHA384"
+            },
+            {
+                "id": 49195,
+                "name": "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256"
+            },
+            {
+                "id": 49199,
+                "name": "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
+            },
+            {
+                "id": 52393,
+                "name": "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256"
+            },
+            {
+                "id": 52392,
+                "name": "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256"
+            },
+            {
+                "id": 49196,
+                "name": "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384"
+            },
+            {
+                "id": 49200,
+                "name": "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
+            },
+            {
+                "id": 49162,
+                "name": "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA"
+            },
+            {
+                "id": 49171,
+                "name": "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA"
+            },
+            {
+                "id": 49172,
+                "name": "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA"
+            },
+            {
+                "id": 156,
+                "name": "TLS_RSA_WITH_AES_128_GCM_SHA256"
+            },
+            {
+                "id": 157,
+                "name": "TLS_RSA_WITH_AES_256_GCM_SHA384"
+            },
+            {
+                "id": 47,
+                "name": "TLS_RSA_WITH_AES_128_CBC_SHA"
+            },
+            {
+                "id": 53,
+                "name": "TLS_RSA_WITH_AES_256_CBC_SHA"
+            }
+        ],
+        "client_random": "b3b37c66282a3c38889ad725eebcb219df085af6f1bceb4c2d14a4d056bf674d",
+        "session_id": "0dc03ca2caf43068f08a61867430e2fbdae23c3223dfca164357fbcb21e04794",
+        "compression_algorithms": [
+            "Null"
+        ],
+        "extensions": [
+            {
+                "server_name": {
+                    "value": 0,
+                    "data": [
+                        "localhost"
+                    ]
+                }
+            },
+            {
+                "extended_master_secret": {
+                    "value": 23
+                }
+            },
+            {
+                "renegotiation_info": {
+                    "value": 65281
+                }
+            },
+            {
+                "supported_groups": {
+                    "value": 10,
+                    "data": [
+                        {
+                            "id": 4588,
+                            "name": "X25519MLKEM768"
+                        },
+                        {
+                            "id": 29,
+                            "name": "x25519"
+                        },
+                        {
+                            "id": 23,
+                            "name": "secp256r1"
+                        },
+                        {
+                            "id": 24,
+                            "name": "secp384r1"
+                        },
+                        {
+                            "id": 25,
+                            "name": "secp521r1"
+                        },
+                        {
+                            "id": 256,
+                            "name": "ffdhe2048"
+                        },
+                        {
+                            "id": 257,
+                            "name": "ffdhe3072"
+                        }
+                    ]
+                }
+            },
+            {
+                "ec_point_formats": {
+                    "value": 11,
+                    "data": [
+                        "Uncompressed"
+                    ]
+                }
+            },
+            {
+                "session_ticket": {
+                    "value": 35,
+                    "data": ""
+                }
+            },
+            {
+                "application_layer_protocol_negotiation": {
+                    "value": 16,
+                    "data": [
+                        "h2",
+                        "http/1.1"
+                    ]
+                }
+            },
+            {
+                "status_request": {
+                    "value": 5,
+                    "data": {
+                        "certificate_status_type": "OCSP",
+                        "responder_id_list": 0,
+                        "request_extensions": 0
+                    }
+                }
+            },
+            {
+                "delegated_credentials": {
+                    "value": 34,
+                    "data": [
+                        "ecdsa_secp256r1_sha256",
+                        "ecdsa_secp384r1_sha384",
+                        "ecdsa_secp521r1_sha512",
+                        "ecdsa_sha1"
+                    ]
+                }
+            },
+            {
+                "signed_certificate_timestamp": {
+                    "value": 18
+                }
+            },
+            {
+                "key_share": {
+                    "value": 51,
+                    "data": [
+                        {
+                            "id": 4588,
+                            "name": "X25519MLKEM768",
+                            "value": "ca0874d4e15e8bc61ab53879ee2a4c04e05bce33071756726f32320bc5895c68cf9e191ef8b07d9584c9778cc7fa765bdf7888bbb64e5158bce1334b77c44d85178bd466276383881c7c0167560e4695c08c07339ab34ac25527233c8b8942482a5b9d52e1be7a20291b757e231b6574431d7d088bfa1b7681368ce269347b8899808a271ab86b8e8705f9f9564948982bfb7779819850002c837b2653f3b5b5a20df7877e14e1947c21bc1bc37cd07b5a8120308320a1bbb603ada60936fa212cec5ec8ab15ce01c10a536da3121a1caa5009e3a77625cbc9634de8a574febc5bdd5a94a2d9508a1a7c3e6440d2e1102ec27bc710ad6f548ca40ab4b5e49921c32621674387f47aaca54ef5531724997fca9775d5d877f8c6a0cae2174bb8b387811f16194c12995909a22adb2b7d1c24721886a71946b920a4c21a1c50b3225ef79324b4ba36486abcb612c10f684cb83225574ab02130b7cd43b86e27c1034ab4e8aa0330dc131462393bc2be027812244967cf52ae27494b73039ca52055776c33c0ac9b263ace177a02439289be1c406039ab37220528b5c870a101af549170e66788a73821e67141e6ca1aa9a6fa916ab27a6057925a6a87266d31293ba29445184e8f88ca4e6a78b4662145692cd4d27a135588f36c3c3eaa905dcc8ecfb3c212469be0b824a040c740a1a98cda51d4e1510ac861e1c77b90f961f499199ee90f5ca854e2865f5a6b58b733ac86a00f5e95760e967ea1c0671f188c6498a09ee894f58845638aa5ca64c80fcc6efdec0f04c2b0c225a8ca974dd19b6faab86ed304a6b61a17f1f6500b81ab4eb2122b26799e5a81d420b1cc1cc21f0736a8b2aabc7b3c8588b3e569cabf61a6236ba77c266b774695475401ab7389c8a24ca5e45bcdd6185c109d026022d89560c53988332a0f986561bc88cfe2e252e227468cf4109cb1c7ab04ac3d61a72c97900d327438c116b97b83f17ab5ef45825f355f5f588522d4288a68c84c385bc8a8474f6848f942372c4c2177344c180c8219c53f777037cfe92d77a3432972a3b366a60bc1b26fe99f61a307fdd91b70fb8cdc0b6c7d9a1f59d40531850ba7368036732934f39da1909d5d2973633a75dd9779ac54981df077f2f24d92e72e5616c98d41bd733a136d5242b11b9eece053ebc93876e576743765758a4f3d21b61a848e2975195f9a051bd9730d15433ba08b22b07f81ab82e0d3c7f1a84c268542dd6ab0748bb5c51a775be08ae11773e9f72d0ee6c79236c72707bb84d57a569c36f54c4c5541433dabb1dd2c0aeb7a243a12127d3c158ab9c700962495491e637333e0892fdcb725fec84450649bebd3b20b5170e979182632084ad38ea7227edfd5c502f5009d997b5d65cfc63c823d06075f5a983e72ac3316161474c8376062e9bc70dc623724b62adca917c64594cae39875aa070068a37e4c1611d25b5e030c07e693773753215888fb8a8bbc99c081f7b5c334803dacb4abd0c1d4a350eb783bd974887f87ca185bbc53b9771b2b1be40c84f6f6951a1a321df27e0a08157ee9cd63f099e98113197b238c009da6220909163d8cd2345f4a8656db8e4dc89dafd3ce7b060088d7440c6a1f7d0d6a588da2d8f0a4b8a8894b2fccda9f0913bcb1dc2d9255b1dae90dfb7fb724cffdac9023745d40ca847948c1f52bbe94c38ef4006428b11f8bcad4b81941"
+                        },
+                        {
+                            "id": 29,
+                            "name": "x25519",
+                            "value": "24cffdac9023745d40ca847948c1f52bbe94c38ef4006428b11f8bcad4b81941"
+                        },
+                        {
+                            "id": 23,
+                            "name": "secp256r1",
+                            "value": "0438abb071199b40e3261fa7da748b3191eb74fbc76f4090c3f7a432ef34af72a0022b87743f0eecd5a88cc59dce803e3677a00b52815442eef4c305b49248a1af"
+                        }
+                    ]
+                }
+            },
+            {
+                "supported_versions": {
+                    "value": 43,
+                    "data": [
+                        "TLSv1_3",
+                        "TLSv1_2"
+                    ]
+                }
+            },
+            {
+                "signature_algorithms": {
+                    "value": 13,
+                    "data": [
+                        "ecdsa_secp256r1_sha256",
+                        "ecdsa_secp384r1_sha384",
+                        "ecdsa_secp521r1_sha512",
+                        "rsa_pss_rsae_sha256",
+                        "rsa_pss_rsae_sha384",
+                        "rsa_pss_rsae_sha512",
+                        "rsa_pkcs1_sha256",
+                        "rsa_pkcs1_sha384",
+                        "rsa_pkcs1_sha512",
+                        "ecdsa_sha1",
+                        "rsa_pkcs1_sha1"
+                    ]
+                }
+            },
+            {
+                "psk_key_exchange_modes": {
+                    "value": 45,
+                    "data": {
+                        "ke_modes": [
+                            "psk_dhe_ke"
+                        ]
+                    }
+                }
+            },
+            {
+                "record_size_limit": {
+                    "value": 28,
+                    "data": 16385
+                }
+            },
+            {
+                "certificate_compression": {
+                    "value": 27,
+                    "data": [
+                        "Zlib",
+                        "Brotli",
+                        "Zstd"
+                    ]
+                }
+            },
+            {
+                "encrypted_client_hello": {
+                    "value": 65037,
+                    "data": {
+                        "Outer": {
+                            "cipher_suite": {
+                                "kdf_id": "HKDF_SHA256",
+                                "aead_id": "AES_128_GCM"
+                            },
+                            "config_id": 165,
+                            "enc": "9dccbd49f4ca78187ff02f8ff78ea9f812fbb63164a604e3de5ce332f5333976",
+                            "payload_length": 239,
+                            "payload": "b62a21783ba18bf1420fdf3ada3be7f7705c2acc0b999b2c058737737bca50b340981b51bc5a2586720d4110dbf4e640ebc631ffea0a0a29f7c688d87e099fb3bc0873b0d85ef0cddd26caeafc61f2f2cb106c501ca55a206c603068bb2f68318bd42e54660dd03501d9f088f4a996e21d9da6bfe25415f180b5170feaac2f723639914c5dcb01657da0cf3f9df59d6a6eba5c055458cfc19a809ec55fc0907568a39aa60213d14452156c9b79cf6339eda369d657fd93b68cd3ad334e222a5ec521201ff18c2a8695389bf59b8ee699c3c94bcff061ef7600fc33c82d3d6e78b57670de857d6c11f9fae8470752ac"
+                        }
+                    }
+                }
+            }
+        ]
+    },
+    "http2": {
+        "akamai_fingerprint": "1:65536;2:0;4:131072;5:16384|12517377|0|m,p,a,s",
+        "akamai_fingerprint_hash": "6ea73faa8fc5aac76bded7bd238f6433",
+        "sent_frames": [
+            {
+                "frame_type": "Settings",
+                "stream_id": 0,
+                "length": 24,
+                "settings": [
+                    {
+                        "HeaderTableSize": {
+                            "id": 1,
+                            "value": 65536
+                        }
+                    },
+                    {
+                        "EnablePush": {
+                            "id": 2,
+                            "value": false
+                        }
+                    },
+                    {
+                        "InitialWindowSize": {
+                            "id": 4,
+                            "value": 131072
+                        }
+                    },
+                    {
+                        "MaxFrameSize": {
+                            "id": 5,
+                            "value": 16384
+                        }
+                    }
+                ]
+            },
+            {
+                "frame_type": "WindowUpdate",
+                "stream_id": 0,
+                "length": 4,
+                "increment": 12517377
+            },
+            {
+                "frame_type": "Headers",
+                "stream_id": 3,
+                "length": 325,
+                "headers": [
+                    {
+                        "name": ":method",
+                        "value": "GET"
+                    },
+                    {
+                        "name": ":path",
+                        "value": "/api/all"
+                    },
+                    {
+                        "name": ":authority",
+                        "value": "localhost:8181"
+                    },
+                    {
+                        "name": ":scheme",
+                        "value": "https"
+                    },
+                    {
+                        "name": "user-agent",
+                        "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0"
+                    },
+                    {
+                        "name": "accept",
+                        "value": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+                    },
+                    {
+                        "name": "accept-language",
+                        "value": "zh-CN,zh;q=0.9,zh-TW;q=0.8,zh-HK;q=0.7,en-US;q=0.6,en;q=0.5"
+                    },
+                    {
+                        "name": "accept-encoding",
+                        "value": "gzip, deflate, br, zstd"
+                    },
+                    {
+                        "name": "upgrade-insecure-requests",
+                        "value": "1"
+                    },
+                    {
+                        "name": "sec-fetch-dest",
+                        "value": "document"
+                    },
+                    {
+                        "name": "sec-fetch-mode",
+                        "value": "navigate"
+                    },
+                    {
+                        "name": "sec-fetch-site",
+                        "value": "none"
+                    },
+                    {
+                        "name": "sec-fetch-user",
+                        "value": "?1"
+                    },
+                    {
+                        "name": "priority",
+                        "value": "u=0, i"
+                    },
+                    {
+                        "name": "te",
+                        "value": "trailers"
+                    }
+                ],
+                "flags": {
+                    "raw": 37,
+                    "values": [
+                        {
+                            "id": 1,
+                            "name": "EndStream"
+                        },
+                        {
+                            "id": 4,
+                            "name": "EndHeaders"
+                        },
+                        {
+                            "id": 32,
+                            "name": "Priority"
+                        }
+                    ]
+                },
+                "priority": {
+                    "weight": 42,
+                    "depends_on": 0,
+                    "exclusive": 0
+                }
+            }
+        ]
+    }
+}

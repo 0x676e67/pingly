@@ -1,13 +1,13 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-use super::{error::Error, FrameType};
+use super::{FrameError, FrameType};
 
 /// Represents an HTTP/2 WINDOW_UPDATE frame.
 ///
 /// See [RFC 9113, Section 6.9](https://www.rfc-editor.org/rfc/rfc9113#section-6.9).
 /// This frame is used for flow control, indicating how many additional bytes the sender is
 /// permitted to transmit.
-#[derive(Debug, Serialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WindowUpdateFrame {
     /// The type of this frame (should always be `FrameType::WindowUpdate`)
     pub frame_type: FrameType,
@@ -24,18 +24,18 @@ pub struct WindowUpdateFrame {
 }
 
 impl TryFrom<(u32, &[u8])> for WindowUpdateFrame {
-    type Error = Error;
+    type Error = FrameError;
 
     fn try_from((stream_id, payload): (u32, &[u8])) -> Result<Self, Self::Error> {
         if payload.len() != 4 {
             tracing::debug!("Invalid WINDOW_UPDATE frame size: {}", payload.len());
-            return Err(Error::BadFrameSize);
+            return Err(FrameError::BadFrameSize);
         }
 
         let window_size_increment =
             u32::from_be_bytes([payload[0] & 0x7f, payload[1], payload[2], payload[3]]);
         if window_size_increment == 0 {
-            return Err(Error::InvalidWindowIncrement);
+            return Err(FrameError::InvalidWindowIncrement);
         }
 
         Ok(WindowUpdateFrame {
@@ -50,13 +50,13 @@ impl TryFrom<(u32, &[u8])> for WindowUpdateFrame {
 #[cfg(test)]
 mod tests {
     use super::WindowUpdateFrame;
-    use crate::proto::http2::frame::error::Error;
+    use crate::proto::http2::frame::FrameError;
 
     #[test]
     fn window_update_rejects_zero_increment() {
         assert_eq!(
             WindowUpdateFrame::try_from((0, &[0; 4][..])).unwrap_err(),
-            Error::InvalidWindowIncrement
+            FrameError::InvalidWindowIncrement
         );
     }
 

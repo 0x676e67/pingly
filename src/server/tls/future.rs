@@ -23,6 +23,7 @@ pin_project! {
     pub(crate) struct RustlsAcceptorFuture<F, I, S> {
         #[pin]
         state: RustlsAcceptState<F, I, S>,
+
         config: RustlsConfig,
     }
 }
@@ -46,11 +47,13 @@ pin_project! {
         Waiting {
             #[pin]
             future: F,
+
             handshake_timeout: Duration,
         },
         Handshaking {
             #[pin]
             future: Timeout<RustlsAccept<I>>,
+
             service: Option<S>,
         },
         Done,

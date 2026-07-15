@@ -7,17 +7,18 @@ use axum::{
 use serde::{Serialize, Serializer};
 use tokio_rustls::rustls::ProtocolVersion;
 
-use crate::proto::http2::AkamaiFingerprint;
+use crate::proto::{http2::AkamaiFingerprint, tls::TlsVersion};
 
 #[cfg(target_os = "linux")]
-use crate::proto::tcp::CapturedPacket;
+use crate::tcp::CapturedPacket;
 
-use super::inspector::{ClientHello, Http1Headers, Http2Frame, LazyClientHello};
+use super::inspector::{ClientHello, ClientHelloBuffer, Http1Headers, Http2Frame};
 
 /// A captured HTTP header field, preserving the original order.
 #[derive(Serialize)]
 pub struct HeaderField<'a> {
     name: Cow<'a, str>,
+
     value: Cow<'a, str>,
 }
 
@@ -25,11 +26,15 @@ pub struct HeaderField<'a> {
 #[derive(Serialize)]
 pub struct TlsTrackInfo {
     ja3: String,
+
     ja3_hash: String,
+
     #[serde(rename = "ja4")]
     ja4_fingerprint: String,
+
     #[serde(rename = "ja4_r")]
     ja4_raw: String,
+
     #[serde(flatten)]
     client_hello: ClientHello,
 }
@@ -41,6 +46,7 @@ pub struct Http1TrackInfo(Http1Headers);
 #[derive(Serialize)]
 pub struct Http2TrackInfo {
     akamai_fingerprint: String,
+
     akamai_fingerprint_hash: String,
 
     #[serde(serialize_with = "serialize_sent_frames")]
@@ -52,8 +58,11 @@ pub struct Http2TrackInfo {
 pub struct ConnectionTrack {
     /// The TLS protocol version that was negotiated for this connection, if any.
     tls_version_negotiated: Option<ProtocolVersion>,
-    client_hello: Option<LazyClientHello>,
+
+    client_hello: Option<ClientHelloBuffer>,
+
     http1_headers: Option<Http1Headers>,
+
     http2_frames: Option<Http2Frame>,
 }
 
@@ -63,7 +72,9 @@ pub struct ConnectionTrack {
 #[derive(Serialize)]
 pub struct TrackInfo {
     donate: &'static str,
+
     address: SocketAddr,
+
     http_version: String,
 
     #[serde(serialize_with = "serialize_method")]
@@ -112,7 +123,9 @@ impl Track {
 
 struct ProtocolTrackInfo {
     tls: Option<TlsTrackInfo>,
+
     http1: Option<Http1TrackInfo>,
+
     http2: Option<Http2TrackInfo>,
 }
 
@@ -121,21 +134,22 @@ struct ProtocolTrackInfo {
 impl TlsTrackInfo {
     /// Create a new [`TlsTrackInfo`] instance.
     pub fn new(client_hello: ClientHello) -> TlsTrackInfo {
-        let (ja3, ja3_hash) = client_hello.ja3_fingerprint();
-        let (ja4_fingerprint, ja4_raw) = client_hello.ja4_fingerprint();
+        let ja3 = client_hello.ja3();
+        let ja4 = client_hello.ja4();
 
         TlsTrackInfo {
-            ja3,
-            ja3_hash,
-            ja4_fingerprint,
-            ja4_raw,
+            ja3: ja3.raw,
+            ja3_hash: ja3.hash,
+            ja4_fingerprint: ja4.fingerprint,
+            ja4_raw: ja4.raw,
             client_hello,
         }
     }
 
     /// Set TLS version negotiated during the handshake.
     pub fn set_tls_version_negotiated(&mut self, version: Option<ProtocolVersion>) {
-        self.client_hello.set_tls_version_negotiated(version);
+        self.client_hello
+            .set_tls_version_negotiated(version.map(u16::from).map(TlsVersion::from));
     }
 }
 
@@ -170,7 +184,7 @@ impl Serialize for Http1TrackInfo {
 impl Http2TrackInfo {
     /// Create a new [`Http2TrackInfo`] instance.
     pub fn new(sent_frames: Http2Frame) -> Option<Http2TrackInfo> {
-        let akamai = AkamaiFingerprint::from_frames(&sent_frames)?;
+        let akamai = AkamaiFingerprint::from_frames(sent_frames.iter().map(|(_, frame)| frame))?;
 
         Some(Self {
             akamai_fingerprint: akamai.fingerprint,
@@ -202,7 +216,7 @@ impl ConnectionTrack {
 
     /// Set TLS client hello
     #[inline]
-    pub fn set_client_hello(&mut self, client_hello: Option<LazyClientHello>) {
+    pub fn set_client_hello(&mut self, client_hello: Option<ClientHelloBuffer>) {
         self.client_hello = client_hello;
     }
 
@@ -229,7 +243,7 @@ fn protocol_track_info(track: Track, connection_track: ConnectionTrack) -> Proto
 
     let mut tls = if track.includes_tls() {
         client_hello
-            .and_then(LazyClientHello::parse)
+            .and_then(|client_hello| client_hello.parse().ok())
             .map(TlsTrackInfo::new)
     } else {
         None

@@ -1,3 +1,4 @@
+#[path = "tcp/parser.rs"]
 mod parser;
 
 use std::{
@@ -16,21 +17,32 @@ use serde_json::Value as JsonValue;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CapturedPacket {
     pub timestamp: u64,
+
     pub direction: String,
+
     pub src_ip: String,
+
     pub dst_ip: String,
+
     pub src_port: u16,
+
     pub dst_port: u16,
+
     pub protocol: String,
+
     pub packet_size: usize,
+
     pub parsed_info: Option<JsonValue>,
 }
 
 #[derive(Debug, Clone)]
 pub struct TcpCaptureTrack {
     packets: Arc<Mutex<VecDeque<CapturedPacket>>>,
+
     max_packets: usize,
+
     server_port: u16,
+
     shutdown_flag: Arc<AtomicBool>,
 }
 

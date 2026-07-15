@@ -48,8 +48,11 @@ type ConnectInfoService = AddExtension<Router, ConnectInfo<SocketAddr>>;
 /// HTTP accept loop for a concrete stream acceptor.
 pub(crate) struct HttpServer<A = DefaultAcceptor> {
     listener: TcpListener,
+
     router: Router,
+
     acceptor: A,
+
     builder: Builder<TokioExecutor>,
 }
 

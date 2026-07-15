@@ -14,7 +14,9 @@ const DEFAULT_STDERR_PATH: &str = "/var/run/pingly.err";
 
 pub struct Daemon {
     pid_file: PathBuf,
+
     stdout_file: PathBuf,
+
     stderr_file: PathBuf,
 }
 

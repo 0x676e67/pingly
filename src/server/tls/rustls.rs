@@ -14,6 +14,7 @@ const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 #[derive(Clone)]
 pub(crate) struct RustlsAcceptor {
     config: RustlsConfig,
+
     handshake_timeout: Duration,
 }
 

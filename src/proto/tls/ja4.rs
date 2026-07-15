@@ -1,26 +1,33 @@
 use std::fmt::Write;
 
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tls_parser::TlsExtensionType;
 
 use super::{
-    enums::{is_grease_value, TlsVersion},
+    enums::TlsVersion,
     hello::{ClientHello, TlsExtension},
 };
 
 /// JA4 TLS client fingerprint, plus the raw material used to produce the hash chunks.
-pub(super) struct Ja4Fingerprint {
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Ja4Fingerprint {
     /// The final three-chunk JA4 fingerprint.
-    pub(super) fingerprint: String,
+    pub fingerprint: String,
+
     /// The unhashed JA4 form used to inspect each chunk's source material.
-    pub(super) raw: String,
+    pub raw: String,
 }
 
 impl Ja4Fingerprint {
     /// Builds a JA4 fingerprint from client-advertised ClientHello fields.
-    pub(super) fn from_client_hello(client_hello: &ClientHello) -> Self {
-        let mut ciphers = client_hello.cipher_values.clone();
-        ciphers.retain(|value| !is_grease_value(*value));
+    pub fn from_client_hello(client_hello: &ClientHello) -> Self {
+        let mut ciphers = client_hello
+            .cipher_suites
+            .iter()
+            .filter(|cipher| !cipher.is_grease())
+            .map(|cipher| cipher.id)
+            .collect::<Vec<_>>();
 
         let mut extensions = Vec::with_capacity(client_hello.extensions.len());
         let mut supported_versions = Vec::new();
@@ -106,6 +113,12 @@ impl Ja4Fingerprint {
     }
 }
 
+impl From<&ClientHello> for Ja4Fingerprint {
+    fn from(client_hello: &ClientHello) -> Self {
+        Self::from_client_hello(client_hello)
+    }
+}
+
 fn push_hex_list(out: &mut String, values: impl IntoIterator<Item = u16>) {
     for value in values {
         if !out.is_empty() && !out.ends_with('_') {
@@ -142,8 +155,8 @@ fn first_last(value: &str) -> (Option<char>, Option<char>) {
 mod tests {
     use super::{hash12, Ja4Fingerprint};
     use crate::proto::tls::{
-        enums::{ECPointFormat, NamesGroup, SignatureAlgorithm, TlsVersion},
-        hello::{ClientHello, TlsExtension},
+        enums::{ECPointFormat, SignatureAlgorithm, TlsVersion},
+        hello::{ClientHello, TlsCipherSuite, TlsExtension},
     };
     use tls_parser::TlsExtensionType;
 
@@ -273,11 +286,10 @@ mod tests {
         ClientHello {
             tls_version: TlsVersion::TLSv1_2,
             tls_version_negotiated: None,
-            cipher_values: ciphers.to_vec(),
+            cipher_suites: ciphers.iter().copied().map(TlsCipherSuite::from).collect(),
             client_random: String::new(),
             session_id: None,
             compression_algorithms: Vec::new(),
-            ciphers: Vec::new(),
             extensions: extensions
                 .iter()
                 .map(|value| match TlsExtensionType::from_u16(*value) {
@@ -288,7 +300,7 @@ mod tests {
                     TlsExtensionType::ApplicationLayerProtocolNegotiation => {
                         TlsExtension::ApplicationLayerProtocolNegotiation {
                             value: *value,
-                            data: vec!["h2".to_owned()],
+                            data: vec!["h2".into()],
                         }
                     }
                     TlsExtensionType::SupportedVersions => TlsExtension::SupportedVersions {
@@ -307,7 +319,7 @@ mod tests {
                     },
                     TlsExtensionType::SupportedGroups => TlsExtension::SupportedGroups {
                         value: *value,
-                        data: Vec::<NamesGroup>::new(),
+                        data: Vec::new(),
                     },
                     TlsExtensionType::EcPointFormats => TlsExtension::EcPointFormats {
                         value: *value,

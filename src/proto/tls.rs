@@ -7,10 +7,23 @@
 
 #[macro_use]
 mod macros;
-pub(crate) mod enums;
+mod enums;
+mod group;
 mod hello;
 mod ja3;
 mod ja4;
 mod parser;
 
-pub use hello::{ClientHello, LazyClientHello};
+pub use enums::{
+    AuthenticatedEncryptionWithAssociatedData, CertificateCompressionAlgorithm,
+    CertificateStatusType, CompressionAlgorithm, ECPointFormat, KeyDerivationFunction,
+    PskKeyExchangeMode, SignatureAlgorithm, TlsVersion,
+};
+pub use group::NamedGroup;
+pub use hello::{
+    ClientHello, ClientHelloBuffer, ClientHelloParseError, ClientHelloParseStage, ECHClientHello,
+    ECHClientHelloOuter, HpkeSymmetricCipherSuite, KeyShare, OidFilter, PskKeyExchangeModes,
+    StatusRequest, TlsCipherSuite, TlsExtension,
+};
+pub use ja3::Ja3Fingerprint;
+pub use ja4::Ja4Fingerprint;

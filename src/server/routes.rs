@@ -15,7 +15,7 @@ use axum_extra::response::ErasedJson;
 
 use super::tracker::info::{ConnectionTrack, Track, TrackInfo};
 #[cfg(target_os = "linux")]
-use crate::proto::tcp::TcpCaptureTrack;
+use crate::tcp::TcpCaptureTrack;
 use crate::{error::Error, Result};
 
 impl IntoResponse for Error {

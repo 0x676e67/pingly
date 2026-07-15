@@ -107,7 +107,6 @@ impl SignatureAlgorithm {
     /// Returns whether this signature algorithm is reserved for GREASE.
     ///
     /// See [RFC 8701, Section 2](https://www.rfc-editor.org/rfc/rfc8701.html#section-2).
-    #[allow(dead_code)]
     pub fn is_grease(self) -> bool {
         is_grease_value(self.value())
     }
@@ -203,7 +202,6 @@ impl PskKeyExchangeMode {
     /// Returns whether this PSK key exchange mode is reserved for GREASE.
     ///
     /// See [RFC 8701, Section 2](https://www.rfc-editor.org/rfc/rfc8701.html#section-2).
-    #[allow(dead_code)]
     pub fn is_grease(self) -> bool {
         matches!(
             self.value(),
@@ -212,91 +210,23 @@ impl PskKeyExchangeMode {
     }
 }
 
-enum_builder2! {
-    /// A named group identifier used for TLS key establishment.
-    ///
-    /// Unrecognized wire values are retained in `Unknown`.
-    /// See [RFC 9846, Section 4.3.7](https://www.rfc-editor.org/rfc/rfc9846.html#section-4.3.7).
-    @U16
-    pub enum NamesGroup {
-        sect163k1 => 1,
-        sect163k1_2 => 2,
-        sect163r2 => 3,
-        sect193r1 => 4,
-        sect193r2 => 5,
-        sect233k1 => 6,
-        sect233r1 => 7,
-        sect239k1 => 8,
-        sect283k1 => 9,
-        sect283r1 => 10,
-        sect409k1 => 11,
-        sect409r1 => 12,
-        sect571k1 => 13,
-        sect571r1 => 14,
-        secp160k1 => 15,
-        secp160r1 => 16,
-        secp160r2 => 17,
-        secp192k1 => 18,
-        secp192r1 => 19,
-        secp224k1 => 20,
-        P_224 => 21,
-        P_256 => 23,
-        P_384 => 24,
-        P_521 => 25,
-        X25519 => 29,
-        X448 => 30,
-        P256r1tls13 => 31,
-        P384r1tls13 => 32,
-        P521r1tls13 => 33,
-        GC256A => 34,
-        GC256B => 35,
-        GC256C => 36,
-        GC256D => 37,
-        GC512A => 38,
-        GC512B => 39,
-        GC512C => 40,
-        SM2 => 41,
-        ffdhe2048 => 256,
-        ffdhe3072 => 257,
-        ffdhe4096 => 258,
-        ffdhe6144 => 259,
-        ffdhe8192 => 260,
-        MLKEM1024 => 514,
-        X25519MLKEM768 => 4588,
-        CECPQ2 => 16696,
-        X25519Kyber768Draft00 => 25497,
-        X25519Kyber512Draft00 => 65072,
-        X25519Kyber768Draft00Old => 65073,
-        P256Kyber768Draft00 => 65074,
-    }
-}
+fn parse_serialized_identifier(value: &str) -> Option<u16> {
+    let (hex, requires_grease) = if let Some(hex) = value
+        .strip_prefix("GREASE (0x")
+        .and_then(|value| value.strip_suffix(')'))
+    {
+        (hex, true)
+    } else {
+        (
+            value
+                .strip_prefix("Unknown (0x")
+                .and_then(|value| value.strip_suffix(')'))?,
+            false,
+        )
+    };
 
-impl NamesGroup {
-    /// Returns whether this named group is reserved for GREASE.
-    ///
-    /// See [RFC 8701, Section 2](https://www.rfc-editor.org/rfc/rfc8701.html#section-2).
-    pub fn is_grease(self) -> bool {
-        is_grease_value(self.value())
-    }
-}
-
-impl ::std::fmt::Display for NamesGroup {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        match self {
-            NamesGroup::P_224 => f.write_str("P-224"),
-            NamesGroup::P_256 => f.write_str("P-256"),
-            NamesGroup::P_384 => f.write_str("P-384"),
-            NamesGroup::P_521 => f.write_str("P-521"),
-            NamesGroup::Unknown(x) => {
-                if self.is_grease() {
-                    write!(f, "GREASE ({x:#06x})")
-                } else {
-                    write!(f, "Unknown ({x:#06x})")
-                }
-            }
-            other => write!(f, "{other:?}"),
-        }
-    }
+    let value = u16::from_str_radix(hex, 16).ok()?;
+    (!requires_grease || is_grease_value(value)).then_some(value)
 }
 
 /// RFC 8701 reserves these patterned values so clients can keep TLS extension points flexible.
@@ -308,18 +238,33 @@ pub(super) const fn is_grease_value(value: u16) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{NamesGroup, PskKeyExchangeMode, SignatureAlgorithm, TlsVersion};
+    use super::{PskKeyExchangeMode, SignatureAlgorithm, TlsVersion};
+
+    #[test]
+    fn tls_identifiers_roundtrip_through_their_json_names() {
+        let version = TlsVersion::from(0x0a0a);
+        let version_json = serde_json::to_string(&version).unwrap();
+        assert_eq!(
+            serde_json::from_str::<TlsVersion>(&version_json).unwrap(),
+            version
+        );
+
+        let mode = PskKeyExchangeMode::from(0x0b);
+        let json = serde_json::to_string(&mode).unwrap();
+        assert_eq!(
+            serde_json::from_str::<PskKeyExchangeMode>(&json).unwrap(),
+            mode
+        );
+    }
 
     #[test]
     fn grease_detection_is_available_on_tls_identifier_types() {
         assert!(TlsVersion::from(0x0a0a).is_grease());
         assert!(SignatureAlgorithm::from(0xfafa).is_grease());
-        assert!(NamesGroup::from(0x2a2a).is_grease());
         assert!(PskKeyExchangeMode::from(0x0b).is_grease());
         assert!(PskKeyExchangeMode::from(0xe4).is_grease());
         assert!(!TlsVersion::from(0x0a0b).is_grease());
         assert!(!SignatureAlgorithm::from(0x0a1a).is_grease());
-        assert!(!NamesGroup::X25519.is_grease());
         assert!(!PskKeyExchangeMode::psk_dhe_ke.is_grease());
     }
 
