@@ -9,10 +9,10 @@ use super::hello::{ClientHello, TlsExtension};
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Ja3Fingerprint {
     /// The comma-delimited JA3 source string.
-    pub raw: String,
+    pub raw: Box<str>,
 
     /// The lowercase MD5 digest of `raw`.
-    pub hash: String,
+    pub hash: Box<str>,
 }
 
 impl Ja3Fingerprint {
@@ -69,7 +69,10 @@ impl Ja3Fingerprint {
         );
         let hash = md5_hex(&raw);
 
-        Self { raw, hash }
+        Self {
+            raw: raw.into_boxed_str(),
+            hash,
+        }
     }
 }
 
@@ -88,9 +91,9 @@ fn push_dec_list(out: &mut String, values: impl IntoIterator<Item = u16>) {
     }
 }
 
-fn md5_hex(input: &str) -> String {
+fn md5_hex(input: &str) -> Box<str> {
     let hash = md5::compute(input);
-    hex_encode(hash.as_slice())
+    hex_encode(hash.as_slice()).into_boxed_str()
 }
 
 #[cfg(test)]
@@ -124,10 +127,13 @@ mod tests {
         let fingerprint = Ja3Fingerprint::from_client_hello(&client_hello);
 
         assert_eq!(
-            fingerprint.raw,
+            fingerprint.raw.as_ref(),
             "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-49172-156-157-47-53,27-0-51-16-17513-23-45-13-5-35-18-43-65281-11-10-21,29-23-24,0"
         );
-        assert_eq!(fingerprint.hash, "c000e2caf3a25423f9de6c8a4b12a975");
+        assert_eq!(
+            fingerprint.hash.as_ref(),
+            "c000e2caf3a25423f9de6c8a4b12a975"
+        );
     }
 
     #[test]
@@ -151,10 +157,13 @@ mod tests {
         let fingerprint = Ja3Fingerprint::from_client_hello(&client_hello);
 
         assert_eq!(
-            fingerprint.raw,
+            fingerprint.raw.as_ref(),
             "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-49172-156-157-47-53,17613-43-45-11-13-5-35-65281-16-51-0-18-27-65037-10-23,4588-29-23-24,0"
         );
-        assert_eq!(fingerprint.hash, "d58a2a07a227719c6c34bd6f2dbd44de");
+        assert_eq!(
+            fingerprint.hash.as_ref(),
+            "d58a2a07a227719c6c34bd6f2dbd44de"
+        );
     }
 
     #[test]
@@ -178,10 +187,13 @@ mod tests {
         let fingerprint = Ja3Fingerprint::from_client_hello(&client_hello);
 
         assert_eq!(
-            fingerprint.raw,
+            fingerprint.raw.as_ref(),
             "771,4865-4867-4866-49195-49199-52393-52392-49196-49200-49162-49171-49172-156-157-47-53,0-23-65281-10-11-16-5-34-18-51-43-13-45-28-27-65037-41,4588-29-23-24-25-256-257,0"
         );
-        assert_eq!(fingerprint.hash, "f19d54c853fffdd9eeab77ae607448e9");
+        assert_eq!(
+            fingerprint.hash.as_ref(),
+            "f19d54c853fffdd9eeab77ae607448e9"
+        );
     }
 
     #[test]
@@ -196,8 +208,11 @@ mod tests {
         );
         let fingerprint = Ja3Fingerprint::from_client_hello(&client_hello);
 
-        assert_eq!(fingerprint.raw, "771,4865,0-16-10-11-13,29,0");
-        assert_eq!(fingerprint.hash, "8b24de13bfb91159e7fc8865273b000d");
+        assert_eq!(fingerprint.raw.as_ref(), "771,4865,0-16-10-11-13,29,0");
+        assert_eq!(
+            fingerprint.hash.as_ref(),
+            "8b24de13bfb91159e7fc8865273b000d"
+        );
     }
 
     fn client_hello_for_ja3(

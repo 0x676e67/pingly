@@ -92,6 +92,9 @@ impl FrameParser {
     /// as an error, so callers can append the next TCP chunk and retry. A
     /// complete malformed frame returns [`FrameParseError`], whose `consumed`
     /// field allows a capture tool to skip that frame and continue.
+    ///
+    /// HPACK decoding errors reset the connection-level compression state before
+    /// the error is returned.
     pub fn parse(&mut self, data: &[u8]) -> Result<FrameParseOutcome, FrameParseError> {
         if data.len() < FRAME_HEADER_LEN {
             return Ok(FrameParseOutcome::Incomplete);
@@ -120,6 +123,14 @@ impl FrameParser {
             }),
             Err(source) => {
                 self.pending_headers = None;
+                // httlib-hpack updates its dynamic table one field at a time. A later decoding
+                // failure can therefore leave partial state, but RFC 9113 requires the connection
+                // to terminate after COMPRESSION_ERROR:
+                // <https://www.rfc-editor.org/rfc/rfc9113#section-4.3>
+                if matches!(&source, FrameError::CompressionError) {
+                    self.hpack_decoder = Decoder::default();
+                }
+
                 Err(FrameParseError {
                     consumed: frame_len,
                     source,
@@ -509,6 +520,19 @@ mod tests {
         assert_eq!(first.headers, second.headers);
         assert_eq!(&*second.headers[0].name, b"foo");
         assert_eq!(&*second.headers[0].value, b"bar");
+    }
+
+    #[test]
+    fn hpack_decode_error_discards_partial_dynamic_table_updates() {
+        let mut parser = FrameParser::default();
+        let malformed = [0, 0, 6, 0x1, 0x4, 0, 0, 0, 1, 0x40, 1, b'x', 1, b'y', 0x80];
+        let dynamic_reference = [0, 0, 1, 0x1, 0x4, 0, 0, 0, 3, 0xbe];
+
+        let error = parser.parse(&malformed).unwrap_err();
+        assert_eq!(error.source, FrameError::CompressionError);
+
+        let error = parser.parse(&dynamic_reference).unwrap_err();
+        assert_eq!(error.source, FrameError::CompressionError);
     }
 
     #[test]

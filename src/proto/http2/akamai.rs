@@ -9,10 +9,10 @@ use super::frame::Frame;
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AkamaiFingerprint {
     /// The unhashed SETTINGS, window, PRIORITY, and pseudo-field-order groups.
-    pub fingerprint: String,
+    pub fingerprint: Box<str>,
 
     /// The lowercase hexadecimal MD5 digest used by compatible fingerprint APIs.
-    pub hash: String,
+    pub hash: Box<str>,
 }
 
 impl AkamaiFingerprint {
@@ -24,13 +24,16 @@ impl AkamaiFingerprint {
         let fingerprint = compute_fingerprint(frames);
         let hash = compute_hash(&fingerprint);
 
-        Some(Self { fingerprint, hash })
+        Some(Self {
+            fingerprint: fingerprint.into_boxed_str(),
+            hash,
+        })
     }
 }
 
-fn compute_hash(fingerprint: &str) -> String {
+fn compute_hash(fingerprint: &str) -> Box<str> {
     let hash = md5::compute(fingerprint);
-    hex_encode(hash.as_slice())
+    hex_encode(hash.as_slice()).into_boxed_str()
 }
 
 fn compute_fingerprint<'a>(frames: impl IntoIterator<Item = &'a Frame>) -> String {
@@ -143,8 +146,14 @@ mod tests {
 
         let fingerprint = AkamaiFingerprint::from_frames(&frames).unwrap();
 
-        assert_eq!(fingerprint.fingerprint, "1:65536;3:1000|983041|3:0:0:201|");
-        assert_eq!(fingerprint.hash, "acc97607debc130f466a9f588ee3a2ba");
+        assert_eq!(
+            fingerprint.fingerprint.as_ref(),
+            "1:65536;3:1000|983041|3:0:0:201|"
+        );
+        assert_eq!(
+            fingerprint.hash.as_ref(),
+            "acc97607debc130f466a9f588ee3a2ba"
+        );
     }
 
     #[test]
@@ -179,8 +188,11 @@ mod tests {
 
         let fingerprint = AkamaiFingerprint::from_frames(&frames).unwrap();
 
-        assert_eq!(fingerprint.fingerprint, "1:65536;3:1000|983041|0|");
-        assert_eq!(fingerprint.hash, "fc449c09e9d86239792bc6798d859012");
+        assert_eq!(fingerprint.fingerprint.as_ref(), "1:65536;3:1000|983041|0|");
+        assert_eq!(
+            fingerprint.hash.as_ref(),
+            "fc449c09e9d86239792bc6798d859012"
+        );
     }
 
     #[test]
@@ -225,7 +237,7 @@ mod tests {
 
         let fingerprint = AkamaiFingerprint::from_frames(&frames).unwrap();
 
-        assert_eq!(fingerprint.fingerprint, "1:65536;3:1000|3|0|");
+        assert_eq!(fingerprint.fingerprint.as_ref(), "1:65536;3:1000|3|0|");
     }
 
     #[test]
@@ -241,7 +253,7 @@ mod tests {
 
         let fingerprint = AkamaiFingerprint::from_frames(&frames).unwrap();
 
-        assert_eq!(fingerprint.fingerprint, "1:65536;3:1000|00|0|");
+        assert_eq!(fingerprint.fingerprint.as_ref(), "1:65536;3:1000|00|0|");
     }
 
     #[test]
@@ -254,7 +266,7 @@ mod tests {
             ],
         );
         let expected = AkamaiFingerprint::from_frames(&frames).unwrap();
-        assert_eq!(expected.fingerprint, "|00|0|m,p");
+        assert_eq!(expected.fingerprint.as_ref(), "|00|0|m,p");
 
         let json = serde_json::to_vec(&frames).unwrap();
         let restored: Vec<frame::Frame> = serde_json::from_slice(&json).unwrap();

@@ -41,12 +41,16 @@ pub enum Http2ParseError {
 /// header.
 #[derive(Debug)]
 pub struct Http2Parser {
+    /// Bytes retained until they form a complete preface or frame.
     buffer: BytesMut,
 
+    /// Connection-level frame and HPACK decoding state.
     frame_parser: FrameParser,
 
+    /// Whether this parser expects a client connection preface.
     requires_preface: bool,
 
+    /// Whether the expected client connection preface has been consumed.
     preface_complete: bool,
 }
 

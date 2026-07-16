@@ -83,14 +83,22 @@ fn assert_tls(browser: &str, tls: &TlsResponse) {
     let ja3 = tls.client_hello.ja3();
     let ja4 = tls.client_hello.ja4();
 
-    assert_eq!(ja3.raw, tls.ja3.as_ref(), "{browser} JA3 source");
-    assert_eq!(ja3.hash, tls.ja3_hash.as_ref(), "{browser} JA3 hash");
+    assert_eq!(ja3.raw.as_ref(), tls.ja3.as_ref(), "{browser} JA3 source");
     assert_eq!(
-        ja4.fingerprint,
+        ja3.hash.as_ref(),
+        tls.ja3_hash.as_ref(),
+        "{browser} JA3 hash"
+    );
+    assert_eq!(
+        ja4.fingerprint.as_ref(),
         tls.ja4_fingerprint.as_ref(),
         "{browser} JA4 fingerprint"
     );
-    assert_eq!(ja4.raw, tls.ja4_raw.as_ref(), "{browser} JA4 source");
+    assert_eq!(
+        ja4.raw.as_ref(),
+        tls.ja4_raw.as_ref(),
+        "{browser} JA4 source"
+    );
 
     let restored: ClientHello = json_roundtrip(&tls.client_hello);
 
@@ -121,13 +129,13 @@ fn assert_http2(sample: &BrowserSample, http2: &Http2Response) {
 
     let fingerprint = AkamaiFingerprint::from_frames(&http2.sent_frames).unwrap();
     assert_eq!(
-        fingerprint.fingerprint,
+        fingerprint.fingerprint.as_ref(),
         http2.akamai_fingerprint.as_ref(),
         "{} Akamai fingerprint",
         sample.name
     );
     assert_eq!(
-        fingerprint.hash,
+        fingerprint.hash.as_ref(),
         http2.akamai_fingerprint_hash.as_ref(),
         "{} Akamai hash",
         sample.name

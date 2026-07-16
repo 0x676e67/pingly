@@ -525,7 +525,7 @@ impl PendingHeaders {
         let mut decoded = Vec::new();
 
         if decoder.decode(&mut self.block, &mut decoded).is_err() {
-            return Err(FrameError::MalformedMessage);
+            return Err(FrameError::CompressionError);
         }
 
         let mut headers = Vec::with_capacity(decoded.len());
@@ -637,7 +637,7 @@ mod header_bytes {
         match std::str::from_utf8(value) {
             Ok(value) => value.serialize(serializer),
             Err(_) => HexBytes {
-                hex: hex::encode(value),
+                hex: hex::encode(value).into_boxed_str(),
             }
             .serialize(serializer),
         }
@@ -657,7 +657,7 @@ mod header_bytes {
 
     #[derive(Serialize)]
     struct HexBytes {
-        hex: String,
+        hex: Box<str>,
     }
 }
 

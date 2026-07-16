@@ -28,18 +28,18 @@ pub struct HeaderField<'a> {
 #[derive(Serialize)]
 pub struct TlsTrackInfo {
     /// The unhashed JA3 string built from the ClientHello.
-    ja3: String,
+    ja3: Box<str>,
 
     /// The lowercase MD5 digest of the JA3 string.
-    ja3_hash: String,
+    ja3_hash: Box<str>,
 
     /// The JA4 fingerprint derived from the ClientHello.
     #[serde(rename = "ja4")]
-    ja4_fingerprint: String,
+    ja4_fingerprint: Box<str>,
 
     /// The unhashed JA4_r representation used to inspect its input values.
     #[serde(rename = "ja4_r")]
-    ja4_raw: String,
+    ja4_raw: Box<str>,
 
     /// Parsed ClientHello fields flattened into the TLS response object.
     #[serde(flatten)]
@@ -53,10 +53,10 @@ pub struct Http1TrackInfo(Http1Headers);
 #[derive(Serialize)]
 pub struct Http2TrackInfo {
     /// The unhashed Akamai fingerprint derived from the captured client frames.
-    akamai_fingerprint: String,
+    akamai_fingerprint: Box<str>,
 
     /// The lowercase MD5 digest of the Akamai fingerprint.
-    akamai_fingerprint_hash: String,
+    akamai_fingerprint_hash: Box<str>,
 
     /// Client HTTP/2 frames retained in their original wire order.
     #[serde(serialize_with = "serialize_sent_frames")]

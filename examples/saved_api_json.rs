@@ -38,10 +38,10 @@ impl TlsResponse {
         let ja3 = self.client_hello.ja3();
         let ja4 = self.client_hello.ja4();
 
-        let matches_saved = ja3.raw == self.ja3.as_ref()
-            && ja3.hash == self.ja3_hash.as_ref()
-            && ja4.fingerprint == self.ja4_fingerprint.as_ref()
-            && ja4.raw == self.ja4_raw.as_ref();
+        let matches_saved = ja3.raw.as_ref() == self.ja3.as_ref()
+            && ja3.hash.as_ref() == self.ja3_hash.as_ref()
+            && ja4.fingerprint.as_ref() == self.ja4_fingerprint.as_ref()
+            && ja4.raw.as_ref() == self.ja4_raw.as_ref();
 
         if !matches_saved {
             return Err(invalid_data(
@@ -67,8 +67,8 @@ impl Http2Response {
         let fingerprint = AkamaiFingerprint::from_frames(&self.sent_frames)
             .ok_or_else(|| invalid_data("the HTTP/2 response contains no frames"))?;
 
-        if fingerprint.fingerprint != self.akamai_fingerprint.as_ref()
-            || fingerprint.hash != self.akamai_fingerprint_hash.as_ref()
+        if fingerprint.fingerprint.as_ref() != self.akamai_fingerprint.as_ref()
+            || fingerprint.hash.as_ref() != self.akamai_fingerprint_hash.as_ref()
         {
             return Err(invalid_data(format!(
                 "saved Akamai fingerprint {} ({}) differs from recomputed {} ({})",

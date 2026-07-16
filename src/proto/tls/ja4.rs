@@ -13,10 +13,10 @@ use super::{
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Ja4Fingerprint {
     /// The final three-chunk JA4 fingerprint.
-    pub fingerprint: String,
+    pub fingerprint: Box<str>,
 
     /// The unhashed JA4 form used to inspect each chunk's source material.
-    pub raw: String,
+    pub raw: Box<str>,
 }
 
 impl Ja4Fingerprint {
@@ -109,7 +109,10 @@ impl Ja4Fingerprint {
         );
         let raw = format!("{first_chunk}_{cipher_list}_{extension_signature_list}");
 
-        Self { fingerprint, raw }
+        Self {
+            fingerprint: fingerprint.into_boxed_str(),
+            raw: raw.into_boxed_str(),
+        }
     }
 }
 
@@ -189,11 +192,11 @@ mod tests {
         let fingerprint = Ja4Fingerprint::from_client_hello(&client_hello);
 
         assert_eq!(
-            fingerprint.fingerprint,
+            fingerprint.fingerprint.as_ref(),
             "t13d1516h2_8daaf6152771_e5627efa2ab1"
         );
         assert_eq!(
-            fingerprint.raw,
+            fingerprint.raw.as_ref(),
             "t13d1516h2_002f,0035,009c,009d,1301,1302,1303,c013,c014,c02b,c02c,c02f,c030,cca8,cca9_0005,000a,000b,000d,0012,0015,0017,001b,0023,002b,002d,0033,4469,ff01_0403,0804,0401,0503,0805,0501,0806,0601"
         );
     }
@@ -220,11 +223,11 @@ mod tests {
         let fingerprint = Ja4Fingerprint::from_client_hello(&client_hello);
 
         assert_eq!(
-            fingerprint.fingerprint,
+            fingerprint.fingerprint.as_ref(),
             "t13d1516h2_8daaf6152771_806a8c22fdea"
         );
         assert_eq!(
-            fingerprint.raw,
+            fingerprint.raw.as_ref(),
             "t13d1516h2_002f,0035,009c,009d,1301,1302,1303,c013,c014,c02b,c02c,c02f,c030,cca8,cca9_0005,000a,000b,000d,0012,0017,001b,0023,002b,002d,0033,44cd,fe0d,ff01_0904,0905,0906,0403,0804,0401,0503,0805,0501,0806,0601"
         );
     }
@@ -251,11 +254,11 @@ mod tests {
         let fingerprint = Ja4Fingerprint::from_client_hello(&client_hello);
 
         assert_eq!(
-            fingerprint.fingerprint,
+            fingerprint.fingerprint.as_ref(),
             "t13d1617h2_86a278354501_e6dcd7ae0a9e"
         );
         assert_eq!(
-            fingerprint.raw,
+            fingerprint.raw.as_ref(),
             "t13d1617h2_002f,0035,009c,009d,1301,1302,1303,c00a,c013,c014,c02b,c02c,c02f,c030,cca8,cca9_0005,000a,000b,000d,0012,0017,001b,001c,0022,0029,002b,002d,0033,fe0d,ff01_0403,0503,0603,0804,0805,0806,0401,0501,0601,0203,0201"
         );
     }
@@ -274,7 +277,7 @@ mod tests {
             .extensions
             .first()
             .is_some_and(TlsExtension::is_grease));
-        assert_eq!(fingerprint.raw, "t12d0103h2_1301_000d");
+        assert_eq!(fingerprint.raw.as_ref(), "t12d0103h2_1301_000d");
     }
 
     #[test]

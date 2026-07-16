@@ -34,6 +34,13 @@ pub enum FrameError {
     #[error("an HTTP/2 CONTINUATION frame does not match an open field block")]
     UnexpectedContinuation,
 
+    /// An HPACK field block could not be decompressed.
+    ///
+    /// RFC 9113 requires this to terminate the connection with `COMPRESSION_ERROR`.
+    /// See [RFC 9113, Section 4.3](https://www.rfc-editor.org/rfc/rfc9113#section-4.3).
+    #[error("the HTTP/2 field block contains invalid HPACK data")]
+    CompressionError,
+
     /// A request is malformed.
     #[error("the HTTP/2 frame payload is malformed")]
     MalformedMessage,

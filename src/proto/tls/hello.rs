@@ -577,7 +577,7 @@ impl Serialize for ProtocolName {
         match self.as_str() {
             Some(value) => serializer.serialize_str(value),
             None => ProtocolNameHex {
-                hex: hex::encode(self.as_bytes()),
+                hex: hex::encode(self.as_bytes()).into_boxed_str(),
             }
             .serialize(serializer),
         }
@@ -650,7 +650,7 @@ enum ProtocolNameRepr {
 /// JSON representation used when a protocol name is not valid UTF-8.
 struct ProtocolNameHex {
     /// Canonical lowercase hexadecimal bytes.
-    hex: String,
+    hex: Box<str>,
 }
 
 /// A cipher suite offered by a TLS client.

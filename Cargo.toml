@@ -12,7 +12,7 @@ documentation = "https://docs.rs/pingly"
 
 [[bin]]
 name = "pingly"
-path = "src/main.rs"
+path = "src/app/main.rs"
 required-features = ["server"]
 
 [features]

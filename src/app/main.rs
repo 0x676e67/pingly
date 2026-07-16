@@ -5,7 +5,7 @@ mod daemon;
 mod error;
 mod server;
 #[cfg(target_os = "linux")]
-#[path = "proto/tcp.rs"]
+#[path = "../proto/tcp.rs"]
 mod tcp;
 
 pub(crate) use pingly::proto;
