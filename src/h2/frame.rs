@@ -22,7 +22,7 @@ const FRAME_HEADER_LEN: usize = 9;
 ///
 /// [`FrameParser::parse`] accepts bytes beginning at an HTTP/2 frame header. It
 /// does not consume the client connection preface. Use
-/// [`crate::proto::http2::Http2Parser`] when bytes arrive as arbitrary TCP
+/// [`crate::h2::Http2Parser`] when bytes arrive as arbitrary TCP
 /// chunks or still contain the preface.
 #[derive(Debug, Default)]
 pub struct FrameParser {

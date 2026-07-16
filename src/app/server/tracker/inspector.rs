@@ -7,11 +7,10 @@ use std::{
 
 use bytes::Bytes;
 use pin_project_lite::pin_project;
+use pingly::h2::{frame, frame::Frame, HTTP2_CLIENT_PREFACE};
+pub use pingly::tls::{ClientHello, ClientHelloBuffer};
 use tokio::io::{self, AsyncRead, AsyncWrite, ReadBuf};
 use tokio_rustls::server::TlsStream;
-
-use crate::proto::http2::{frame, frame::Frame, HTTP2_CLIENT_PREFACE};
-pub use crate::proto::tls::{ClientHello, ClientHelloBuffer};
 
 pub type Http1Headers = Arc<boxcar::Vec<(Bytes, Bytes)>>;
 pub type Http2Frame = Arc<boxcar::Vec<Frame>>;

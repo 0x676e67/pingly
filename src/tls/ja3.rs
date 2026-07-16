@@ -101,7 +101,7 @@ mod tests {
     use tls_parser::TlsExtensionType;
 
     use super::Ja3Fingerprint;
-    use crate::proto::tls::{
+    use crate::tls::{
         enums::{ECPointFormat, SignatureAlgorithm, TlsVersion},
         hello::{ClientHello, HexBytes, ProtocolName, TlsCipherSuite, TlsExtension},
         NamedGroup,

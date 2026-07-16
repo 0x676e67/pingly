@@ -5,7 +5,7 @@
 
 use std::{env, fs, io, path::PathBuf};
 
-use pingly::proto::http2::{AkamaiFingerprint, Frame, Http2Parser};
+use pingly::h2::{AkamaiFingerprint, Frame, Http2Parser};
 
 const USAGE: &str =
     "usage: cargo run --example http2_connection --no-default-features -- <http2-connection.bin>";

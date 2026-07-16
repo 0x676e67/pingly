@@ -5,7 +5,6 @@ mod daemon;
 mod error;
 mod server;
 #[cfg(target_os = "linux")]
-#[path = "../proto/tcp.rs"]
 mod tcp;
 
 use std::str::FromStr;
@@ -16,7 +15,6 @@ use axum::Extension;
 use axum::{routing::any, Router};
 use clap::Parser;
 use error::Result;
-pub(crate) use pingly::proto;
 #[cfg(target_os = "linux")]
 use pingora_runtime::current_handle;
 use server::{
@@ -161,13 +159,11 @@ mod tests {
 
     #[test]
     fn log_filter_keeps_default_and_target_directives() {
-        let filter = log_filter_from("info", "pingly::proto::tls=trace").to_string();
+        let filter = log_filter_from("info", "pingly::tls=trace").to_string();
         assert!(filter.split(',').any(|value| value == "info"));
-        assert!(filter
-            .split(',')
-            .any(|value| value == "pingly::proto::tls=trace"));
+        assert!(filter.split(',').any(|value| value == "pingly::tls=trace"));
 
-        let overridden = log_filter_from("info", "warn,pingly::proto::tls=trace").to_string();
+        let overridden = log_filter_from("info", "warn,pingly::tls=trace").to_string();
         assert!(!overridden.split(',').any(|value| value == "info"));
         assert!(overridden.split(',').any(|value| value == "warn"));
     }

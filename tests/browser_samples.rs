@@ -1,5 +1,5 @@
-use pingly::proto::{
-    http2::{frame::StreamDependency, AkamaiFingerprint, Frame},
+use pingly::{
+    h2::{frame::StreamDependency, AkamaiFingerprint, Frame},
     tls::ClientHello,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};

@@ -165,7 +165,7 @@ mod tests {
     use tls_parser::TlsExtensionType;
 
     use super::{first_last, hash12, Ja4Fingerprint};
-    use crate::proto::tls::{
+    use crate::tls::{
         enums::{ECPointFormat, SignatureAlgorithm, TlsVersion},
         hello::{ClientHello, HexBytes, ProtocolName, TlsCipherSuite, TlsExtension},
     };

@@ -5,12 +5,12 @@
 //!
 //! # TLS ClientHello
 //!
-//! [`proto::tls::ClientHello::parse`] handles a complete ClientHello across one or more TLS
-//! records. For TCP chunks, append bytes to [`proto::tls::ClientHelloBuffer`] and call
+//! [`tls::ClientHello::parse`] handles a complete ClientHello across one or more TLS records. For
+//! TCP chunks, append bytes to [`tls::ClientHelloBuffer`] and call
 //! `try_parse` until it returns a value.
 //!
 //! ```no_run
-//! use pingly::proto::tls::ClientHello;
+//! use pingly::tls::ClientHello;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let record = std::fs::read("client-hello.bin")?;
@@ -28,13 +28,12 @@
 //!
 //! # HTTP/2
 //!
-//! [`proto::http2::parse_connection`] handles finite bytes beginning with the
-//! HTTP/2 client connection preface. [`proto::http2::Http2Parser`] accepts
-//! arbitrary TCP chunks, while [`proto::http2::parse_frames`] starts directly
-//! at a frame header.
+//! [`h2::parse_connection`] handles finite bytes beginning with the HTTP/2 client connection
+//! preface. [`h2::Http2Parser`] accepts arbitrary TCP chunks, while [`h2::parse_frames`] starts
+//! directly at a frame header.
 //!
 //! ```no_run
-//! use pingly::proto::http2::{parse_connection, AkamaiFingerprint};
+//! use pingly::h2::{parse_connection, AkamaiFingerprint};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let bytes = std::fs::read("http2-connection.bin")?;
@@ -42,7 +41,7 @@
 //! let fingerprint = AkamaiFingerprint::from_frames(&frames);
 //!
 //! let json = serde_json::to_vec_pretty(&frames)?;
-//! let restored = serde_json::from_slice::<Vec<pingly::proto::http2::Frame>>(&json)?;
+//! let restored = serde_json::from_slice::<Vec<pingly::h2::Frame>>(&json)?;
 //! assert_eq!(AkamaiFingerprint::from_frames(&restored), fingerprint);
 //! # Ok(())
 //! # }
@@ -53,4 +52,5 @@
 #![deny(missing_docs)]
 #![cfg_attr(test, deny(warnings))]
 
-pub mod proto;
+pub mod h2;
+pub mod tls;

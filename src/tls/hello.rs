@@ -2143,7 +2143,7 @@ mod tests {
         ClientHello, ClientHelloBuffer, ClientHelloParseStage, ECHClientHelloOuter, HexBytes,
         KeyShare, ProtocolName, StatusRequest, TlsCipherSuite, TlsExtension,
     };
-    use crate::proto::tls::{CompressionAlgorithm, NamedGroup, TlsVersion};
+    use crate::tls::{CompressionAlgorithm, NamedGroup, TlsVersion};
 
     fn tls_record(payload: &[u8]) -> Vec<u8> {
         let length = u16::try_from(payload.len()).unwrap();

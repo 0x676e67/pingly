@@ -2,8 +2,8 @@
 
 use std::io;
 
-use pingly::proto::{
-    http2::{AkamaiFingerprint, Frame},
+use pingly::{
+    h2::{AkamaiFingerprint, Frame},
     tls::{ClientHello, Ja3Fingerprint, Ja4Fingerprint},
 };
 use serde::Deserialize;

@@ -203,7 +203,7 @@ mod tests {
     use super::{
         parse_connection, parse_frames, Http2ParseError, Http2Parser, HTTP2_CLIENT_PREFACE,
     };
-    use crate::proto::http2::frame::Frame;
+    use crate::h2::frame::Frame;
 
     const SETTINGS_FRAME: &[u8] = &[0, 0, 6, 0x04, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0x10, 0];
 

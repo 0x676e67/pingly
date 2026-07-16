@@ -41,7 +41,7 @@ pingly = { version = "0.1", default-features = false }
 And then parse a captured TLS ClientHello:
 
 ```rust
-use pingly::proto::tls::ClientHello;
+use pingly::tls::ClientHello;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The capture may contain a ClientHello split across several TLS records.

@@ -4,11 +4,11 @@ use axum::{
     body::Body,
     http::{header::USER_AGENT, HeaderValue, Method, Request},
 };
+use pingly::{h2::AkamaiFingerprint, tls::TlsVersion};
 use serde::{Serialize, Serializer};
 use tokio_rustls::rustls::ProtocolVersion;
 
 use super::inspector::{ClientHello, ClientHelloBuffer, Http1Headers, Http2Frame};
-use crate::proto::{http2::AkamaiFingerprint, tls::TlsVersion};
 #[cfg(target_os = "linux")]
 use crate::tcp::CapturedPacket;
 

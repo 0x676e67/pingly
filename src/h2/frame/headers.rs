@@ -666,7 +666,7 @@ mod tests {
     use serde_json::json;
 
     use super::{HeaderField, HeadersFlag, HeadersFlagName, HeadersFlags, HeadersFrame};
-    use crate::proto::http2::frame::{FrameError, FrameType, StreamDependency};
+    use crate::h2::frame::{FrameError, FrameType, StreamDependency};
 
     #[test]
     fn header_field_serializes_name_and_value_separately() {

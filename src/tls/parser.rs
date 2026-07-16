@@ -222,7 +222,7 @@ mod tests {
         parse_tls_extension_certificate_compression, parse_tls_extension_delegated_credentials,
         parse_tls_extension_ech,
     };
-    use crate::proto::tls::hello::{ECHClientHello, TlsExtension};
+    use crate::tls::hello::{ECHClientHello, TlsExtension};
 
     #[test]
     fn ech_outer_preserves_payload_length() {

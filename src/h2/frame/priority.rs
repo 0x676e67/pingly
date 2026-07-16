@@ -175,7 +175,7 @@ impl TryFrom<&[u8]> for StreamDependency {
 #[cfg(test)]
 mod tests {
     use super::{PriorityFrame, StreamDependency};
-    use crate::proto::http2::frame::FrameError;
+    use crate::h2::frame::FrameError;
 
     #[test]
     fn priority_requires_a_nonzero_distinct_stream_dependency() {

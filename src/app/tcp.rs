@@ -1,4 +1,3 @@
-#[path = "tcp/parser.rs"]
 mod parser;
 
 use std::{

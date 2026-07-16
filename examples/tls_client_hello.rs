@@ -2,7 +2,7 @@
 
 use std::{env, fs, io, path::PathBuf};
 
-use pingly::proto::tls::{ClientHello, ClientHelloBuffer};
+use pingly::tls::{ClientHello, ClientHelloBuffer};
 
 const USAGE: &str =
     "usage: cargo run --example tls_client_hello --no-default-features -- <client-hello.bin>";
