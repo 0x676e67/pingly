@@ -1,7 +1,20 @@
+macro_rules! identifier_is_grease {
+    ($value:expr, STANDARD_GREASE) => {
+        is_grease_value($value)
+    };
+    ($value:expr, PSK_GREASE) => {
+        is_psk_key_exchange_mode_grease($value)
+    };
+    ($value:expr, NO_GREASE) => {
+        false
+    };
+}
+
 macro_rules! impl_enum_deserialize {
     (
         $enum_name:ident,
         $wire_type:ty,
+        $grease_policy:ident,
         { $($enum_var:ident),* $(,)? }
     ) => {
         impl<'de> ::serde::Deserialize<'de> for $enum_name {
@@ -28,6 +41,11 @@ macro_rules! impl_enum_deserialize {
                         match value {
                             $(stringify!($enum_var) => Ok($enum_name::$enum_var),)*
                             value => parse_serialized_identifier(value)
+                                .and_then(|(value, requires_grease)| {
+                                    (requires_grease
+                                        == identifier_is_grease!(value, $grease_policy))
+                                    .then_some(value)
+                                })
                                 .and_then(|value| <$wire_type>::try_from(value).ok())
                                 .map($enum_name::from)
                                 .ok_or_else(|| E::custom(format_args!(
@@ -48,6 +66,7 @@ macro_rules! enum_builder {
     (
         $(#[$m:meta])*
         @U8
+        $grease_policy:ident
         $enum_vis:vis enum $enum_name:ident
         { $( $(#[$enum_meta:meta])* $enum_var: ident => $enum_val: expr ),* $(,)? }
     ) => {
@@ -56,6 +75,7 @@ macro_rules! enum_builder {
         $enum_vis enum $enum_name {
             $(
                 $(#[$enum_meta])*
+                #[doc = concat!("The registered ", stringify!($enum_var), " identifier.")]
                 $enum_var
             ),*
             ,
@@ -87,7 +107,13 @@ macro_rules! enum_builder {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 match self {
                     $( $enum_name::$enum_var => write!(f, stringify!($enum_var))),*
-                    ,$enum_name::Unknown(x) => write!(f, "Unknown ({x:#06x})"),
+                    ,$enum_name::Unknown(x) => {
+                        if identifier_is_grease!(u16::from(*x), $grease_policy) {
+                            write!(f, "GREASE ({x:#06x})")
+                        } else {
+                            write!(f, "Unknown ({x:#06x})")
+                        }
+                    },
                 }
             }
         }
@@ -102,11 +128,12 @@ macro_rules! enum_builder {
             }
         }
 
-        impl_enum_deserialize!($enum_name, u8, { $($enum_var),* });
+        impl_enum_deserialize!($enum_name, u8, $grease_policy, { $($enum_var),* });
     };
     (
         $(#[$m:meta])*
         @U16
+        $grease_policy:ident
         $enum_vis:vis enum $enum_name:ident
         { $( $(#[$enum_meta:meta])* $enum_var: ident => $enum_val: expr ),* $(,)? }
     ) => {
@@ -115,6 +142,7 @@ macro_rules! enum_builder {
         $enum_vis enum $enum_name {
             $(
                 $(#[$enum_meta])*
+                #[doc = concat!("The registered ", stringify!($enum_var), " identifier.")]
                 $enum_var
             ),*
             ,
@@ -146,11 +174,13 @@ macro_rules! enum_builder {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> ::std::fmt::Result {
                 match self {
                     $( $enum_name::$enum_var => write!(f, stringify!($enum_var))),*
-                    ,$enum_name::Unknown(x) => if is_grease_value(*x) {
-                        write!(f, "GREASE ({x:#06x})")
+                    ,$enum_name::Unknown(x) => {
+                        if identifier_is_grease!(*x, $grease_policy) {
+                            write!(f, "GREASE ({x:#06x})")
                         } else {
-                        write!(f, "Unknown ({x:#06x})")
+                            write!(f, "Unknown ({x:#06x})")
                         }
+                    },
                 }
             }
         }
@@ -165,7 +195,7 @@ macro_rules! enum_builder {
             }
         }
 
-        impl_enum_deserialize!($enum_name, u16, { $($enum_var),* });
+        impl_enum_deserialize!($enum_name, u16, $grease_policy, { $($enum_var),* });
 
     };
 }

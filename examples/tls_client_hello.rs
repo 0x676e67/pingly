@@ -1,4 +1,4 @@
-//! Parse a TLS ClientHello from captured record bytes.
+//! Parse a TLS ClientHello from captured TLS record bytes.
 
 use std::{env, fs, io, path::PathBuf};
 
@@ -13,8 +13,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut buffer = ClientHelloBuffer::new();
     let mut client_hello = None;
 
-    // A TCP reader can split the record at any byte. Fixed-size chunks make the
-    // example exercise the same incremental API without requiring a live socket.
+    // TCP reads and TLS record boundaries are independent. Fixed-size chunks make the example
+    // exercise incremental record reassembly without requiring a live socket.
     for chunk in bytes.chunks(256) {
         let accepted = buffer.extend(chunk);
 
@@ -26,7 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if accepted != chunk.len() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "the ClientHello exceeds the maximum supported TLS record size",
+                "the ClientHello exceeds the configured capture limit",
             )
             .into());
         }
@@ -35,7 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client_hello = client_hello.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::UnexpectedEof,
-            "the capture ends before a complete ClientHello record",
+            "the capture ends before a complete ClientHello handshake",
         )
     })?;
 

@@ -10,6 +10,7 @@ pub use headers::{
     ContinuationFlag, ContinuationFlagName, ContinuationFlags, ContinuationFrame, HeaderField,
     HeadersFlag, HeadersFlagName, HeadersFlags, HeadersFrame,
 };
+use httlib_hpack::Decoder;
 pub use priority::{PriorityFrame, StreamDependency};
 use serde::{de, Deserialize, Deserializer, Serialize};
 pub use settings::{Setting, SettingValue, SettingsFrame};
@@ -26,6 +27,10 @@ const FRAME_HEADER_LEN: usize = 9;
 #[derive(Debug, Default)]
 pub struct FrameParser {
     pending_headers: Option<PendingHeaders>,
+
+    // HPACK's dynamic table is a connection-level decoding context. See RFC 7541 Section 2.2:
+    // <https://www.rfc-editor.org/rfc/rfc7541#section-2.2>
+    hpack_decoder: Decoder<'static>,
 }
 
 /// The result of parsing bytes that begin at an HTTP/2 frame boundary.
@@ -127,6 +132,7 @@ impl FrameParser {
     #[inline]
     pub fn reset(&mut self) {
         self.pending_headers = None;
+        self.hpack_decoder = Decoder::default();
     }
 
     /// Returns whether the next frame must be a CONTINUATION frame.
@@ -157,14 +163,20 @@ impl FrameParser {
             let Some(pending) = self.pending_headers.take() else {
                 return Err(FrameError::MalformedMessage);
             };
-            return pending.finish().map(Frame::Headers).map(Some);
+            return pending
+                .finish(&mut self.hpack_decoder)
+                .map(Frame::Headers)
+                .map(Some);
         }
 
         match ty {
             0x1 => {
                 let pending = PendingHeaders::try_from((flags, stream_id, payload))?;
                 if pending.is_complete() {
-                    pending.finish().map(Frame::Headers).map(Some)
+                    pending
+                        .finish(&mut self.hpack_decoder)
+                        .map(Frame::Headers)
+                        .map(Some)
                 } else {
                     self.pending_headers = Some(pending);
                     Ok(None)
@@ -307,6 +319,7 @@ pub enum FrameType {
 /// payload information. See
 /// [RFC 9113, Section 4.1](https://www.rfc-editor.org/rfc/rfc9113#section-4.1).
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "UnknownFrameRepr")]
 pub struct UnknownFrame {
     /// The model category, always [`FrameType::Unknown`].
     pub frame_type: FrameType,
@@ -325,6 +338,59 @@ pub struct UnknownFrame {
 
     /// The payload retained verbatim.
     pub payload: Vec<u8>,
+}
+
+/// Deserialization shape used to validate a frame retained as unknown.
+#[derive(Deserialize)]
+struct UnknownFrameRepr {
+    /// Saved model category.
+    frame_type: FrameType,
+
+    /// Original 8-bit frame type.
+    type_id: u8,
+
+    /// Original 31-bit stream identifier.
+    stream_id: u32,
+
+    /// Saved payload length.
+    length: usize,
+
+    /// Original flag byte.
+    flags: u8,
+
+    /// Original payload bytes.
+    payload: Vec<u8>,
+}
+
+impl TryFrom<UnknownFrameRepr> for UnknownFrame {
+    type Error = &'static str;
+
+    fn try_from(repr: UnknownFrameRepr) -> Result<Self, Self::Error> {
+        if repr.frame_type != FrameType::Unknown {
+            return Err("unknown frame_type must be Unknown");
+        }
+        if matches!(repr.type_id, 0x1 | 0x2 | 0x4 | 0x8 | 0x9) {
+            return Err("a supported HTTP/2 frame type cannot use UnknownFrame");
+        }
+        if repr.stream_id > 0x7fff_ffff {
+            return Err("unknown frame stream_id must be a 31-bit value");
+        }
+        if repr.length > 0x00ff_ffff {
+            return Err("unknown frame payload length exceeds the HTTP/2 frame limit");
+        }
+        if repr.length != repr.payload.len() {
+            return Err("unknown frame length does not match its payload");
+        }
+
+        Ok(Self {
+            frame_type: repr.frame_type,
+            type_id: repr.type_id,
+            stream_id: repr.stream_id,
+            length: repr.length,
+            flags: repr.flags,
+            payload: repr.payload,
+        })
+    }
 }
 
 impl TryFrom<(u8, u8, u32, &[u8])> for Frame {
@@ -374,10 +440,10 @@ mod tests {
             panic!("expected the completed HEADERS frame");
         };
 
-        assert_eq!(&*frame.headers[0].name, ":method");
-        assert_eq!(&*frame.headers[0].value, "GET");
-        assert_eq!(&*frame.headers[1].name, ":path");
-        assert_eq!(&*frame.headers[1].value, "/");
+        assert_eq!(&*frame.headers[0].name, b":method");
+        assert_eq!(&*frame.headers[0].value, b"GET");
+        assert_eq!(&*frame.headers[1].name, b":path");
+        assert_eq!(&*frame.headers[1].value, b"/");
         assert_eq!(frame.continuations.len(), 1);
 
         let json = serde_json::to_vec(&frame).unwrap();
@@ -423,5 +489,48 @@ mod tests {
         let json = serde_json::to_vec(&frame).unwrap();
         let restored: UnknownFrame = serde_json::from_slice(&json).unwrap();
         assert_eq!(restored, frame);
+    }
+
+    #[test]
+    fn hpack_dynamic_table_is_shared_across_field_sections() {
+        let mut parser = FrameParser::default();
+        let first = [
+            0, 0, 9, 0x1, 0x4, 0, 0, 0, 1, 0x40, 3, b'f', b'o', b'o', 3, b'b', b'a', b'r',
+        ];
+        let second = [0, 0, 1, 0x1, 0x4, 0, 0, 0, 3, 0xbe];
+
+        let Some(Frame::Headers(first)) = parser.parse(&first).unwrap().into_frame() else {
+            panic!("expected the first HEADERS frame");
+        };
+        let Some(Frame::Headers(second)) = parser.parse(&second).unwrap().into_frame() else {
+            panic!("expected the second HEADERS frame");
+        };
+
+        assert_eq!(first.headers, second.headers);
+        assert_eq!(&*second.headers[0].name, b"foo");
+        assert_eq!(&*second.headers[0].value, b"bar");
+    }
+
+    #[test]
+    fn unknown_frame_deserialization_rejects_supported_types_and_bad_lengths() {
+        let supported_type = r#"{
+            "frame_type":"Unknown",
+            "type_id":1,
+            "stream_id":1,
+            "length":1,
+            "flags":0,
+            "payload":[0]
+        }"#;
+        let bad_length = r#"{
+            "frame_type":"Unknown",
+            "type_id":10,
+            "stream_id":1,
+            "length":2,
+            "flags":0,
+            "payload":[0]
+        }"#;
+
+        assert!(serde_json::from_str::<UnknownFrame>(supported_type).is_err());
+        assert!(serde_json::from_str::<UnknownFrame>(bad_length).is_err());
     }
 }

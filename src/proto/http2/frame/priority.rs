@@ -7,6 +7,7 @@ use super::{FrameError, FrameType};
 /// This frame is deprecated but its wire format remains defined by
 /// [RFC 9113, Section 6.3](https://www.rfc-editor.org/rfc/rfc9113#section-6.3).
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "PriorityFrameRepr")]
 pub struct PriorityFrame {
     /// The type of the frame, which is always `FrameType::Priority`.
     pub frame_type: FrameType,
@@ -21,8 +22,25 @@ pub struct PriorityFrame {
     pub priority: StreamDependency,
 }
 
+/// Deserialization shape used to validate a saved PRIORITY frame.
+#[derive(Deserialize)]
+struct PriorityFrameRepr {
+    /// Saved frame category.
+    frame_type: FrameType,
+
+    /// Stream that carries the PRIORITY frame.
+    stream_id: u32,
+
+    /// Saved payload length.
+    length: usize,
+
+    /// Decoded dependency fields.
+    priority: StreamDependency,
+}
+
 /// Represents a stream dependency in HTTP/2 priority frames.
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "StreamDependencyRepr")]
 pub struct StreamDependency {
     /// The effective stream weight after decoding the wire value (range 1..=256).
     /// RFC 7540 Section 5.3.2 encodes weights as one less than their effective value:
@@ -36,7 +54,68 @@ pub struct StreamDependency {
     pub exclusive: u8,
 }
 
+/// Deserialization shape used to validate decoded priority fields.
+#[derive(Deserialize)]
+struct StreamDependencyRepr {
+    /// Effective decoded weight.
+    weight: u16,
+
+    /// Stream dependency identifier.
+    depends_on: u32,
+
+    /// Numeric exclusive bit.
+    exclusive: u8,
+}
+
 // ==== impl PriorityFrame ====
+
+impl TryFrom<PriorityFrameRepr> for PriorityFrame {
+    type Error = &'static str;
+
+    fn try_from(repr: PriorityFrameRepr) -> Result<Self, Self::Error> {
+        if repr.frame_type != FrameType::Priority {
+            return Err("PRIORITY frame_type must be Priority");
+        }
+        if repr.stream_id == 0 || repr.stream_id > 0x7fff_ffff {
+            return Err("PRIORITY stream_id must be a nonzero 31-bit value");
+        }
+        if repr.length != 5 {
+            return Err("PRIORITY payload length must be five");
+        }
+        if repr.priority.depends_on == repr.stream_id {
+            return Err("a stream cannot depend on itself");
+        }
+
+        Ok(Self {
+            frame_type: repr.frame_type,
+            stream_id: repr.stream_id,
+            length: repr.length,
+            priority: repr.priority,
+        })
+    }
+}
+
+impl TryFrom<StreamDependencyRepr> for StreamDependency {
+    type Error = &'static str;
+
+    fn try_from(repr: StreamDependencyRepr) -> Result<Self, Self::Error> {
+        if !(1..=256).contains(&repr.weight) {
+            return Err("priority weight must be in the inclusive range 1..=256");
+        }
+        if repr.depends_on > 0x7fff_ffff {
+            return Err("priority dependency must be a 31-bit stream identifier");
+        }
+        if repr.exclusive > 1 {
+            return Err("priority exclusive value must be zero or one");
+        }
+
+        Ok(Self {
+            weight: repr.weight,
+            depends_on: repr.depends_on,
+            exclusive: repr.exclusive,
+        })
+    }
+}
 
 impl TryFrom<(u32, &[u8])> for PriorityFrame {
     type Error = FrameError;
@@ -115,5 +194,19 @@ mod tests {
         let priority = StreamDependency::try_from(&[0, 0, 0, 0, 0xff][..]).unwrap();
 
         assert_eq!(priority.weight, 256);
+    }
+
+    #[test]
+    fn priority_deserialization_rejects_invalid_ranges() {
+        let bad_weight = r#"{"weight":0,"depends_on":0,"exclusive":0}"#;
+        let bad_frame = r#"{
+            "frame_type":"Priority",
+            "stream_id":3,
+            "length":5,
+            "priority":{"weight":16,"depends_on":3,"exclusive":0}
+        }"#;
+
+        assert!(serde_json::from_str::<StreamDependency>(bad_weight).is_err());
+        assert!(serde_json::from_str::<PriorityFrame>(bad_frame).is_err());
     }
 }

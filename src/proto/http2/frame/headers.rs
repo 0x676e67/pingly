@@ -9,17 +9,23 @@ use super::{priority::StreamDependency, FrameError, FrameType};
 /// [RFC 9113, Section 8.2](https://www.rfc-editor.org/rfc/rfc9113#section-8.2).
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HeaderField {
-    /// The decoded field name, including the leading `:` for pseudo-fields.
-    pub name: Box<str>,
+    /// The decoded field name bytes, including the leading `:` for pseudo-fields.
+    ///
+    /// HPACK treats field names and values as opaque octet sequences. Valid UTF-8 is serialized
+    /// as a JSON string; other byte sequences use an object containing lowercase hexadecimal.
+    #[serde(with = "header_bytes")]
+    pub name: Box<[u8]>,
 
-    /// The decoded field value.
-    pub value: Box<str>,
+    /// The decoded field value bytes.
+    #[serde(with = "header_bytes")]
+    pub value: Box<[u8]>,
 }
 
 /// A decoded HTTP/2 HEADERS frame.
 ///
 /// See [RFC 9113, Section 6.2](https://www.rfc-editor.org/rfc/rfc9113#section-6.2).
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "HeadersFrameRepr")]
 pub struct HeadersFrame {
     /// The type of the frame
     pub frame_type: FrameType,
@@ -45,10 +51,38 @@ pub struct HeadersFrame {
     pub continuations: Vec<ContinuationFrame>,
 }
 
+/// Deserialization shape used to validate a saved HEADERS frame and its continuations.
+#[derive(Deserialize)]
+struct HeadersFrameRepr {
+    /// Saved frame category.
+    frame_type: FrameType,
+
+    /// Stream that owns the field section.
+    stream_id: u32,
+
+    /// Opening HEADERS payload length.
+    length: usize,
+
+    /// Decoded fields in wire order.
+    headers: Vec<HeaderField>,
+
+    /// Opening HEADERS flags.
+    flags: HeadersFlags,
+
+    /// Optional decoded priority fields.
+    #[serde(default)]
+    priority: Option<StreamDependency>,
+
+    /// CONTINUATION metadata in wire order.
+    #[serde(default)]
+    continuations: Vec<ContinuationFrame>,
+}
+
 /// A CONTINUATION frame associated with a decoded HEADERS field block.
 ///
 /// See [RFC 9113, Section 6.10](https://www.rfc-editor.org/rfc/rfc9113#section-6.10).
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "ContinuationFrameRepr")]
 pub struct ContinuationFrame {
     /// The frame type, always [`FrameType::Continuation`].
     pub frame_type: FrameType,
@@ -61,6 +95,22 @@ pub struct ContinuationFrame {
 
     /// The associated CONTINUATION flags.
     pub flags: ContinuationFlags,
+}
+
+/// Deserialization shape used to validate saved CONTINUATION metadata.
+#[derive(Deserialize)]
+struct ContinuationFrameRepr {
+    /// Saved frame category.
+    frame_type: FrameType,
+
+    /// Stream that owns the field section.
+    stream_id: u32,
+
+    /// CONTINUATION payload length.
+    length: usize,
+
+    /// CONTINUATION flags.
+    flags: ContinuationFlags,
 }
 
 /// An HTTP/2 CONTINUATION flag byte and the set bits decoded from it.
@@ -112,7 +162,7 @@ pub(super) struct PendingHeaders {
     /// The stream that owns the incomplete field block.
     stream_id: u32,
 
-    /// The accumulated payload length across HEADERS and CONTINUATION frames.
+    /// The opening HEADERS payload length, excluding the 9-byte frame header.
     length: usize,
 
     /// The flags from the opening HEADERS frame.
@@ -349,6 +399,98 @@ impl From<u8> for ContinuationFlag {
     }
 }
 
+impl TryFrom<ContinuationFrameRepr> for ContinuationFrame {
+    type Error = &'static str;
+
+    fn try_from(repr: ContinuationFrameRepr) -> Result<Self, Self::Error> {
+        if repr.frame_type != FrameType::Continuation {
+            return Err("CONTINUATION frame_type must be Continuation");
+        }
+        if repr.stream_id == 0 || repr.stream_id > 0x7fff_ffff {
+            return Err("CONTINUATION stream_id must be a nonzero 31-bit value");
+        }
+        if repr.length > 0x00ff_ffff {
+            return Err("CONTINUATION payload length exceeds the HTTP/2 frame limit");
+        }
+
+        Ok(Self {
+            frame_type: repr.frame_type,
+            stream_id: repr.stream_id,
+            length: repr.length,
+            flags: repr.flags,
+        })
+    }
+}
+
+impl TryFrom<HeadersFrameRepr> for HeadersFrame {
+    type Error = &'static str;
+
+    fn try_from(repr: HeadersFrameRepr) -> Result<Self, Self::Error> {
+        if repr.frame_type != FrameType::Headers {
+            return Err("HEADERS frame_type must be Headers");
+        }
+        if repr.stream_id == 0 || repr.stream_id > 0x7fff_ffff {
+            return Err("HEADERS stream_id must be a nonzero 31-bit value");
+        }
+        if repr.length > 0x00ff_ffff {
+            return Err("HEADERS payload length exceeds the HTTP/2 frame limit");
+        }
+
+        let prefix_length =
+            usize::from(repr.flags.has_padding()) + if repr.flags.has_priority() { 5 } else { 0 };
+        if repr.length < prefix_length {
+            return Err("HEADERS payload is too short for its flagged prefix fields");
+        }
+        if repr.flags.has_priority() != repr.priority.is_some() {
+            return Err("HEADERS PRIORITY flag does not match its priority fields");
+        }
+        if repr
+            .priority
+            .as_ref()
+            .is_some_and(|priority| priority.depends_on == repr.stream_id)
+        {
+            return Err("a HEADERS stream cannot depend on itself");
+        }
+        if repr
+            .headers
+            .iter()
+            .any(|header| header.name.as_ref() == b":")
+        {
+            return Err("a pseudo-header name cannot contain only a colon");
+        }
+
+        if repr.flags.has_end_headers() {
+            if !repr.continuations.is_empty() {
+                return Err("END_HEADERS opening frames cannot have CONTINUATION metadata");
+            }
+        } else {
+            if repr.continuations.is_empty() {
+                return Err("an incomplete HEADERS frame requires CONTINUATION metadata");
+            }
+            let continuation_count = repr.continuations.len();
+            for (index, continuation) in repr.continuations.iter().enumerate() {
+                if continuation.stream_id != repr.stream_id {
+                    return Err("CONTINUATION stream_id does not match the opening HEADERS frame");
+                }
+                let is_last = index + 1 == continuation_count;
+                if continuation.flags.has_end_headers() != is_last {
+                    return Err("only the final CONTINUATION frame may set END_HEADERS");
+                }
+            }
+        }
+
+        Ok(Self {
+            frame_type: repr.frame_type,
+            stream_id: repr.stream_id,
+            length: repr.length,
+            headers: repr.headers,
+            flags: repr.flags,
+            priority: repr.priority,
+            continuations: repr.continuations,
+        })
+    }
+}
+
 // ==== impl PendingHeaders ====
 
 impl PendingHeaders {
@@ -379,8 +521,7 @@ impl PendingHeaders {
         Ok(complete)
     }
 
-    pub(super) fn finish(mut self) -> Result<HeadersFrame, FrameError> {
-        let mut decoder = Decoder::default();
+    pub(super) fn finish(mut self, decoder: &mut Decoder<'_>) -> Result<HeadersFrame, FrameError> {
         let mut decoded = Vec::new();
 
         if decoder.decode(&mut self.block, &mut decoded).is_err() {
@@ -395,8 +536,8 @@ impl PendingHeaders {
             }
 
             headers.push(HeaderField {
-                name: into_boxed_utf8_lossy(name),
-                value: into_boxed_utf8_lossy(value),
+                name: name.into_boxed_slice(),
+                value: value.into_boxed_slice(),
             });
         }
 
@@ -474,16 +615,49 @@ impl TryFrom<(u8, u32, &[u8])> for HeadersFrame {
             return Err(FrameError::ExpectedContinuation);
         }
 
-        pending.finish()
+        let mut decoder = Decoder::default();
+        pending.finish(&mut decoder)
     }
 }
 
-fn into_boxed_utf8_lossy(value: Vec<u8>) -> Box<str> {
-    match String::from_utf8(value) {
-        Ok(value) => value.into_boxed_str(),
-        Err(error) => String::from_utf8_lossy(&error.into_bytes())
-            .into_owned()
-            .into_boxed_str(),
+mod header_bytes {
+    use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Repr {
+        Text(Box<str>),
+        Bytes { hex: Box<str> },
+    }
+
+    pub(super) fn serialize<S>(value: &[u8], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match std::str::from_utf8(value) {
+            Ok(value) => value.serialize(serializer),
+            Err(_) => HexBytes {
+                hex: hex::encode(value),
+            }
+            .serialize(serializer),
+        }
+    }
+
+    pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<Box<[u8]>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match Repr::deserialize(deserializer)? {
+            Repr::Text(value) => Ok(value.as_bytes().into()),
+            Repr::Bytes { hex } => hex::decode(hex.as_ref())
+                .map(Vec::into_boxed_slice)
+                .map_err(de::Error::custom),
+        }
+    }
+
+    #[derive(Serialize)]
+    struct HexBytes {
+        hex: String,
     }
 }
 
@@ -491,17 +665,14 @@ fn into_boxed_utf8_lossy(value: Vec<u8>) -> Box<str> {
 mod tests {
     use serde_json::json;
 
-    use super::{
-        into_boxed_utf8_lossy, HeaderField, HeadersFlag, HeadersFlagName, HeadersFlags,
-        HeadersFrame,
-    };
-    use crate::proto::http2::frame::{FrameError, FrameType};
+    use super::{HeaderField, HeadersFlag, HeadersFlagName, HeadersFlags, HeadersFrame};
+    use crate::proto::http2::frame::{FrameError, FrameType, StreamDependency};
 
     #[test]
     fn header_field_serializes_name_and_value_separately() {
         let header = HeaderField {
-            name: Box::from(":method"),
-            value: Box::from("GET"),
+            name: Box::from(&b":method"[..]),
+            value: Box::from(&b"GET"[..]),
         };
 
         assert_eq!(
@@ -531,12 +702,17 @@ mod tests {
     }
 
     #[test]
-    fn header_text_is_boxed_with_lossy_utf8_fallback() {
-        assert_eq!(
-            &*into_boxed_utf8_lossy(b"content-type".to_vec()),
-            "content-type"
-        );
-        assert_eq!(&*into_boxed_utf8_lossy(vec![0xff]), "\u{fffd}");
+    fn non_utf8_header_bytes_roundtrip_without_loss() {
+        let header = HeaderField {
+            name: Box::from(&b"x-bytes"[..]),
+            value: Box::from(&[0xff, 0x00][..]),
+        };
+
+        let json = serde_json::to_value(&header).unwrap();
+        assert_eq!(json, json!({"name": "x-bytes", "value": {"hex": "ff00"}}));
+
+        let restored: HeaderField = serde_json::from_value(json).unwrap();
+        assert_eq!(restored, header);
     }
 
     #[test]
@@ -544,19 +720,24 @@ mod tests {
         let frame = HeadersFrame {
             frame_type: FrameType::Headers,
             stream_id: 1,
-            length: 0,
+            length: 5,
             headers: Vec::new(),
             flags: HeadersFlags::from(0x25),
-            priority: None,
+            priority: Some(StreamDependency {
+                weight: 1,
+                depends_on: 0,
+                exclusive: 0,
+            }),
             continuations: Vec::new(),
         };
 
+        let json = serde_json::to_value(frame).unwrap();
         assert_eq!(
-            serde_json::to_value(frame).unwrap(),
+            json,
             json!({
                 "frame_type": "Headers",
                 "stream_id": 1,
-                "length": 0,
+                "length": 5,
                 "headers": [],
                 "flags": {
                     "raw": 37,
@@ -565,9 +746,15 @@ mod tests {
                         {"id": 4, "name": "EndHeaders"},
                         {"id": 32, "name": "Priority"}
                     ]
+                },
+                "priority": {
+                    "weight": 1,
+                    "depends_on": 0,
+                    "exclusive": 0
                 }
             })
         );
+        assert!(serde_json::from_value::<HeadersFrame>(json).is_ok());
     }
 
     #[test]
@@ -619,5 +806,32 @@ mod tests {
             super::PendingHeaders::try_from((0x24, 1, &[0; 4][..])).unwrap_err(),
             FrameError::BadFrameSize
         );
+    }
+
+    #[test]
+    fn headers_deserialization_rejects_inconsistent_metadata() {
+        let missing_priority = json!({
+            "frame_type": "Headers",
+            "stream_id": 1,
+            "length": 5,
+            "headers": [],
+            "flags": {
+                "raw": 36,
+                "values": [
+                    {"id": 4, "name": "EndHeaders"},
+                    {"id": 32, "name": "Priority"}
+                ]
+            }
+        });
+        let missing_continuation = json!({
+            "frame_type": "Headers",
+            "stream_id": 1,
+            "length": 1,
+            "headers": [],
+            "flags": {"raw": 0, "values": []}
+        });
+
+        assert!(serde_json::from_value::<HeadersFrame>(missing_priority).is_err());
+        assert!(serde_json::from_value::<HeadersFrame>(missing_continuation).is_err());
     }
 }

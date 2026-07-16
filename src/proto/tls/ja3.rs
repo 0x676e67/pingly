@@ -98,7 +98,7 @@ mod tests {
     use super::Ja3Fingerprint;
     use crate::proto::tls::{
         enums::{ECPointFormat, SignatureAlgorithm, TlsVersion},
-        hello::{ClientHello, TlsCipherSuite, TlsExtension},
+        hello::{ClientHello, HexBytes, ProtocolName, TlsCipherSuite, TlsExtension},
         NamedGroup,
     };
     use tls_parser::TlsExtensionType;
@@ -212,7 +212,7 @@ mod tests {
             tls_version: TlsVersion::TLSv1_2,
             tls_version_negotiated: None,
             cipher_suites: ciphers.iter().copied().map(TlsCipherSuite::from).collect(),
-            client_random: String::new(),
+            client_random: HexBytes::from([0; 32]),
             session_id: None,
             compression_algorithms: Vec::new(),
             extensions: extensions
@@ -225,7 +225,7 @@ mod tests {
                     TlsExtensionType::ApplicationLayerProtocolNegotiation => {
                         TlsExtension::ApplicationLayerProtocolNegotiation {
                             value: *value,
-                            data: vec!["h2".into()],
+                            data: vec![ProtocolName::try_from("h2").unwrap()],
                         }
                     }
                     TlsExtensionType::SupportedVersions => TlsExtension::SupportedVersions {

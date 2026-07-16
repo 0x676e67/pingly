@@ -7,7 +7,7 @@ enum_builder! {
     ///
     /// See [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846.html) and
     /// [RFC 9147](https://www.rfc-editor.org/rfc/rfc9147.html).
-    @U16
+    @U16 STANDARD_GREASE
     pub enum TlsVersion {
         SSLv2 => 0x0200,
         SSLv3 => 0x0300,
@@ -61,7 +61,7 @@ enum_builder! {
     ///
     /// Unrecognized wire values are retained in `Unknown`.
     /// See [RFC 9846, Section 4.3.3](https://www.rfc-editor.org/rfc/rfc9846.html#section-4.3.3).
-    @U16
+    @U16 STANDARD_GREASE
     pub enum SignatureAlgorithm {
         rsa_pkcs1_sha1 => 513,
         ecdsa_sha1 => 515,
@@ -117,7 +117,7 @@ enum_builder! {
     ///
     /// TLS 1.3 clients must offer only `Null`.
     /// See [RFC 9846, Section 4.2.2](https://www.rfc-editor.org/rfc/rfc9846.html#section-4.2.2).
-    @U8
+    @U8 NO_GREASE
     pub enum CompressionAlgorithm {
         Null => 0x00,
         Deflate => 0x01,
@@ -129,7 +129,7 @@ enum_builder! {
     ///
     /// Unrecognized wire values are retained in `Unknown`.
     /// See [RFC 8422, Section 5.1.2](https://www.rfc-editor.org/rfc/rfc8422.html#section-5.1.2).
-    @U8
+    @U8 NO_GREASE
     pub enum ECPointFormat {
         Uncompressed => 0x00,
         ANSIX962CompressedPrime => 0x01,
@@ -141,7 +141,7 @@ enum_builder! {
     /// An HPKE key derivation function identifier.
     ///
     /// See [RFC 9180, Section 7.2.2](https://www.rfc-editor.org/rfc/rfc9180.html#section-7.2.2).
-    @U16
+    @U16 NO_GREASE
     pub enum KeyDerivationFunction {
         HKDF_SHA256 => 0x0001,
         HKDF_SHA384 => 0x0002,
@@ -153,7 +153,7 @@ enum_builder! {
     /// An HPKE authenticated-encryption algorithm identifier.
     ///
     /// See [RFC 9180, Section 7.2.3](https://www.rfc-editor.org/rfc/rfc9180.html#section-7.2.3).
-    @U16
+    @U16 NO_GREASE
     pub enum AuthenticatedEncryptionWithAssociatedData {
         AES_128_GCM => 0x0001,
         AES_256_GCM => 0x0002,
@@ -166,7 +166,7 @@ enum_builder! {
     /// A certificate compression algorithm advertised by the client.
     ///
     /// See [RFC 8879, Section 3](https://www.rfc-editor.org/rfc/rfc8879.html#section-3).
-    @U16
+    @U16 NO_GREASE
     pub enum CertificateCompressionAlgorithm {
         Zlib => 0x0001,
         Brotli => 0x0002,
@@ -179,7 +179,7 @@ enum_builder! {
     ///
     /// See [RFC 6066, Section 8](https://www.rfc-editor.org/rfc/rfc6066.html#section-8).
     #[allow(clippy::upper_case_acronyms)]
-    @U8
+    @U8 NO_GREASE
     pub enum CertificateStatusType {
         OCSP => 0x01,
     }
@@ -189,7 +189,7 @@ enum_builder! {
     /// A pre-shared-key key exchange mode advertised by the client.
     ///
     /// See [RFC 9846, Section 4.3.9](https://www.rfc-editor.org/rfc/rfc9846.html#section-4.3.9).
-    @U8
+    @U8 PSK_GREASE
     pub enum PskKeyExchangeMode {
         /// Authentication based only on the pre-shared key.
         psk_ke => 0,
@@ -203,14 +203,15 @@ impl PskKeyExchangeMode {
     ///
     /// See [RFC 8701, Section 2](https://www.rfc-editor.org/rfc/rfc8701.html#section-2).
     pub fn is_grease(self) -> bool {
-        matches!(
-            self.value(),
-            0x0b | 0x2a | 0x49 | 0x68 | 0x87 | 0xa6 | 0xc5 | 0xe4
-        )
+        is_psk_key_exchange_mode_grease(u16::from(self.value()))
     }
 }
 
-fn parse_serialized_identifier(value: &str) -> Option<u16> {
+const fn is_psk_key_exchange_mode_grease(value: u16) -> bool {
+    matches!(value, 0x0b | 0x2a | 0x49 | 0x68 | 0x87 | 0xa6 | 0xc5 | 0xe4)
+}
+
+fn parse_serialized_identifier(value: &str) -> Option<(u16, bool)> {
     let (hex, requires_grease) = if let Some(hex) = value
         .strip_prefix("GREASE (0x")
         .and_then(|value| value.strip_suffix(')'))
@@ -226,7 +227,7 @@ fn parse_serialized_identifier(value: &str) -> Option<u16> {
     };
 
     let value = u16::from_str_radix(hex, 16).ok()?;
-    (!requires_grease || is_grease_value(value)).then_some(value)
+    Some((value, requires_grease))
 }
 
 /// RFC 8701 reserves these patterned values so clients can keep TLS extension points flexible.
@@ -238,12 +239,16 @@ pub(super) const fn is_grease_value(value: u16) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{PskKeyExchangeMode, SignatureAlgorithm, TlsVersion};
+    use super::{
+        AuthenticatedEncryptionWithAssociatedData, CertificateCompressionAlgorithm,
+        KeyDerivationFunction, PskKeyExchangeMode, SignatureAlgorithm, TlsVersion,
+    };
 
     #[test]
     fn tls_identifiers_roundtrip_through_their_json_names() {
         let version = TlsVersion::from(0x0a0a);
         let version_json = serde_json::to_string(&version).unwrap();
+        assert_eq!(version_json, r#""GREASE (0x0a0a)""#);
         assert_eq!(
             serde_json::from_str::<TlsVersion>(&version_json).unwrap(),
             version
@@ -251,10 +256,32 @@ mod tests {
 
         let mode = PskKeyExchangeMode::from(0x0b);
         let json = serde_json::to_string(&mode).unwrap();
+        assert_eq!(json, r#""GREASE (0x000b)""#);
         assert_eq!(
             serde_json::from_str::<PskKeyExchangeMode>(&json).unwrap(),
             mode
         );
+        assert!(serde_json::from_str::<PskKeyExchangeMode>(r#""Unknown (0x000b)""#).is_err());
+        assert!(serde_json::from_str::<TlsVersion>(r#""Unknown (0x0a0a)""#).is_err());
+    }
+
+    #[test]
+    fn grease_labels_are_scoped_to_their_registered_code_points() {
+        macro_rules! assert_plain_unknown {
+            ($type:ty) => {{
+                let value = <$type>::from(0x0a0a);
+                let json = serde_json::to_string(&value).unwrap();
+
+                assert_eq!(json, r#""Unknown (0x0a0a)""#);
+                assert_eq!(serde_json::from_str::<$type>(&json).unwrap(), value);
+                assert!(serde_json::from_str::<$type>(r#""GREASE (0x0a0a)""#).is_err());
+            }};
+        }
+
+        assert_plain_unknown!(KeyDerivationFunction);
+        assert_plain_unknown!(AuthenticatedEncryptionWithAssociatedData);
+        assert_plain_unknown!(CertificateCompressionAlgorithm);
+        assert!(serde_json::from_str::<TlsVersion>(r#""GREASE (0x0a0b)""#).is_err());
     }
 
     #[test]

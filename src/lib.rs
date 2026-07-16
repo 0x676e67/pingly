@@ -1,12 +1,12 @@
 //! Protocol data models and fingerprint parsers used by the pingly server.
 //!
-//! The crate can parse TLS ClientHello records and HTTP/2 byte streams, serialize the decoded
+//! The crate can parse TLS ClientHello captures and HTTP/2 byte streams, serialize the decoded
 //! packets to JSON, and deserialize saved API data back into the same owned structures.
 //!
 //! # TLS ClientHello
 //!
-//! [`proto::tls::ClientHello::parse`] handles a complete TLS record. For TCP
-//! chunks, append bytes to [`proto::tls::ClientHelloBuffer`] and call
+//! [`proto::tls::ClientHello::parse`] handles a complete ClientHello across one or more TLS
+//! records. For TCP chunks, append bytes to [`proto::tls::ClientHelloBuffer`] and call
 //! `try_parse` until it returns a value.
 //!
 //! ```no_run
@@ -47,5 +47,7 @@
 //! # Ok(())
 //! # }
 //! ```
+
+#![warn(missing_docs)]
 
 pub mod proto;

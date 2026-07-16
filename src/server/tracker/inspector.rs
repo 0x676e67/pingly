@@ -170,7 +170,8 @@ where
         let poll = this.inner.poll_read(cx, buf);
 
         if let Some(client_hello) = this.client_hello {
-            if !client_hello.is_max_record_len() {
+            if !client_hello.is_complete() && !client_hello.is_invalid() && !client_hello.is_full()
+            {
                 client_hello.extend(&buf.filled()[len..]);
             }
         }

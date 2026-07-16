@@ -37,8 +37,8 @@ Disabling default features keeps the library dependency focused on protocol pars
 
 ### TLS ClientHello
 
-Parse a complete TLS record and retain enough source data to recompute JA3 and JA4 after a JSON
-roundtrip:
+Parse a complete ClientHello capture, including a handshake fragmented across TLS records, and
+retain enough source data to recompute JA3 and JA4 after a JSON roundtrip:
 
 ```rust,no_run
 use pingly::proto::tls::ClientHello;
@@ -58,8 +58,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-For TCP chunks, use `ClientHelloBuffer::extend` and `try_parse`. `Ok(None)` means the first TLS
-record is still incomplete; malformed complete records return `ClientHelloParseError`.
+For TCP chunks, use `ClientHelloBuffer::extend` and `try_parse`. `Ok(None)` means a TLS record
+or the fragmented handshake is still incomplete; malformed complete captures return
+`ClientHelloParseError`. The default buffer retains at most 64 KiB and stops accepting bytes once
+the ClientHello completes; `with_capture_limit` customizes that bound.
 
 ### HTTP/2
 
@@ -106,8 +108,8 @@ The standalone examples use only the protocol library and work with default feat
     cargo run --example http2_connection --no-default-features -- http2-connection.bin
     cargo run --example saved_api_json --no-default-features
 
-tls_client_hello accepts a capture beginning with a TLS ClientHello record and demonstrates
-incremental buffering, JA3/JA4 calculation, and JSON roundtripping.
+tls_client_hello accepts a capture beginning with a TLS ClientHello handshake and demonstrates
+incremental record reassembly, JA3/JA4 calculation, and JSON roundtripping.
 
 http2_connection accepts a client byte stream beginning with the HTTP/2 connection preface and
 demonstrates incremental frame parsing, Akamai fingerprinting, and JSON roundtripping.

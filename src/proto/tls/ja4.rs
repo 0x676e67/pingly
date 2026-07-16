@@ -6,7 +6,7 @@ use tls_parser::TlsExtensionType;
 
 use super::{
     enums::TlsVersion,
-    hello::{ClientHello, TlsExtension},
+    hello::{ClientHello, ProtocolName, TlsExtension},
 };
 
 /// JA4 TLS client fingerprint, plus the raw material used to produce the hash chunks.
@@ -141,22 +141,28 @@ fn hash12(input: &str) -> String {
     out
 }
 
-fn first_last(value: &str) -> (Option<char>, Option<char>) {
-    let mut chars = value
-        .chars()
-        .map(|value| if value.is_ascii() { value } else { '9' });
+fn first_last(value: &ProtocolName) -> (Option<char>, Option<char>) {
+    fn ja4_character(byte: u8) -> char {
+        if byte.is_ascii() {
+            char::from(byte)
+        } else {
+            '9'
+        }
+    }
 
-    let first = chars.next();
-    let last = chars.next_back();
-    (first, last)
+    let mut bytes = value.as_bytes().iter().copied();
+    (
+        bytes.next().map(ja4_character),
+        bytes.next_back().map(ja4_character),
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{hash12, Ja4Fingerprint};
+    use super::{first_last, hash12, Ja4Fingerprint};
     use crate::proto::tls::{
         enums::{ECPointFormat, SignatureAlgorithm, TlsVersion},
-        hello::{ClientHello, TlsCipherSuite, TlsExtension},
+        hello::{ClientHello, HexBytes, ProtocolName, TlsCipherSuite, TlsExtension},
     };
     use tls_parser::TlsExtensionType;
 
@@ -277,6 +283,15 @@ mod tests {
         assert_eq!(hash12(""), "000000000000");
     }
 
+    #[test]
+    fn ja4_alpn_characters_match_the_reference_behavior() {
+        let one_byte = ProtocolName::try_from("h").unwrap();
+        assert_eq!(first_last(&one_byte), (Some('h'), None));
+
+        let opaque = ProtocolName::try_from(&[0xff, b'2'][..]).unwrap();
+        assert_eq!(first_last(&opaque), (Some('9'), Some('2')));
+    }
+
     fn client_hello_for_ja4(
         ciphers: &[u16],
         extensions: &[u16],
@@ -287,7 +302,7 @@ mod tests {
             tls_version: TlsVersion::TLSv1_2,
             tls_version_negotiated: None,
             cipher_suites: ciphers.iter().copied().map(TlsCipherSuite::from).collect(),
-            client_random: String::new(),
+            client_random: HexBytes::from([0; 32]),
             session_id: None,
             compression_algorithms: Vec::new(),
             extensions: extensions
@@ -300,7 +315,7 @@ mod tests {
                     TlsExtensionType::ApplicationLayerProtocolNegotiation => {
                         TlsExtension::ApplicationLayerProtocolNegotiation {
                             value: *value,
-                            data: vec!["h2".into()],
+                            data: vec![ProtocolName::try_from("h2").unwrap()],
                         }
                     }
                     TlsExtensionType::SupportedVersions => TlsExtension::SupportedVersions {

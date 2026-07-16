@@ -8,6 +8,7 @@ use super::{FrameError, FrameType};
 /// This frame is used for flow control, indicating how many additional bytes the sender is
 /// permitted to transmit.
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "WindowUpdateFrameRepr")]
 pub struct WindowUpdateFrame {
     /// The type of this frame (should always be `FrameType::WindowUpdate`)
     pub frame_type: FrameType,
@@ -21,6 +22,48 @@ pub struct WindowUpdateFrame {
     /// The window size increment (31 bits, most significant bit is reserved and must be zero).
     /// This value specifies the number of bytes that can be sent.
     pub increment: u32,
+}
+
+/// Deserialization shape used to validate a saved WINDOW_UPDATE frame.
+#[derive(Deserialize)]
+struct WindowUpdateFrameRepr {
+    /// Saved frame category.
+    frame_type: FrameType,
+
+    /// Affected stream identifier.
+    stream_id: u32,
+
+    /// Saved payload length.
+    length: usize,
+
+    /// Saved flow-control increment.
+    increment: u32,
+}
+
+impl TryFrom<WindowUpdateFrameRepr> for WindowUpdateFrame {
+    type Error = &'static str;
+
+    fn try_from(repr: WindowUpdateFrameRepr) -> Result<Self, Self::Error> {
+        if repr.frame_type != FrameType::WindowUpdate {
+            return Err("WINDOW_UPDATE frame_type must be WindowUpdate");
+        }
+        if repr.stream_id > 0x7fff_ffff {
+            return Err("WINDOW_UPDATE stream_id must be a 31-bit value");
+        }
+        if repr.length != 4 {
+            return Err("WINDOW_UPDATE payload length must be four");
+        }
+        if !(1..=0x7fff_ffff).contains(&repr.increment) {
+            return Err("WINDOW_UPDATE increment must be a nonzero 31-bit value");
+        }
+
+        Ok(Self {
+            frame_type: repr.frame_type,
+            stream_id: repr.stream_id,
+            length: repr.length,
+            increment: repr.increment,
+        })
+    }
 }
 
 impl TryFrom<(u32, &[u8])> for WindowUpdateFrame {
@@ -66,5 +109,15 @@ mod tests {
 
         assert_eq!(frame.stream_id, 7);
         assert_eq!(frame.increment, 1);
+    }
+
+    #[test]
+    fn window_update_deserialization_rejects_invalid_metadata() {
+        let zero_increment =
+            r#"{"frame_type":"WindowUpdate","stream_id":0,"length":4,"increment":0}"#;
+        let bad_length = r#"{"frame_type":"WindowUpdate","stream_id":0,"length":3,"increment":1}"#;
+
+        assert!(serde_json::from_str::<WindowUpdateFrame>(zero_increment).is_err());
+        assert!(serde_json::from_str::<WindowUpdateFrame>(bad_length).is_err());
     }
 }

@@ -81,7 +81,8 @@ fn compute_fingerprint<'a>(frames: impl IntoIterator<Item = &'a Frame>) -> Strin
                 for header in &frame.headers {
                     let Some(short_name) = header
                         .name
-                        .strip_prefix(':')
+                        .strip_prefix(b":")
+                        .and_then(|name| std::str::from_utf8(name).ok())
                         .and_then(|name| name.chars().next())
                     else {
                         continue;
