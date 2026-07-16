@@ -763,9 +763,6 @@ pub struct ClientHello {
     /// The protocol version selected by the server, or `None` before negotiation completes.
     pub tls_version_negotiated: Option<TlsVersion>,
 
-    /// Cipher suites in client-advertised order, including GREASE and unregistered identifiers.
-    pub cipher_suites: Vec<TlsCipherSuite>,
-
     /// The 32-byte ClientHello random value encoded as lowercase hexadecimal.
     #[serde(deserialize_with = "client_hello_hex::random")]
     pub client_random: HexBytes,
@@ -776,6 +773,9 @@ pub struct ClientHello {
 
     /// Compression methods in client-advertised order.
     pub compression_algorithms: Vec<CompressionAlgorithm>,
+
+    /// Cipher suites in client-advertised order, including GREASE and unregistered identifiers.
+    pub cipher_suites: Vec<TlsCipherSuite>,
 
     /// Decoded extensions in the order sent by the client.
     pub extensions: Vec<TlsExtension>,
