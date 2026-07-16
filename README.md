@@ -12,7 +12,7 @@
 
 - JA3, JA4, and Akamai HTTP/2 fingerprints
 - HTTP/1 headers and HTTP/2 frames
-- Incremental parsing and Serde support
+- Incremental parsing and serialization
 
 ## Server
 
