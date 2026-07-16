@@ -7,12 +7,10 @@ use axum::{
 use serde::{Serialize, Serializer};
 use tokio_rustls::rustls::ProtocolVersion;
 
+use super::inspector::{ClientHello, ClientHelloBuffer, Http1Headers, Http2Frame};
 use crate::proto::{http2::AkamaiFingerprint, tls::TlsVersion};
-
 #[cfg(target_os = "linux")]
 use crate::tcp::CapturedPacket;
-
-use super::inspector::{ClientHello, ClientHelloBuffer, Http1Headers, Http2Frame};
 
 /// A captured HTTP header field, preserving the original order.
 #[derive(Serialize)]
@@ -376,9 +374,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use bytes::Bytes;
     use serde_json::json;
-    use std::sync::Arc;
 
     use super::{Http1TrackInfo, Track};
 

@@ -98,13 +98,14 @@ fn md5_hex(input: &str) -> Box<str> {
 
 #[cfg(test)]
 mod tests {
+    use tls_parser::TlsExtensionType;
+
     use super::Ja3Fingerprint;
     use crate::proto::tls::{
         enums::{ECPointFormat, SignatureAlgorithm, TlsVersion},
         hello::{ClientHello, HexBytes, ProtocolName, TlsCipherSuite, TlsExtension},
         NamedGroup,
     };
-    use tls_parser::TlsExtensionType;
 
     #[test]
     fn ja3_matches_reference_vector() {

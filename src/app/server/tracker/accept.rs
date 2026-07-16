@@ -5,12 +5,11 @@ use futures_util::future::BoxFuture;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tower::Layer;
 
-use crate::server::{accept::Accept, tls::rustls::RustlsAcceptor};
-
 use super::{
     info::ConnectionTrack,
     inspector::{Http1Inspector, Http2Inspector, Inspector, TlsInspector},
 };
+use crate::server::{accept::Accept, tls::rustls::RustlsAcceptor};
 
 /// TrackAcceptor is a wrapper around RustlsAcceptor that inspects incoming TLS connections,
 /// automatically detects the negotiated ALPN protocol (such as HTTP/1.1 or HTTP/2),

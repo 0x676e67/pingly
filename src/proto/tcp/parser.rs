@@ -1,8 +1,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde_json::Value as JsonValue;
-
 use hex::encode as hex_encode;
+use serde_json::Value as JsonValue;
 
 use super::CapturedPacket;
 

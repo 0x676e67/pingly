@@ -162,12 +162,13 @@ fn first_last(value: &ProtocolName) -> (Option<char>, Option<char>) {
 
 #[cfg(test)]
 mod tests {
+    use tls_parser::TlsExtensionType;
+
     use super::{first_last, hash12, Ja4Fingerprint};
     use crate::proto::tls::{
         enums::{ECPointFormat, SignatureAlgorithm, TlsVersion},
         hello::{ClientHello, HexBytes, ProtocolName, TlsCipherSuite, TlsExtension},
     };
-    use tls_parser::TlsExtensionType;
 
     #[test]
     fn ja4_matches_foxio_reference_vector() {

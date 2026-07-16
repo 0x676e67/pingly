@@ -8,16 +8,22 @@ mod server;
 #[path = "../proto/tcp.rs"]
 mod tcp;
 
-pub(crate) use pingly::proto;
-
 use std::str::FromStr;
 
+use args::{AppArgs, Command, ServerArgs};
 #[cfg(target_os = "linux")]
 use axum::Extension;
 use axum::{routing::any, Router};
 use clap::Parser;
+use error::Result;
+pub(crate) use pingly::proto;
 #[cfg(target_os = "linux")]
 use pingora_runtime::current_handle;
+use server::{
+    routes::{http1_track, http2_track, tls_track, track},
+    runtime::Runtime,
+    HttpServer, TrackAcceptor,
+};
 use tower::{limit::ConcurrencyLimitLayer, ServiceBuilder};
 use tower_http::{
     cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer},
@@ -25,14 +31,6 @@ use tower_http::{
 };
 use tracing::Level;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
-
-use args::{AppArgs, Command, ServerArgs};
-use error::Result;
-use server::{
-    routes::{http1_track, http2_track, tls_track, track},
-    runtime::Runtime,
-    HttpServer, TrackAcceptor,
-};
 
 #[cfg(target_os = "linux")]
 use crate::{server::routes::tcp_track, tcp::TcpCaptureTrack};

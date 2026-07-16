@@ -142,8 +142,8 @@ impl ClientHelloBuffer {
     ///
     /// Passing a `Vec<u8>` transfers its allocation into the buffer. Slices are
     /// copied because the parser owns bytes that may outlive the input read.
-    /// Bytes after the record that completes the ClientHello are discarded, matching [`Self::extend`].
-    ///
+    /// Bytes after the record that completes the ClientHello are discarded, matching
+    /// [`Self::extend`].
     pub fn from_bytes(bytes: impl Into<Vec<u8>>) -> Self {
         let buf = bytes.into();
         let capture_limit = DEFAULT_CLIENT_HELLO_CAPTURE_LIMIT.max(buf.len());
