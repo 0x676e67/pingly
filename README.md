@@ -6,45 +6,53 @@
 
 > 🚀 Help me work seamlessly with open source sharing by [sponsoring me on GitHub](https://github.com/0x676e67/0x676e67/blob/main/SPONSOR.md)
 
-**Pingly** is a TLS, HTTP/1, and HTTP/2 analysis server and Rust library. It reveals request
-fingerprints (JA3/JA4 and Akamai HTTP/2), header order, HTTP/2 frames, and other wire details.
+**Pingly** is a Rust server and library for inspecting TLS and HTTP traffic.
 
 ## Features
 
-- TLS ClientHello parsing with JA3 and JA4 fingerprints
-- HTTP/1 header order and name/value capture
-- HTTP/2 frame parsing with Akamai fingerprints
-- Incremental TLS and HTTP/2 parsing from TCP streams
-- Serde serialization and deserialization for TLS and HTTP/2 models
+- JA3, JA4, and Akamai HTTP/2 fingerprints
+- HTTP/1 headers and HTTP/2 frames
+- Incremental parsing and Serde support
 
 ## Server
 
-    cargo run -- run --bind 127.0.0.1:8181
+```console
+cargo run -- run --bind 127.0.0.1:8181
+```
 
-TLS is enabled by default; a self-signed certificate is generated when no certificate and key are
-provided. Endpoints: `/api/all`, `/api/tls`, `/api/http1`, and `/api/http2`.
-`/api/tcp` is also available on Linux when packet capture is enabled.
+TLS is enabled by default. A self-signed certificate is generated when no certificate and key are
+provided.
+
+- `/api/all`
+- `/api/tls`
+- `/api/http1`
+- `/api/http2`
+- `/api/tcp` on Linux when packet capture is enabled
 
 ## Example
 
 Add Pingly without the server features:
 
-    [dependencies]
-    pingly = { version = "0.1", default-features = false }
+```toml
+[dependencies]
+pingly = { version = "0.1", default-features = false }
+```
 
 And then parse a captured TLS ClientHello:
 
-    use pingly::proto::tls::ClientHello;
+```rust
+use pingly::proto::tls::ClientHello;
 
-    fn main() -> Result<(), Box<dyn std::error::Error>> {
-        // The capture may contain a ClientHello split across several TLS records.
-        let bytes = std::fs::read("client-hello.bin")?;
-        let hello = ClientHello::parse(&bytes)?;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // The capture may contain a ClientHello split across several TLS records.
+    let bytes = std::fs::read("client-hello.bin")?;
+    let hello = ClientHello::parse(&bytes)?;
 
-        println!("JA3: {}", hello.ja3().hash);
-        println!("JA4: {}", hello.ja4().fingerprint);
-        Ok(())
-    }
+    println!("JA3: {}", hello.ja3().hash);
+    println!("JA4: {}", hello.ja4().fingerprint);
+    Ok(())
+}
+```
 
 See [examples](./examples) for incremental parsing, HTTP/2 fingerprints, and saved JSON.
 
