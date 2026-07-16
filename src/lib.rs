@@ -48,6 +48,9 @@
 //! # }
 //! ```
 
-#![warn(missing_docs)]
+#![deny(unused)]
+#![deny(unsafe_code)]
+#![deny(missing_docs)]
+#![cfg_attr(test, deny(warnings))]
 
 pub mod proto;
