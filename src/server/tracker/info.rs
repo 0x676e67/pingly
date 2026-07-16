@@ -17,24 +17,31 @@ use super::inspector::{ClientHello, ClientHelloBuffer, Http1Headers, Http2Frame}
 /// A captured HTTP header field, preserving the original order.
 #[derive(Serialize)]
 pub struct HeaderField<'a> {
+    /// Header name rendered as UTF-8 text, replacing invalid byte sequences.
     name: Cow<'a, str>,
 
+    /// Header value rendered as UTF-8 text, replacing invalid byte sequences.
     value: Cow<'a, str>,
 }
 
 /// TLS handshake tracking information, which includes the client hello payload.
 #[derive(Serialize)]
 pub struct TlsTrackInfo {
+    /// The unhashed JA3 string built from the ClientHello.
     ja3: String,
 
+    /// The lowercase MD5 digest of the JA3 string.
     ja3_hash: String,
 
+    /// The JA4 fingerprint derived from the ClientHello.
     #[serde(rename = "ja4")]
     ja4_fingerprint: String,
 
+    /// The unhashed JA4_r representation used to inspect its input values.
     #[serde(rename = "ja4_r")]
     ja4_raw: String,
 
+    /// Parsed ClientHello fields flattened into the TLS response object.
     #[serde(flatten)]
     client_hello: ClientHello,
 }
@@ -45,10 +52,13 @@ pub struct Http1TrackInfo(Http1Headers);
 /// HTTP/2 tracking information, including Akamai fingerprint and sent frames.
 #[derive(Serialize)]
 pub struct Http2TrackInfo {
+    /// The unhashed Akamai fingerprint derived from the captured client frames.
     akamai_fingerprint: String,
 
+    /// The lowercase MD5 digest of the Akamai fingerprint.
     akamai_fingerprint_hash: String,
 
+    /// Client HTTP/2 frames retained in their original wire order.
     #[serde(serialize_with = "serialize_sent_frames")]
     sent_frames: Http2Frame,
 }
@@ -59,39 +69,51 @@ pub struct ConnectionTrack {
     /// The TLS protocol version that was negotiated for this connection, if any.
     tls_version_negotiated: Option<ProtocolVersion>,
 
+    /// Raw TLS records retained until the ClientHello can be analyzed.
     client_hello: Option<ClientHelloBuffer>,
 
+    /// HTTP/1 request headers retained in their received order.
     http1_headers: Option<Http1Headers>,
 
+    /// HTTP/2 client frames retained in their received order.
     http2_frames: Option<Http2Frame>,
 }
 
-/// TrackInfo aggregates tracking details for a single connection,
-/// including TLS handshake info, HTTP/1 headers, and HTTP/2 frames.
-/// Useful for logging, analysis, or debugging connection
+/// Tracking details collected for a single connection.
+///
+/// Includes the TLS, HTTP/1, and HTTP/2 analysis selected for the response.
 #[derive(Serialize)]
 pub struct TrackInfo {
+    /// Project information included in every analysis response.
     donate: &'static str,
 
+    /// Remote peer address associated with the request.
     address: SocketAddr,
 
+    /// HTTP version used by the request.
     http_version: String,
 
+    /// HTTP request method.
     #[serde(serialize_with = "serialize_method")]
     method: Method,
 
+    /// User-Agent request header, when present.
     #[serde(serialize_with = "serialize_user_agent")]
     user_agent: Option<HeaderValue>,
 
+    /// TLS analysis requested for this response, when available.
     #[serde(skip_serializing_if = "Option::is_none")]
     tls: Option<TlsTrackInfo>,
 
+    /// HTTP/1 header analysis requested for this response, when available.
     #[serde(skip_serializing_if = "Option::is_none")]
     http1: Option<Http1TrackInfo>,
 
+    /// HTTP/2 frame analysis requested for this response, when available.
     #[serde(skip_serializing_if = "Option::is_none")]
     http2: Option<Http2TrackInfo>,
 
+    /// Captured TCP packets included by the Linux `/api/all` endpoint.
     #[cfg(target_os = "linux")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tcp: Vec<CapturedPacket>,

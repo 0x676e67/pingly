@@ -9,113 +9,44 @@
 **Pingly** is a TLS, HTTP/1, and HTTP/2 analysis server and Rust library. It reveals request
 fingerprints (JA3/JA4 and Akamai HTTP/2), header order, HTTP/2 frames, and other wire details.
 
-## Run the server
+## Features
 
-```console
-cargo run -- run --bind 127.0.0.1:8181
-```
+- TLS ClientHello parsing with JA3 and JA4 fingerprints
+- HTTP/1 header order and name/value capture
+- HTTP/2 frame parsing with Akamai fingerprints
+- Incremental TLS and HTTP/2 parsing from TCP streams
+- Serde serialization and deserialization for TLS and HTTP/2 models
 
-The server uses TLS by default and generates a self-signed certificate when no certificate and key
-are supplied. The analysis endpoints are:
+## Server
 
-- `/api/all`
-- `/api/tls`
-- `/api/http1`
-- `/api/http2`
-- `/api/tcp` on Linux when packet capture is enabled
+    cargo run -- run --bind 127.0.0.1:8181
 
-## Use the library
+TLS is enabled by default; a self-signed certificate is generated when no certificate and key are
+provided. Endpoints: `/api/all`, `/api/tls`, `/api/http1`, and `/api/http2`.
+`/api/tcp` is also available on Linux when packet capture is enabled.
 
-```toml
-[dependencies]
-pingly = { version = "0.1", default-features = false }
-serde_json = "1"
-```
-Disabling default features keeps the library dependency focused on protocol parsing. The default
-`server` and `mimalloc` features remain enabled for `cargo run` and `cargo install`.
+## Example
 
+Add Pingly without the server features:
 
-### TLS ClientHello
+    [dependencies]
+    pingly = { version = "0.1", default-features = false }
 
-Parse a complete ClientHello capture, including a handshake fragmented across TLS records, and
-retain enough source data to recompute JA3 and JA4 after a JSON roundtrip:
+And then parse a captured TLS ClientHello:
 
-```rust,no_run
-use pingly::proto::tls::ClientHello;
+    use pingly::proto::tls::ClientHello;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let record = std::fs::read("client-hello.bin")?;
-    let hello = ClientHello::parse(&record)?;
+    fn main() -> Result<(), Box<dyn std::error::Error>> {
+        // The capture may contain a ClientHello split across several TLS records.
+        let bytes = std::fs::read("client-hello.bin")?;
+        let hello = ClientHello::parse(&bytes)?;
 
-    let ja3 = hello.ja3();
-    println!("JA3: {} ({})", ja3.raw, ja3.hash);
-    println!("JA4: {}", hello.ja4().fingerprint);
+        println!("JA3: {}", hello.ja3().hash);
+        println!("JA4: {}", hello.ja4().fingerprint);
+        Ok(())
+    }
 
-    let json = serde_json::to_vec_pretty(&hello)?;
-    let restored: ClientHello = serde_json::from_slice(&json)?;
-    assert_eq!(restored.ja4(), hello.ja4());
-    Ok(())
-}
-```
-
-For TCP chunks, use `ClientHelloBuffer::extend` and `try_parse`. `Ok(None)` means a TLS record
-or the fragmented handshake is still incomplete; malformed complete captures return
-`ClientHelloParseError`. The default buffer retains at most 64 KiB and stops accepting bytes once
-the ClientHello completes; `with_capture_limit` customizes that bound.
-
-### HTTP/2
-
-Use `parse_connection` for a finite capture that includes the HTTP/2 client connection preface, or
-`parse_frames` when the bytes begin directly at a frame header:
-
-```rust,no_run
-use pingly::proto::http2::{parse_connection, AkamaiFingerprint};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let bytes = std::fs::read("http2-connection.bin")?;
-    let frames = parse_connection(&bytes)?;
-    let fingerprint = AkamaiFingerprint::from_frames(&frames);
-
-    let json = serde_json::to_vec_pretty(&frames)?;
-    let restored: Vec<pingly::proto::http2::Frame> =
-        serde_json::from_slice(&json)?;
-    assert_eq!(AkamaiFingerprint::from_frames(&restored), fingerprint);
-    Ok(())
-}
-```
-
-`Http2Parser` is the incremental alternative for arbitrary TCP chunks:
-
-```rust
-use pingly::proto::http2::Http2Parser;
-
-let mut parser = Http2Parser::new();
-let mut frames = Vec::new();
-
-for chunk in [b"PRI * HTTP/2.0\r\n".as_slice(), b"\r\nSM\r\n\r\n".as_slice()] {
-    parser.push_into(chunk, &mut frames).unwrap();
-}
-
-parser.finish().unwrap();
-assert!(frames.is_empty());
-```
-
-## Run the examples
-
-The standalone examples use only the protocol library and work with default features disabled:
-
-    cargo run --example tls_client_hello --no-default-features -- client-hello.bin
-    cargo run --example http2_connection --no-default-features -- http2-connection.bin
-    cargo run --example saved_api_json --no-default-features
-
-tls_client_hello accepts a capture beginning with a TLS ClientHello handshake and demonstrates
-incremental record reassembly, JA3/JA4 calculation, and JSON roundtripping.
-
-http2_connection accepts a client byte stream beginning with the HTTP/2 connection preface and
-demonstrates incremental frame parsing, Akamai fingerprinting, and JSON roundtripping.
-
-saved_api_json restores the bundled Chrome response from tests/data/chrome.json and checks that
-its TLS and HTTP/2 fingerprints still match the serialized values.
+See [examples](./examples) for incremental parsing, HTTP/2 fingerprints, and saved JSON.
 
 ## License
 
