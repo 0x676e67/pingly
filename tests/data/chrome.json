@@ -1,5 +1,5 @@
 {
-    "donate": "Analysis server for TLS and HTTP/1/2/3, developed by 0x676e67: https://github.com/0x676e67/pingly",
+    "donate": "Please consider supporting Pingly to keep this API running. Visit https://github.com/0x676e67/pingly",
     "address": "127.0.0.1:51490",
     "http_version": "HTTP/2.0",
     "method": "GET",
