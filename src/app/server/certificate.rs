@@ -10,7 +10,7 @@ use tokio_rustls::rustls::{
     ServerConfig,
 };
 
-use super::tls::rustls::RustlsConfig;
+use super::tls::rustls::{set_http_alpn_protocols, RustlsConfig};
 
 /// Loads the reusable self-signed certificate generated for local development.
 pub(super) fn config_self_signed() -> crate::Result<RustlsConfig> {
@@ -76,27 +76,17 @@ fn config_from_der(
         .with_single_cert(cert_chain, key_der)
         .map_err(io::Error::other)?;
 
-    // ALPN lets clients select HTTP/2 or HTTP/1.x during the TLS handshake.
-    // https://www.rfc-editor.org/rfc/rfc7301
-    config.alpn_protocols = vec![
-        b"h2".to_vec(),
-        b"http/1.1".to_vec(),
-        b"http/1.0".to_vec(),
-        b"http/0.9".to_vec(),
-    ];
+    set_http_alpn_protocols(&mut config);
 
     Ok(RustlsConfig::from_config(Arc::new(config)))
 }
 
 fn get_self_signed_cert() -> crate::Result<(Vec<u8>, Vec<u8>)> {
-    let temp_dir = std::env::temp_dir().join(env!("CARGO_PKG_NAME"));
-    if !temp_dir.exists() {
-        tracing::info!("Creating temp cert directory: {}", temp_dir.display());
-        std::fs::create_dir_all(&temp_dir)?;
-    }
+    let certificate_dir = crate::state::directory().join("tls");
+    crate::state::prepare_private_directory(&certificate_dir)?;
 
-    let cert_path = temp_dir.join("cert.pem");
-    let key_path = temp_dir.join("key.pem");
+    let cert_path = certificate_dir.join("cert.pem");
+    let key_path = certificate_dir.join("key.pem");
     if cert_path.exists() && key_path.exists() {
         let cert = std::fs::read(cert_path)?;
         let key = std::fs::read(key_path)?;

@@ -9,7 +9,10 @@ use super::{
     info::ConnectionTrack,
     inspector::{Http1Inspector, Http2Inspector, Inspector, TlsInspector},
 };
-use crate::server::{accept::Accept, tls::rustls::RustlsAcceptor};
+use crate::server::{
+    accept::{Accept, AcceptOutcome},
+    tls::rustls::RustlsAcceptor,
+};
 
 /// TrackAcceptor is a wrapper around RustlsAcceptor that inspects incoming TLS connections,
 /// automatically detects the negotiated ALPN protocol (such as HTTP/1.1 or HTTP/2),
@@ -31,13 +34,17 @@ where
 {
     type Stream = Inspector<I>;
     type Service = AddExtension<S, ConnectionTrack>;
-    type Future = BoxFuture<'static, io::Result<(Self::Stream, Self::Service)>>;
+    type Future = BoxFuture<'static, io::Result<AcceptOutcome<Self::Stream, Self::Service>>>;
 
     #[inline]
     fn accept(&self, stream: I, service: S) -> Self::Future {
         let acceptor = self.0.clone();
         Box::pin(async move {
-            let (mut stream, service) = acceptor.accept(TlsInspector::new(stream), service).await?;
+            let (mut stream, service) =
+                match acceptor.accept(TlsInspector::new(stream), service).await? {
+                    AcceptOutcome::Serve { stream, service } => (stream, service),
+                    AcceptOutcome::Handled => return Ok(AcceptOutcome::Handled),
+                };
             let mut connect_track = ConnectionTrack::default();
             connect_track.set_client_hello(stream.get_mut().0.client_hello());
             connect_track.set_tls_version_negotiated(stream.get_ref().1.protocol_version());
@@ -59,7 +66,10 @@ where
                 }
             };
 
-            Ok((stream, Extension(connect_track).layer(service)))
+            Ok(AcceptOutcome::Serve {
+                stream,
+                service: Extension(connect_track).layer(service),
+            })
         })
     }
 }

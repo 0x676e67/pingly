@@ -2,6 +2,7 @@ mod alloc;
 mod args;
 mod error;
 mod server;
+mod state;
 #[cfg(target_os = "linux")]
 mod systemd;
 #[cfg(target_os = "linux")]
@@ -11,18 +12,17 @@ use std::str::FromStr;
 
 #[cfg(target_os = "linux")]
 use args::SystemdCommand;
-use args::{AppArgs, Command, ServerArgs};
+use args::{AppArgs, Command, ServerArgs, TlsSource};
 #[cfg(target_os = "linux")]
 use axum::Extension;
 use axum::{routing::any, Router};
 use clap::Parser;
 use error::Result;
-#[cfg(target_os = "linux")]
 use pingora_runtime::current_handle;
 use server::{
     routes::{http1_track, http2_track, tls_track, track},
     runtime::Runtime,
-    HttpServer, TrackAcceptor,
+    AcmeRuntime, HttpServer, TrackAcceptor,
 };
 use tower::{limit::ConcurrencyLimitLayer, ServiceBuilder};
 use tower_http::{
@@ -72,12 +72,13 @@ fn log_filter_from(default_level: &str, directives: &str) -> EnvFilter {
     }
 }
 
-pub(crate) fn run(args: ServerArgs) -> Result<()> {
+pub(crate) fn run(mut args: ServerArgs) -> Result<()> {
     tracing::subscriber::set_global_default(
         FmtSubscriber::builder()
             .with_env_filter(log_filter(&args.log))
             .finish(),
     )?;
+    let tls_source = args.take_tls_source()?;
 
     let threads = std::thread::available_parallelism()?;
 
@@ -138,7 +139,31 @@ pub(crate) fn run(args: ServerArgs) -> Result<()> {
 
         let server =
             HttpServer::new(args.bind, router.layer(layer), args.keep_alive_timeout).await?;
-        let tls_certs = args.tls_cert.as_deref().zip(args.tls_key.as_deref());
+
+        let server = match tls_source {
+            TlsSource::SelfSigned => server.with_rustls(None)?,
+            TlsSource::Files { cert, key } => {
+                server.with_rustls(Some((cert.as_path(), key.as_path())))?
+            }
+            TlsSource::Acme(options) => {
+                let acme = AcmeRuntime::new(options)?;
+                let (acceptor, http01, state) = acme.into_parts(handle.clone());
+
+                if let Some(challenge) = http01 {
+                    let bind = challenge.bind();
+                    let challenge_server =
+                        HttpServer::new(bind, challenge.into_router(), args.keep_alive_timeout)
+                            .await?;
+
+                    tracing::info!("starting ACME HTTP-01 challenge listener on {bind}");
+                    current_handle().spawn(challenge_server.serve(handle.clone()));
+                }
+
+                current_handle().spawn(state);
+                server.map_acceptor(|_| acceptor)
+            }
+        }
+        .map_acceptor(TrackAcceptor::new);
 
         tracing::info!(
             threads = threads.get(),
@@ -147,10 +172,6 @@ pub(crate) fn run(args: ServerArgs) -> Result<()> {
             "starting {APP_NAME} on {}",
             args.bind,
         );
-
-        let server = server
-            .with_rustls(tls_certs)?
-            .map_acceptor(TrackAcceptor::new);
 
         server.serve(handle).await;
         Ok(())

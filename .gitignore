@@ -6,6 +6,7 @@ Cargo.lock
 .history
 .vscode
 .direnv
+/.pingly/
 result
 curl
 **/*.rs.bk
