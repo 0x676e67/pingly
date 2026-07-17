@@ -48,7 +48,8 @@ impl Ja4Fingerprint {
 
             match extension {
                 TlsExtension::SupportedVersions { data, .. } => {
-                    supported_versions.extend(data.iter().copied());
+                    supported_versions
+                        .extend(data.versions.iter().map(|version| version.tls_version()));
                 }
                 TlsExtension::SignatureAlgorithms { data, .. } => {
                     signature_algorithms.extend(data.iter().map(|algorithm| algorithm.value()));
@@ -168,6 +169,7 @@ mod tests {
     use crate::tls::{
         enums::{ECPointFormat, SignatureAlgorithm, TlsVersion},
         hello::{ClientHello, HexBytes, ProtocolName, TlsCipherSuite, TlsExtension},
+        SupportedVersions,
     };
 
     #[test]
@@ -324,10 +326,7 @@ mod tests {
                     }
                     TlsExtensionType::SupportedVersions => TlsExtension::SupportedVersions {
                         value: *value,
-                        data: supported_versions
-                            .iter()
-                            .map(|version| TlsVersion::from(*version))
-                            .collect(),
+                        data: SupportedVersions::from_ids(supported_versions.iter().copied()),
                     },
                     TlsExtensionType::SignatureAlgorithms => TlsExtension::SignatureAlgorithms {
                         value: *value,
