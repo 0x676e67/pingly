@@ -210,10 +210,18 @@
             {
                 "supported_versions": {
                     "value": 43,
-                    "data": [
-                        "TLSv1_3",
-                        "TLSv1_2"
-                    ]
+                    "data": {
+                        "versions": [
+                            {
+                                "id": 772,
+                                "name": "TLSv1_3"
+                            },
+                            {
+                                "id": 771,
+                                "name": "TLSv1_2"
+                            }
+                        ]
+                    }
                 }
             },
             {
