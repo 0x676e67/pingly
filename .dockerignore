@@ -1,0 +1,17 @@
+.git
+.github
+.agents
+.codex
+.idea
+.vscode
+.pingly
+target
+examples
+tests
+AGENTS.md
+DATA.md
+README.md
+result
+curl
+*.pdb
+**/*.rs.bk

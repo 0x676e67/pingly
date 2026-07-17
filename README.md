@@ -72,6 +72,34 @@ pingly run --bind 0.0.0.0:443 \
 Both commands use Let's Encrypt staging until `--acme-production` is supplied. Certificates and
 account data use the platform cache directory; systemd services use their managed state directory.
 
+## Docker
+
+The latest Alpine image is published to `ghcr.io/0x676e67/pingly`. Keep certificates in a named
+volume when running it:
+
+```bash
+docker pull ghcr.io/0x676e67/pingly:latest
+docker run --rm --name pingly \
+  -p 8181:8181 \
+  -v pingly-state:/var/lib/pingly \
+  ghcr.io/0x676e67/pingly:latest
+```
+
+For TLS-ALPN-01, map public port 443 to the container's unprivileged listener:
+
+```bash
+docker run -d --name pingly --restart unless-stopped \
+  -p 443:8181 \
+  -v pingly-state:/var/lib/pingly \
+  ghcr.io/0x676e67/pingly:latest run --bind 0.0.0.0:8181 \
+  --acme-domain pingly.us.kg \
+  --acme-email admin@gmail.com \
+  --acme-production
+```
+
+HTTP-01 additionally needs `-p 80:8080`, `--acme-challenge http-01`, and
+`--acme-http-bind 0.0.0.0:8080`.
+
 ## Example
 
 Add Pingly without the server features:
