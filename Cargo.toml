@@ -34,13 +34,12 @@ server = [
     "dep:tower",
     "dep:tower-http",
     "dep:tracing-subscriber",
-    "dep:daemonize",
-    "dep:nix",
-    "dep:sysinfo",
     "dep:pcap",
     "dep:pktparse",
     "dep:pnet",
     "dep:serde_json",
+    "dep:sdjournal",
+    "dep:unitbus",
 ]
 jemalloc = ["jemallocator"]
 tcmalloc = ["tcmalloc/bundled"]
@@ -111,11 +110,12 @@ pcap = { version = "2.0", optional = true }
 pnet = { version = "0.35", optional = true }
 serde_json = { version = "1.0", optional = true }
 pktparse = { version = "0.7.1", features = ["serde"], optional = true }
-
-[target.'cfg(target_family = "unix")'.dependencies]
-daemonize = { version = "0.5.0", optional = true }
-nix = { version = "0.31.1", features = ["user", "signal"], optional = true }
-sysinfo = { version = "0.39", optional = true }
+sdjournal = { version = "=0.1.21", optional = true }
+unitbus = { version = "=0.1.7", default-features = false, features = [
+    "blocking",
+    "config",
+    "rt-tokio",
+], optional = true }
 
 [dev-dependencies]
 serde_json = "1.0"

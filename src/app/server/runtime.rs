@@ -30,7 +30,8 @@ impl Runtime {
 
     /// Runs `serve` with a shutdown handle and blocks until it returns.
     ///
-    /// Ctrl+C asks the handle to start graceful shutdown. Server panics are returned as errors.
+    /// A process shutdown signal asks the handle to start graceful shutdown. Server panics are
+    /// returned as errors.
     pub(crate) fn block_on<F, Fut>(self, serve: F) -> Result<()>
     where
         F: FnOnce(Handle) -> Fut + Send + 'static,

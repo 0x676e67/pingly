@@ -14,20 +14,40 @@
 - HTTP/1 headers and HTTP/2 frames
 - Incremental parsing and serialization
 
-## Server
+## Manual
 
-```console
-cargo run -- run --bind 127.0.0.1:8181
+```bash
+$ pingly -h
+TLS and HTTP/1/2 fingerprint analysis server and Rust library
+
+Usage: pingly
+       pingly <COMMAND>
+
+Commands:
+  run      Run tracking server
+  systemd  Manage the systemd service
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help     Print help
+  -V, --version  Print version
+
+$ pingly systemd -h
+Manage the systemd service
+
+Usage: pingly systemd <COMMAND>
+
+Commands:
+  start    Install, enable, and start the systemd service
+  restart  Update and restart the systemd service
+  stop     Stop the systemd service
+  logs     Show recent systemd logs and follow new entries
+  status   Show the systemd service status
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help  Print help
 ```
-
-TLS is enabled by default. A self-signed certificate is generated when no certificate and key are
-provided.
-
-- `/api/all`
-- `/api/tls`
-- `/api/http1`
-- `/api/http2`
-- `/api/tcp` on Linux when packet capture is enabled
 
 ## Example
 
