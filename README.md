@@ -29,6 +29,19 @@ provided.
 - `/api/http2`
 - `/api/tcp` on Linux when packet capture is enabled
 
+### systemd
+
+On Linux, Pingly can install and manage its own systemd service:
+
+```console
+cargo build --release
+sudo install -Dm755 target/release/pingly /usr/local/bin/pingly
+sudo pingly start --bind 0.0.0.0:8181
+pingly ps
+sudo pingly log
+sudo pingly stop
+```
+
 ## Example
 
 Add Pingly without the server features:

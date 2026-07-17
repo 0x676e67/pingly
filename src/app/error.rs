@@ -6,14 +6,7 @@ pub enum Error {
     IO(#[from] std::io::Error),
 
     #[error(transparent)]
-    ParseInt(#[from] std::num::ParseIntError),
-
-    #[error(transparent)]
     AddressParse(#[from] std::net::AddrParseError),
-
-    #[cfg(target_family = "unix")]
-    #[error(transparent)]
-    Nix(#[from] nix::Error),
 
     #[error(transparent)]
     LogParse(#[from] tracing_subscriber::filter::ParseError),
@@ -33,6 +26,11 @@ pub enum Error {
     #[error(transparent)]
     Join(#[from] tokio::task::JoinError),
 
+    #[cfg(target_os = "linux")]
     #[error(transparent)]
-    Utf8(#[from] std::string::FromUtf8Error),
+    Systemd(#[from] unitbus::Error),
+
+    #[cfg(target_os = "linux")]
+    #[error(transparent)]
+    Journal(#[from] sdjournal::SdJournalError),
 }

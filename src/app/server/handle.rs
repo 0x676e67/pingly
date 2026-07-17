@@ -1,15 +1,16 @@
 //! Shutdown coordination for the HTTP server.
 //!
-//! Runtime code owns the Ctrl+C listener, while connection tasks wait for the same shutdown signal.
-//! The signal is backed by `watch`, so tasks that start waiting after shutdown was requested still
-//! return immediately.
+//! Runtime code owns the process signal listener, while connection tasks wait for the same shutdown
+//! state. The state is backed by `watch`, so tasks that start waiting after shutdown was requested
+//! still return immediately.
 
 use tokio::sync::watch;
 
 /// Shared handle for graceful server shutdown.
 ///
-/// Clones point at the same shutdown state. Once [`Handle::graceful_shutdown`] observes Ctrl+C,
-/// the listener stops accepting new sockets and active connections are asked to drain once.
+/// Clones point at the same shutdown state. Once [`Handle::graceful_shutdown`] observes an
+/// interrupt or termination signal, the listener stops accepting new sockets and active
+/// connections are asked to drain once.
 #[derive(Clone)]
 pub(crate) struct Handle {
     graceful_shutdown: watch::Sender<bool>,
@@ -35,17 +36,43 @@ impl Handle {
         }
     }
 
-    /// Waits for Ctrl+C and then requests graceful shutdown.
+    /// Waits for a process shutdown signal and then requests graceful shutdown.
     ///
     /// If installing or polling the signal handler fails, the server still starts shutdown. That is
     /// the safer outcome for a process that no longer knows whether it can receive future signals.
     pub(super) async fn graceful_shutdown(self) {
-        match tokio::signal::ctrl_c().await {
-            Ok(()) => tracing::info!("received graceful shutdown signal"),
+        match shutdown_signal().await {
+            Ok(signal) => tracing::info!(signal, "received graceful shutdown signal"),
             Err(error) => tracing::warn!(%error, "failed to listen for shutdown signal"),
         }
         self.graceful_shutdown.send_replace(true);
     }
+}
+
+#[cfg(unix)]
+async fn shutdown_signal() -> std::io::Result<&'static str> {
+    use tokio::signal::unix::{signal, SignalKind};
+
+    let mut interrupt = signal(SignalKind::interrupt())?;
+    let mut terminate = signal(SignalKind::terminate())?;
+
+    tokio::select! {
+        received = interrupt.recv() => signal_name(received, "SIGINT"),
+        received = terminate.recv() => signal_name(received, "SIGTERM"),
+    }
+}
+
+#[cfg(unix)]
+fn signal_name(received: Option<()>, name: &'static str) -> std::io::Result<&'static str> {
+    received
+        .map(|()| name)
+        .ok_or_else(|| std::io::Error::other(format!("{name} signal stream closed")))
+}
+
+#[cfg(not(unix))]
+async fn shutdown_signal() -> std::io::Result<&'static str> {
+    tokio::signal::ctrl_c().await?;
+    Ok("Ctrl+C")
 }
 
 #[cfg(test)]

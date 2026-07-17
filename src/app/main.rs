@@ -1,9 +1,9 @@
 mod alloc;
 mod args;
-#[cfg(target_family = "unix")]
-mod daemon;
 mod error;
 mod server;
+#[cfg(target_os = "linux")]
+mod systemd;
 #[cfg(target_os = "linux")]
 mod tcp;
 
@@ -37,20 +37,18 @@ const APP_NAME: &str = env!("CARGO_PKG_NAME");
 
 fn main() -> Result<()> {
     let args = AppArgs::parse();
-    #[cfg(target_family = "unix")]
-    let daemon = daemon::Daemon::default();
     match args.command {
         Command::Run(args) => run(args),
-        #[cfg(target_family = "unix")]
-        Command::Start(args) => daemon.start(args),
-        #[cfg(target_family = "unix")]
-        Command::Restart(args) => daemon.restart(args),
-        #[cfg(target_family = "unix")]
-        Command::Stop => daemon.stop(),
-        #[cfg(target_family = "unix")]
-        Command::Ps => daemon.status(),
-        #[cfg(target_family = "unix")]
-        Command::Log => daemon.log(),
+        #[cfg(target_os = "linux")]
+        Command::Start(args) => systemd::start(args),
+        #[cfg(target_os = "linux")]
+        Command::Restart(args) => systemd::restart(args),
+        #[cfg(target_os = "linux")]
+        Command::Stop => systemd::stop(),
+        #[cfg(target_os = "linux")]
+        Command::Log => systemd::log(),
+        #[cfg(target_os = "linux")]
+        Command::Ps => systemd::status(),
     }
 }
 
