@@ -158,6 +158,10 @@ fn install(bus: &BlockingUnitBus, config: ServerArgs) -> Result<()> {
     Ok(())
 }
 
+/// Returns the original user when the command is run through sudo.
+///
+/// Direct root invocations leave the service identity unset so executables and TLS files under
+/// `/root` remain accessible.
 fn invoking_user() -> Option<ServiceIdentity> {
     let uid = env::var("SUDO_UID").ok()?.parse().ok()?;
     let gid = env::var("SUDO_GID").ok()?.parse().ok()?;
@@ -215,17 +219,13 @@ fn service_unit(
         escape_systemd_expansions(argument);
     }
 
-    let mut extra_service = Vec::with_capacity(7);
-    if identity.is_none() {
-        extra_service.push("DynamicUser=yes".to_owned());
-    }
+    let mut extra_service = Vec::with_capacity(5);
     if tcp_capture_packet {
         extra_service.push("AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN".to_owned());
         extra_service.push("CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN".to_owned());
     }
     extra_service.extend([
         "NoNewPrivileges=yes".to_owned(),
-        "PrivateTmp=yes".to_owned(),
         "ProtectSystem=strict".to_owned(),
         "ProtectHome=read-only".to_owned(),
     ]);
@@ -380,7 +380,7 @@ mod tests {
     }
 
     #[test]
-    fn capture_configuration_uses_dynamic_user_and_network_capabilities() {
+    fn capture_configuration_uses_network_capabilities() {
         let mut config = server_config();
         config.tcp_capture_packet = true;
         config.tcp_capture_interface = Some("capture $lan".to_owned());
@@ -390,11 +390,28 @@ mod tests {
             .render()
             .expect("service unit should render");
 
-        assert!(unit.contains("DynamicUser=yes\n"));
+        assert!(!unit.contains("DynamicUser=yes\n"));
+        assert!(!unit.contains("PrivateTmp=yes\n"));
         assert!(unit.contains("AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN\n"));
         assert!(unit.contains("CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN\n"));
         assert!(unit.contains("--tcp-capture-packet"));
         assert!(unit.contains("--tcp-capture-interface \"capture $$lan\""));
+    }
+
+    #[test]
+    fn root_install_keeps_the_executable_visible() {
+        let unit = service_unit(
+            PathBuf::from("/root/.cargo/bin/pingly"),
+            server_config(),
+            None,
+        )
+        .expect("service unit should build")
+        .render()
+        .expect("service unit should render");
+
+        assert!(unit.contains("ExecStart=/root/.cargo/bin/pingly"));
+        assert!(!unit.contains("DynamicUser=yes"));
+        assert!(!unit.contains("PrivateTmp=yes"));
     }
 
     #[test]
