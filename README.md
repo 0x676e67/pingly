@@ -56,16 +56,16 @@ TLS-ALPN-01 validates on public TCP port 443 and is the default:
 
 ```bash
 pingly run --bind 0.0.0.0:443 \
-  --acme-domain fingerprint.example \
-  --acme-email admin@fingerprint.example
+  --acme-domain pingly.us.kg \
+  --acme-email admin@gmail.com
 ```
 
 HTTP-01 serves its challenge on `0.0.0.0:80` by default:
 
 ```bash
 pingly run --bind 0.0.0.0:443 \
-  --acme-domain fingerprint.example \
-  --acme-email admin@fingerprint.example \
+  --acme-domain pingly.us.kg \
+  --acme-email admin@gmail.com \
   --acme-challenge http-01
 ```
 
