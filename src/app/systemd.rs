@@ -236,7 +236,10 @@ fn service_unit(
         escape_systemd_expansions(argument);
     }
 
-    let mut extra_service = Vec::with_capacity(5);
+    let mut extra_service = Vec::with_capacity(6);
+    // unitbus 0.1.7 quotes this directive, but systemd treats those quotes as path bytes.
+    // https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#WorkingDirectory=
+    extra_service.push(format!("WorkingDirectory={working_directory}"));
     if tcp_capture_packet {
         extra_service.push("AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN".to_owned());
         extra_service.push("CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN".to_owned());
@@ -253,7 +256,6 @@ fn service_unit(
     spec.after = vec!["network.target".to_owned()];
     spec.service_type = Some(ServiceType::Exec);
     spec.exec_start = exec_start;
-    spec.working_directory = Some(working_directory);
     spec.environment = environment;
     spec.restart = Some("on-failure".to_owned());
     spec.restart_sec = Some(3);
