@@ -16,7 +16,7 @@
 
 ## Manual
 
-```console
+```bash
 $ pingly -h
 TLS and HTTP/1/2 fingerprint analysis server and Rust library
 
