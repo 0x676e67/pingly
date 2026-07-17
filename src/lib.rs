@@ -1,7 +1,7 @@
 //! Protocol data models and fingerprint parsers used by the pingly server.
 //!
-//! The crate can parse TLS ClientHello captures and HTTP/2 byte streams, serialize the decoded
-//! packets to JSON, and deserialize saved API data back into the same owned structures.
+//! The crate can parse TLS ClientHello captures, HTTP/1 message heads, and HTTP/2 byte streams.
+//! Decoded structures can be serialized to JSON and restored without losing protocol data.
 //!
 //! # TLS ClientHello
 //!
@@ -22,6 +22,31 @@
 //! let restored: ClientHello = serde_json::from_slice(&json)?;
 //! assert_eq!(restored.ja3(), ja3);
 //! assert_eq!(restored.ja4(), ja4);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # HTTP/1
+//!
+//! [h1::Http1HeadBuffer] captures arbitrary chunks without parsing fields, so validation and
+//! owned model construction can be moved off an I/O path. [h1::Http1Parser] parses immediately.
+//! Both preserve field order, original field-name casing, and field-value bytes.
+//!
+//! ```
+//! use pingly::h1::Http1HeadBuffer;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let mut capture = Http1HeadBuffer::response();
+//!
+//! for chunk in b"HTTP/1.1 200 OK\r\nServer: pingly\r\n\r\n".chunks(9) {
+//!     capture.extend(chunk);
+//! }
+//!
+//! let response = capture
+//!     .parse()?
+//!     .into_response()
+//!     .ok_or_else(|| std::io::Error::other("capture did not contain an HTTP/1 response"))?;
+//! assert_eq!(response.status_code, 200);
 //! # Ok(())
 //! # }
 //! ```
@@ -52,5 +77,6 @@
 #![deny(missing_docs)]
 #![cfg_attr(test, deny(warnings))]
 
+pub mod h1;
 pub mod h2;
 pub mod tls;

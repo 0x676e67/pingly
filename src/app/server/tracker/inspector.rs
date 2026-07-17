@@ -1,18 +1,21 @@
 use std::{
     ops::Deref,
     pin::Pin,
-    sync::Arc,
+    sync::{Arc, OnceLock},
     task::{self, Poll},
 };
 
-use bytes::Bytes;
 use pin_project_lite::pin_project;
-use pingly::h2::{frame, frame::Frame, HTTP2_CLIENT_PREFACE};
 pub use pingly::tls::{ClientHello, ClientHelloBuffer};
+use pingly::{
+    h1::Http1HeadBuffer,
+    h2::{frame, frame::Frame, HTTP2_CLIENT_PREFACE},
+};
 use tokio::io::{self, AsyncRead, AsyncWrite, ReadBuf};
 use tokio_rustls::server::TlsStream;
 
-pub type Http1Headers = Arc<boxcar::Vec<(Bytes, Bytes)>>;
+/// Shared storage for one raw HTTP/1 request head.
+pub type Http1RequestCapture = Arc<OnceLock<Http1HeadBuffer>>;
 pub type Http2Frame = Arc<boxcar::Vec<Frame>>;
 
 const HTTP2_CAPTURE_MAX_BYTES: usize = 1024 * 1024;
@@ -204,17 +207,21 @@ where
 }
 
 pin_project! {
-    /// A wrapper over a TLS stream that inspects HTTP/1.x traffic.
-    /// It buffers incoming data, parses HTTP/1 request headers,
-    /// and records parsed headers for later inspection or analysis.
-    /// Does not interfere with normal stream reading or writing.
+    /// A TLS stream wrapper that captures an HTTP/1 request head for delayed analysis.
+    ///
+    /// The read path only locates the empty line ending the field section. Field validation and
+    /// owned model construction are deferred until the response is built. HTTP/1 message framing
+    /// is defined by
+    /// [RFC 9112, Section 2.1](https://www.rfc-editor.org/rfc/rfc9112.html#section-2.1).
     pub struct Http1Inspector<I> {
         #[pin]
         inner: TlsStream<TlsInspector<I>>,
 
-        buf: Vec<u8>,
+        // Request bytes retained until the head is complete or reaches its limit.
+        capture: Option<Http1HeadBuffer>,
 
-        headers: Http1Headers,
+        // Completed raw head shared with response analysis.
+        request_capture: Http1RequestCapture,
     }
 }
 
@@ -222,20 +229,20 @@ impl<I> Http1Inspector<I>
 where
     I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    /// Create a new [`Http1Inspector`] instance.
+    /// Creates a new [Http1Inspector] instance.
     #[inline]
     pub fn new(inner: TlsStream<TlsInspector<I>>) -> Self {
         Self {
             inner,
-            buf: Vec::new(),
-            headers: Arc::new(boxcar::Vec::new()),
+            capture: Some(Http1HeadBuffer::request()),
+            request_capture: Arc::new(OnceLock::new()),
         }
     }
 
-    /// Get previously parsed HTTP/1 headers
+    /// Returns the raw HTTP/1 request head shared with delayed analysis.
     #[inline]
-    pub fn headers(&self) -> Http1Headers {
-        self.headers.clone()
+    pub fn request_capture(&self) -> Http1RequestCapture {
+        self.request_capture.clone()
     }
 }
 
@@ -252,20 +259,21 @@ where
         let prev_len = buf.filled().len();
         let poll = this.inner.poll_read(cx, buf);
 
-        // Only process new data
         let new_data = &buf.filled()[prev_len..];
         if !new_data.is_empty() {
-            this.buf.extend_from_slice(new_data);
-            // Try to parse headers
-            let mut headers = [httparse::EMPTY_HEADER; 64];
-            let mut req = httparse::Request::new(&mut headers);
-            if let Ok(httparse::Status::Complete(_header_len)) = req.parse(this.buf) {
-                let headers = this.headers.deref();
-                for h in req.headers.iter() {
-                    headers.push((
-                        Bytes::from(h.name.to_owned()),
-                        Bytes::copy_from_slice(h.value),
-                    ));
+            if let Some(capture) = this.capture.as_mut() {
+                capture.extend(new_data);
+            }
+
+            let capture_ready = this
+                .capture
+                .as_ref()
+                .is_some_and(|capture| capture.is_complete() || capture.is_full());
+            if capture_ready {
+                if let Some(capture) = this.capture.take() {
+                    if this.request_capture.set(capture).is_err() {
+                        tracing::debug!("HTTP/1 request head was already captured");
+                    }
                 }
             }
         }
