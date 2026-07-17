@@ -3,14 +3,45 @@ name = "pingly"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.96"
-license = "MIT"
-description = "Analysis server for TLS and HTTP/1/2/3"
+license = "Apache-2.0"
+description = "TLS and HTTP/1/2 fingerprint analysis server and Rust library"
 keywords = ["http", "server", "web", "ja3", "ja4"]
 authors = ["0x676e67 <gngppz@gmail.com>"]
 repository = "https://github.com/0x676e67/pingly"
+documentation = "https://docs.rs/pingly"
+
+[[bin]]
+name = "pingly"
+path = "src/app/main.rs"
+required-features = ["server"]
 
 [features]
-default = ["mimalloc"]
+default = ["server", "mimalloc"]
+server = [
+    "dep:axum",
+    "dep:axum-extra",
+    "dep:boxcar",
+    "dep:clap",
+    "dep:futures-util",
+    "dep:hyper",
+    "dep:hyper-util",
+    "dep:pin-project-lite",
+    "dep:pingora-runtime",
+    "dep:rcgen",
+    "dep:rustls-pemfile",
+    "dep:tokio",
+    "dep:tokio-rustls",
+    "dep:tower",
+    "dep:tower-http",
+    "dep:tracing-subscriber",
+    "dep:daemonize",
+    "dep:nix",
+    "dep:sysinfo",
+    "dep:pcap",
+    "dep:pktparse",
+    "dep:pnet",
+    "dep:serde_json",
+]
 jemalloc = ["jemallocator"]
 tcmalloc = ["tcmalloc/bundled"]
 snmalloc = ["snmalloc-rs"]
@@ -20,8 +51,8 @@ mimalloc = ["dep:mimalloc"]
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
-clap = { version = "4", features = ["derive", "env"] }
-tokio = { version = "1", features = [
+clap = { version = "4", features = ["derive", "env"], optional = true }
+tokio = { version = "1", optional = true, features = [
     "io-util",
     "macros",
     "net",
@@ -31,43 +62,43 @@ tokio = { version = "1", features = [
     "time",
 ] }
 tracing = { version = "0.1.40" }
-tracing-subscriber = { version = "0.3.0", features = ["env-filter"] }
-hyper = { version = "1.10.1", features = ["http1", "http2", "server"] }
-hyper-util = { version = "0.1.20", default-features = false, features = [
+tracing-subscriber = { version = "0.3.0", features = ["env-filter"], optional = true }
+hyper = { version = "1.10.1", features = ["http1", "http2", "server"], optional = true }
+hyper-util = { version = "0.1.20", default-features = false, optional = true, features = [
     "http1",
     "http2",
     "server",
     "service",
     "tokio",
 ] }
-pingora-runtime = "0.8.1"
-axum = { version = "0.8.1", features = ["http2"] }
-axum-extra = { version = "0.12.1", default-features = false, features = [
+pingora-runtime = { version = "0.8.1", optional = true }
+axum = { version = "0.8.1", features = ["http2"], optional = true }
+axum-extra = { version = "0.12.1", default-features = false, optional = true, features = [
     "erased-json",
 ] }
-tower-http = { version = "0.7.0", default-features = false, features = [
+tower-http = { version = "0.7.0", default-features = false, optional = true, features = [
     "trace",
     "cors",
 ] }
-tower = { version = "0.5.2", default-features = false, features = [
+tower = { version = "0.5.2", default-features = false, optional = true, features = [
     "limit",
     "util",
 ] }
-rcgen = "0.14.1"
+rcgen = { version = "0.14.1", optional = true }
 bytes = "1.9.0"
 hex = "0.4.3"
 md5 = "0.8.0"
 nom = "8.0.0"
 sha2 = { version = "0.11.0", default-features = false }
 
-tokio-rustls = "0.26"
-rustls-pemfile = "2.0"
-futures-util = "0.3.31"
+tokio-rustls = { version = "0.26", optional = true }
+rustls-pemfile = { version = "2.0", optional = true }
+futures-util = { version = "0.3.31", optional = true }
 httlib-hpack = "0.1.3"
-pin-project-lite = "0.2.9"
+pin-project-lite = { version = "0.2.9", optional = true }
 tls-parser = "0.12.0"
 httparse = "1.8.0"
-boxcar = "0.2.8"
+boxcar = { version = "0.2.8", optional = true }
 
 tcmalloc = { version = "0.3.0", optional = true }
 snmalloc-rs = { version = "0.7.4", optional = true }
@@ -76,18 +107,21 @@ jemallocator = { package = "tikv-jemallocator", version = "0.6", optional = true
 mimalloc = { version = "0.1.39", default-features = false, optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-pcap = "2.0"
-pnet = "0.35"
-serde_json = "1.0"
-pktparse = { version = "0.7.1", features = ["serde"] }
+pcap = { version = "2.0", optional = true }
+pnet = { version = "0.35", optional = true }
+serde_json = { version = "1.0", optional = true }
+pktparse = { version = "0.7.1", features = ["serde"], optional = true }
 
 [target.'cfg(target_family = "unix")'.dependencies]
-daemonize = "0.5.0"
-nix = { version = "0.31.1", features = ["user", "signal"] }
-sysinfo = "0.39"
+daemonize = { version = "0.5.0", optional = true }
+nix = { version = "0.31.1", features = ["user", "signal"], optional = true }
+sysinfo = { version = "0.39", optional = true }
 
 [dev-dependencies]
 serde_json = "1.0"
+
+[package.metadata.docs.rs]
+no-default-features = true
 
 [profile.release]
 opt-level = 's'
