@@ -185,11 +185,22 @@
             {
                 "supported_versions": {
                     "value": 43,
-                    "data": [
-                        "GREASE (0x4a4a)",
-                        "TLSv1_3",
-                        "TLSv1_2"
-                    ]
+                    "data": {
+                        "versions": [
+                            {
+                                "id": 19018,
+                                "name": "GREASE"
+                            },
+                            {
+                                "id": 772,
+                                "name": "TLSv1_3"
+                            },
+                            {
+                                "id": 771,
+                                "name": "TLSv1_2"
+                            }
+                        ]
+                    }
                 }
             },
             {

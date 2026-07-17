@@ -19,6 +19,7 @@ use super::{
     ja3::Ja3Fingerprint,
     ja4::Ja4Fingerprint,
     parser,
+    version::SupportedVersions,
 };
 
 const DEFAULT_CLIENT_HELLO_CAPACITY: usize = 2048;
@@ -932,8 +933,8 @@ pub enum TlsExtension {
         #[serde(deserialize_with = "extension_id::supported_versions")]
         value: u16,
 
-        /// Versions in client preference order.
-        data: Vec<TlsVersion>,
+        /// Protocol versions in client preference order.
+        data: SupportedVersions,
     },
 
     /// A TLS 1.2 session ticket offered for resumption.
@@ -1806,10 +1807,9 @@ impl ClientHello {
                         .extensions
                         .push(TlsExtension::SupportedVersions {
                             value: extension_id,
-                            data: versions
-                                .into_iter()
-                                .map(|version| TlsVersion::from(version.0))
-                                .collect(),
+                            data: SupportedVersions::from_ids(
+                                versions.into_iter().map(|version| version.0),
+                            ),
                         });
                 }
                 tls_parser::TlsExtension::SessionTicket(data) => {
@@ -2143,7 +2143,7 @@ mod tests {
         ClientHello, ClientHelloBuffer, ClientHelloParseStage, ECHClientHelloOuter, HexBytes,
         KeyShare, ProtocolName, StatusRequest, TlsCipherSuite, TlsExtension,
     };
-    use crate::tls::{CompressionAlgorithm, NamedGroup, TlsVersion};
+    use crate::tls::{CompressionAlgorithm, NamedGroup, SupportedVersions, TlsVersion};
 
     fn tls_record(payload: &[u8]) -> Vec<u8> {
         let length = u16::try_from(payload.len()).unwrap();
@@ -2525,7 +2525,7 @@ mod tests {
             extensions: vec![
                 TlsExtension::SupportedVersions {
                     value: 0x002b,
-                    data: vec![TlsVersion::from(0x2a2a), TlsVersion::TLSv1_3],
+                    data: SupportedVersions::from_ids([0x2a2a, 0x0304]),
                 },
                 TlsExtension::SupportedGroups {
                     value: 0x000a,
@@ -2549,6 +2549,21 @@ mod tests {
                     "name": "TLS_AES_128_GCM_SHA256"
                 }
             ])
+        );
+        assert_eq!(
+            json["extensions"][0]["supported_versions"]["data"],
+            serde_json::json!({
+                "versions": [
+                    {
+                        "id": 10794,
+                        "name": "GREASE"
+                    },
+                    {
+                        "id": 772,
+                        "name": "TLSv1_3"
+                    }
+                ]
+            })
         );
         assert!(json.get("cipher_values").is_none());
         assert!(json.get("ciphers").is_none());
@@ -2588,7 +2603,7 @@ mod tests {
     #[test]
     fn tls_extensions_reject_variant_id_mismatches() {
         let wrong_known_id = serde_json::json!({
-            "supported_versions": {"value": 0, "data": []}
+            "supported_versions": {"value": 0, "data": {"versions": []}}
         });
         let non_grease_id = serde_json::json!({
             "grease": {"value": 0}

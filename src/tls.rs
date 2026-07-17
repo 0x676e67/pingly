@@ -13,6 +13,7 @@ mod hello;
 mod ja3;
 mod ja4;
 mod parser;
+mod version;
 
 pub use enums::{
     AuthenticatedEncryptionWithAssociatedData, CertificateCompressionAlgorithm,
@@ -27,3 +28,4 @@ pub use hello::{
 };
 pub use ja3::Ja3Fingerprint;
 pub use ja4::Ja4Fingerprint;
+pub use version::{SupportedVersion, SupportedVersions};
