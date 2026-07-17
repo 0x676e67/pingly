@@ -9,7 +9,6 @@ use std::{
 pub(crate) enum AcceptOutcome<I, S> {
     /// Passes the adapted stream and service to Hyper.
     Serve { stream: I, service: S },
-
     /// The acceptor completed a protocol-specific exchange itself.
     Handled,
 }

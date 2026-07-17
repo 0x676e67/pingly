@@ -23,7 +23,6 @@ pub(crate) struct RustlsAcceptor {
 #[derive(Clone)]
 enum RustlsMode {
     Fixed(Arc<ServerConfig>),
-
     Acme {
         default_config: Arc<ServerConfig>,
 
