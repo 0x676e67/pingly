@@ -54,7 +54,7 @@ where
                 _ => {
                     tracing::debug!("negotiated ALPN protocol: HTTP/1.1 or not set");
                     let inspector = Http1Inspector::new(stream);
-                    connect_track.set_http1_headers(inspector.headers());
+                    connect_track.set_http1_request_capture(inspector.request_capture());
                     Inspector::Http1(inspector)
                 }
             };

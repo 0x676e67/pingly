@@ -1,26 +1,20 @@
-use std::{borrow::Cow, net::SocketAddr};
+use std::net::SocketAddr;
 
 use axum::{
     body::Body,
     http::{header::USER_AGENT, HeaderValue, Method, Request},
 };
-use pingly::{h2::AkamaiFingerprint, tls::TlsVersion};
+use pingly::{
+    h1::{Http1Head, RequestHead},
+    h2::AkamaiFingerprint,
+    tls::TlsVersion,
+};
 use serde::{Serialize, Serializer};
 use tokio_rustls::rustls::ProtocolVersion;
 
-use super::inspector::{ClientHello, ClientHelloBuffer, Http1Headers, Http2Frame};
+use super::inspector::{ClientHello, ClientHelloBuffer, Http1RequestCapture, Http2Frame};
 #[cfg(target_os = "linux")]
 use crate::tcp::CapturedPacket;
-
-/// A captured HTTP header field, preserving the original order.
-#[derive(Serialize)]
-pub struct HeaderField<'a> {
-    /// Header name rendered as UTF-8 text, replacing invalid byte sequences.
-    name: Cow<'a, str>,
-
-    /// Header value rendered as UTF-8 text, replacing invalid byte sequences.
-    value: Cow<'a, str>,
-}
 
 /// TLS handshake tracking information, which includes the client hello payload.
 #[derive(Serialize)]
@@ -45,7 +39,10 @@ pub struct TlsTrackInfo {
 }
 
 /// HTTP/1.x request header tracking information.
-pub struct Http1TrackInfo(Http1Headers);
+pub struct Http1TrackInfo {
+    /// Request parsed from its raw capture during response analysis.
+    request: RequestHead,
+}
 
 /// HTTP/2 tracking information, including Akamai fingerprint and sent frames.
 #[derive(Serialize)]
@@ -70,8 +67,8 @@ pub struct ConnectionTrack {
     /// Raw TLS records retained until the ClientHello can be analyzed.
     client_hello: Option<ClientHelloBuffer>,
 
-    /// HTTP/1 request headers retained in their received order.
-    http1_headers: Option<Http1Headers>,
+    /// Raw HTTP/1 request head shared with the stream inspector for delayed parsing.
+    http1_capture: Option<Http1RequestCapture>,
 
     /// HTTP/2 client frames retained in their received order.
     http2_frames: Option<Http2Frame>,
@@ -177,8 +174,8 @@ impl TlsTrackInfo {
 
 impl Http1TrackInfo {
     /// Create a new [`Http1TrackInfo`] instance.
-    pub fn new(headers: Http1Headers) -> Http1TrackInfo {
-        Http1TrackInfo(headers)
+    pub fn new(request: RequestHead) -> Http1TrackInfo {
+        Http1TrackInfo { request }
     }
 }
 
@@ -187,15 +184,7 @@ impl Serialize for Http1TrackInfo {
     where
         S: Serializer,
     {
-        use serde::ser::SerializeSeq;
-        let mut seq = serializer.serialize_seq(Some(self.0.count()))?;
-        for (_, (name, value)) in self.0.iter() {
-            seq.serialize_element(&HeaderField {
-                name: String::from_utf8_lossy(name),
-                value: String::from_utf8_lossy(value),
-            })?;
-        }
-        seq.end()
+        self.request.headers.serialize(serializer)
     }
 }
 
@@ -240,10 +229,10 @@ impl ConnectionTrack {
         self.client_hello = client_hello;
     }
 
-    /// Set HTTP/1 headers
+    /// Set the raw HTTP/1 request head shared with delayed analysis.
     #[inline]
-    pub fn set_http1_headers(&mut self, headers: Http1Headers) {
-        self.http1_headers = Some(headers);
+    pub fn set_http1_request_capture(&mut self, capture: Http1RequestCapture) {
+        self.http1_capture = Some(capture);
     }
 
     /// Set HTTP/2 frames
@@ -257,7 +246,7 @@ fn protocol_track_info(track: Track, connection_track: ConnectionTrack) -> Proto
     let ConnectionTrack {
         tls_version_negotiated,
         client_hello,
-        http1_headers,
+        http1_capture,
         http2_frames,
     } = connection_track;
 
@@ -274,7 +263,20 @@ fn protocol_track_info(track: Track, connection_track: ConnectionTrack) -> Proto
     }
 
     let http1 = if track.includes_http1() {
-        http1_headers.map(Http1TrackInfo::new)
+        http1_capture.and_then(|capture| {
+            let buffer = capture.get()?;
+            match buffer.parse() {
+                Ok(Http1Head::Request(request)) => Some(Http1TrackInfo::new(request)),
+                Ok(Http1Head::Response(_)) => {
+                    tracing::debug!("request capture unexpectedly contained an HTTP/1 response");
+                    None
+                }
+                Err(error) => {
+                    tracing::debug!(?error, "failed to parse captured HTTP/1 request head");
+                    None
+                }
+            }
+        })
     } else {
         None
     };
@@ -374,24 +376,29 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, OnceLock};
 
-    use bytes::Bytes;
+    use pingly::h1::Http1HeadBuffer;
     use serde_json::json;
 
-    use super::{Http1TrackInfo, Track};
+    use super::{protocol_track_info, ConnectionTrack, Track};
 
     #[test]
-    fn http1_headers_serialize_name_and_value_separately() {
-        let headers = Arc::new(boxcar::Vec::new());
-        headers.push((
-            Bytes::from_static(b"user-agent"),
-            Bytes::from_static(b"curl"),
-        ));
+    fn http1_capture_is_parsed_when_analysis_is_built() {
+        let wire = b"GET / HTTP/1.1\r\nuSeR-aGeNt: curl\r\n\r\n";
+        let mut buffer = Http1HeadBuffer::request();
+        assert_eq!(buffer.extend(wire), wire.len());
+
+        let capture = Arc::new(OnceLock::new());
+        capture.set(buffer).unwrap();
+
+        let mut connection = ConnectionTrack::default();
+        connection.set_http1_request_capture(capture);
+        let http1 = protocol_track_info(Track::HTTP1, connection).http1.unwrap();
 
         assert_eq!(
-            serde_json::to_value(Http1TrackInfo::new(headers)).unwrap(),
-            json!([{"name": "user-agent", "value": "curl"}])
+            serde_json::to_value(http1).unwrap(),
+            json!([{"name": "uSeR-aGeNt", "value": "curl"}])
         );
     }
 
