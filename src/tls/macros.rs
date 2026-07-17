@@ -48,8 +48,11 @@ macro_rules! impl_enum_deserialize {
                                 })
                                 .and_then(|value| <$wire_type>::try_from(value).ok())
                                 .map($enum_name::from)
+                                .and_then(|value| {
+                                    matches!(value, $enum_name::Unknown(_)).then_some(value)
+                                })
                                 .ok_or_else(|| E::custom(format_args!(
-                                    "unknown {} value {value:?}",
+                                    "invalid serialized {} value {value:?}",
                                     stringify!($enum_name),
                                 ))),
                         }

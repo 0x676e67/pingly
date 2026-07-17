@@ -33,6 +33,42 @@ pub enum Http2ParseError {
     Frame(#[from] FrameParseError),
 }
 
+/// An incremental HTTP/2 parsing error together with frames completed before it.
+///
+/// A single input chunk can contain several valid frames followed by one malformed frame. This
+/// type preserves those completed frames even though the chunk ultimately returns an error.
+#[derive(Debug, thiserror::Error)]
+#[error("{error}")]
+pub struct Http2PushError {
+    /// Logical frames completed before the malformed input was encountered.
+    completed_frames: Vec<Frame>,
+
+    /// The protocol error that stopped parsing.
+    #[source]
+    error: Http2ParseError,
+}
+
+impl Http2PushError {
+    /// Returns the logical frames completed before parsing stopped.
+    pub fn completed_frames(&self) -> &[Frame] {
+        &self.completed_frames
+    }
+
+    /// Returns the protocol error that stopped parsing.
+    pub const fn error(&self) -> &Http2ParseError {
+        &self.error
+    }
+
+    /// Consumes this error and returns the completed frames and protocol error.
+    pub fn into_parts(self) -> (Vec<Frame>, Http2ParseError) {
+        (self.completed_frames, self.error)
+    }
+
+    fn into_error(self) -> Http2ParseError {
+        self.error
+    }
+}
+
 /// Incrementally parses HTTP/2 frames from arbitrary byte chunks.
 ///
 /// The default parser expects the HTTP/2 client connection preface. This is
@@ -81,9 +117,18 @@ impl Http2Parser {
     /// The chunk may stop anywhere, including inside the connection preface,
     /// frame header, payload, or HPACK field block. Use [`Self::push_into`] to
     /// reuse an existing output vector in allocation-sensitive code.
-    pub fn push(&mut self, data: &[u8]) -> Result<Vec<Frame>, Http2ParseError> {
+    ///
+    /// If a malformed frame stops parsing, [`Http2PushError`] retains frames completed earlier in
+    /// the same chunk.
+    pub fn push(&mut self, data: &[u8]) -> Result<Vec<Frame>, Http2PushError> {
         let mut frames = Vec::new();
-        self.push_into(data, &mut frames)?;
+        if let Err(error) = self.push_into(data, &mut frames) {
+            return Err(Http2PushError {
+                completed_frames: frames,
+                error,
+            });
+        }
+
         Ok(frames)
     }
 
@@ -191,7 +236,7 @@ pub fn parse_frames(data: &[u8]) -> Result<Vec<Frame>, Http2ParseError> {
 }
 
 fn parse_complete(mut parser: Http2Parser, data: &[u8]) -> Result<Vec<Frame>, Http2ParseError> {
-    let frames = parser.push(data)?;
+    let frames = parser.push(data).map_err(Http2PushError::into_error)?;
     parser.finish()?;
     Ok(frames)
 }
@@ -258,5 +303,25 @@ mod tests {
 
         assert_eq!(restored, frames);
         assert!(matches!(json, Value::Array(_)));
+    }
+
+    #[test]
+    fn push_error_preserves_frames_completed_before_malformed_input() {
+        const INVALID_WINDOW_UPDATE: &[u8] = &[0, 0, 4, 0x08, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+        let mut input = SETTINGS_FRAME.to_vec();
+        input.extend_from_slice(INVALID_WINDOW_UPDATE);
+
+        let mut parser = Http2Parser::without_preface();
+        let error = parser.push(&input).unwrap_err();
+
+        assert!(matches!(error.error(), Http2ParseError::Frame(_)));
+        assert_eq!(error.completed_frames().len(), 1);
+        assert!(matches!(error.completed_frames()[0], Frame::Settings(_)));
+
+        let (frames, source) = error.into_parts();
+        assert_eq!(frames.len(), 1);
+        assert!(matches!(source, Http2ParseError::Frame(_)));
+        assert!(parser.is_idle());
     }
 }

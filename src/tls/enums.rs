@@ -226,6 +226,14 @@ fn parse_serialized_identifier(value: &str) -> Option<(u16, bool)> {
         )
     };
 
+    if hex.len() != 4
+        || hex
+            .bytes()
+            .any(|byte| !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte))
+    {
+        return None;
+    }
+
     let value = u16::from_str_radix(hex, 16).ok()?;
     Some((value, requires_grease))
 }
@@ -241,7 +249,8 @@ pub(super) const fn is_grease_value(value: u16) -> bool {
 mod tests {
     use super::{
         AuthenticatedEncryptionWithAssociatedData, CertificateCompressionAlgorithm,
-        KeyDerivationFunction, PskKeyExchangeMode, SignatureAlgorithm, TlsVersion,
+        CompressionAlgorithm, KeyDerivationFunction, PskKeyExchangeMode, SignatureAlgorithm,
+        TlsVersion,
     };
 
     #[test]
@@ -263,6 +272,24 @@ mod tests {
         );
         assert!(serde_json::from_str::<PskKeyExchangeMode>(r#""Unknown (0x000b)""#).is_err());
         assert!(serde_json::from_str::<TlsVersion>(r#""Unknown (0x0a0a)""#).is_err());
+    }
+
+    #[test]
+    fn known_identifiers_cannot_use_unknown_labels() {
+        assert!(serde_json::from_str::<TlsVersion>(r#""Unknown (0x0304)""#).is_err());
+        assert!(serde_json::from_str::<CompressionAlgorithm>(r#""Unknown (0x0000)""#).is_err());
+    }
+
+    #[test]
+    fn dynamic_identifier_labels_require_canonical_hexadecimal() {
+        let version = TlsVersion::from(0x0305);
+
+        assert_eq!(
+            serde_json::from_str::<TlsVersion>(r#""Unknown (0x0305)""#).unwrap(),
+            version
+        );
+        assert!(serde_json::from_str::<TlsVersion>(r#""Unknown (0x305)""#).is_err());
+        assert!(serde_json::from_str::<TlsVersion>(r#""Unknown (0xABCD)""#).is_err());
     }
 
     #[test]

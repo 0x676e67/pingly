@@ -58,7 +58,7 @@ See [examples](./examples) for incremental parsing, HTTP/2 fingerprints, and sav
 
 ## License
 
-Licensed under either of Apache License, Version 2.0 ([LICENSE](./LICENSE) or http://www.apache.org/licenses/LICENSE-2.0).
+Licensed under the Apache License, Version 2.0 ([LICENSE](./LICENSE)).
 
 ## Contribution
 
