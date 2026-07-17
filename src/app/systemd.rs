@@ -69,7 +69,7 @@ pub(crate) fn start(
 ) -> Result<()> {
     let command = ServiceCommand::from_arguments(arguments)?;
     let bus = BlockingUnitBus::connect_system()?;
-    install(&bus, config.tcp_capture_packet, command)?;
+    install(&bus, &config, command)?;
 
     let status = wait_for_job(
         bus.units().start(SERVICE_NAME, UnitStartMode::Replace)?,
@@ -86,7 +86,7 @@ pub(crate) fn restart(
 ) -> Result<()> {
     let command = ServiceCommand::from_arguments(arguments)?;
     let bus = BlockingUnitBus::connect_system()?;
-    install(&bus, config.tcp_capture_packet, command)?;
+    install(&bus, &config, command)?;
 
     let status = wait_for_job(
         bus.units().restart(SERVICE_NAME, UnitStartMode::Replace)?,
@@ -186,13 +186,10 @@ pub(crate) fn status() -> Result<()> {
     Ok(())
 }
 
-fn install(bus: &BlockingUnitBus, tcp_capture_packet: bool, command: ServiceCommand) -> Result<()> {
-    let spec = service_unit(
-        env::current_exe()?,
-        command,
-        tcp_capture_packet,
-        invoking_user(),
-    )?;
+fn install(bus: &BlockingUnitBus, config: &ServerArgs, command: ServiceCommand) -> Result<()> {
+    let identity = invoking_user();
+    prepare_acme_cache_directory(config, identity)?;
+    let spec = service_unit(env::current_exe()?, command, config, identity)?;
     let report = bus
         .config()
         .install_service_unit(spec, Default::default())?;
@@ -203,6 +200,26 @@ fn install(bus: &BlockingUnitBus, tcp_capture_packet: bool, command: ServiceComm
         "unchanged"
     };
     println!("systemd unit {state}: {}", report.wrote.path_written);
+    Ok(())
+}
+
+/// Creates a custom cache before systemd applies the ReadWritePaths sandbox.
+///
+/// https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#ReadWritePaths=
+fn prepare_acme_cache_directory(
+    config: &ServerArgs,
+    identity: Option<ServiceIdentity>,
+) -> Result<()> {
+    let Some(path) = config.acme_cache_path() else {
+        return Ok(());
+    };
+    let path = std::path::absolute(path)?;
+    crate::state::prepare_private_directory(&path)?;
+
+    if let Some(identity) = identity {
+        std::os::unix::fs::chown(path, Some(identity.uid), Some(identity.gid))?;
+    }
+
     Ok(())
 }
 
@@ -220,7 +237,7 @@ fn invoking_user() -> Option<ServiceIdentity> {
 fn service_unit(
     executable: PathBuf,
     command: ServiceCommand,
-    tcp_capture_packet: bool,
+    config: &ServerArgs,
     identity: Option<ServiceIdentity>,
 ) -> Result<ServiceUnitSpec> {
     let ServiceCommand {
@@ -236,14 +253,42 @@ fn service_unit(
         escape_systemd_expansions(argument);
     }
 
-    let mut extra_service = Vec::with_capacity(6);
+    let mut extra_service = Vec::with_capacity(12);
     // unitbus 0.1.7 quotes this directive, but systemd treats those quotes as path bytes.
     // https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#WorkingDirectory=
     extra_service.push(format!("WorkingDirectory={working_directory}"));
-    if tcp_capture_packet {
-        extra_service.push("AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN".to_owned());
-        extra_service.push("CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN".to_owned());
+
+    let mut capabilities = Vec::with_capacity(3);
+    if config.tcp_capture_packet {
+        capabilities.extend(["CAP_NET_RAW", "CAP_NET_ADMIN"]);
     }
+    if config.requires_privileged_bind() {
+        capabilities.push("CAP_NET_BIND_SERVICE");
+    }
+    if !capabilities.is_empty() {
+        let capabilities = capabilities.join(" ");
+        extra_service.push(format!("AmbientCapabilities={capabilities}"));
+        extra_service.push(format!("CapabilityBoundingSet={capabilities}"));
+    }
+
+    // StateDirectory provides writable storage for generated certificates and ACME state outside
+    // ProtectSystem=strict, and exports its path through STATE_DIRECTORY.
+    // https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#StateDirectory=
+    extra_service.extend([
+        "StateDirectory=pingly".to_owned(),
+        "StateDirectoryMode=0700".to_owned(),
+        "UMask=0077".to_owned(),
+    ]);
+
+    if let Some(cache_path) = config.acme_cache_path() {
+        let mut cache_path = path_arg(cache_path.to_path_buf(), "ACME cache directory")?;
+        escape_systemd_specifiers(&mut cache_path);
+        extra_service.push(format!(
+            "ReadWritePaths={}",
+            quote_systemd_value(&cache_path)
+        ));
+    }
+
     extra_service.extend([
         "NoNewPrivileges=yes".to_owned(),
         "ProtectSystem=strict".to_owned(),
@@ -272,6 +317,19 @@ fn service_unit(
     }
 
     Ok(spec)
+}
+
+fn quote_systemd_value(value: &str) -> String {
+    let mut quoted = String::with_capacity(value.len().saturating_add(2));
+    quoted.push('"');
+    for character in value.chars() {
+        if matches!(character, '\\' | '"') {
+            quoted.push('\\');
+        }
+        quoted.push(character);
+    }
+    quoted.push('"');
+    quoted
 }
 
 fn server_environment() -> Result<BTreeMap<String, String>> {

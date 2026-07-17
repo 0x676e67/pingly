@@ -292,7 +292,7 @@ fn protocol_track_info(track: Track, connection_track: ConnectionTrack) -> Proto
 // ==== impl TrackInfo ====
 
 impl TrackInfo {
-    const DONATE_URL: &'static str = "Analysis server for TLS and HTTP/1/2/3, developed by 0x676e67: https://github.com/0x676e67/pingly";
+    const DONATE_MESSAGE: &'static str = "Please consider supporting Pingly to keep this API running. Visit https://github.com/0x676e67/pingly";
 
     /// Create a new [`TrackInfo`] instance.
     #[inline]
@@ -311,7 +311,7 @@ impl TrackInfo {
                 protocol_track_info(track, connection_track);
 
             TrackInfo {
-                donate: Self::DONATE_URL,
+                donate: Self::DONATE_MESSAGE,
                 address: addr,
                 http_version: format!("{:?}", req.version()),
                 method: req.method().clone(),
@@ -336,7 +336,7 @@ impl TrackInfo {
         let ProtocolTrackInfo { tls, http1, http2 } = protocol_track_info(track, connection_track);
 
         TrackInfo {
-            donate: Self::DONATE_URL,
+            donate: Self::DONATE_MESSAGE,
             address: addr,
             http_version: format!("{:?}", req.version()),
             method: req.method().clone(),

@@ -13,6 +13,7 @@
 - JA3, JA4, and Akamai HTTP/2 fingerprints
 - HTTP/1 headers and HTTP/2 frames
 - Incremental parsing and serialization
+- Automatic ACME certificates with TLS-ALPN-01 or HTTP-01
 
 ## Manual
 
@@ -48,6 +49,28 @@ Commands:
 Options:
   -h, --help  Print help
 ```
+
+## ACME
+
+TLS-ALPN-01 validates on public TCP port 443 and is the default:
+
+```bash
+pingly run --bind 0.0.0.0:443 \
+  --acme-domain pingly.us.kg \
+  --acme-email admin@gmail.com
+```
+
+HTTP-01 serves its challenge on `0.0.0.0:80` by default:
+
+```bash
+pingly run --bind 0.0.0.0:443 \
+  --acme-domain pingly.us.kg \
+  --acme-email admin@gmail.com \
+  --acme-challenge http-01
+```
+
+Both commands use Let's Encrypt staging until `--acme-production` is supplied. Certificates and
+account data use the platform cache directory; systemd services use their managed state directory.
 
 ## Example
 

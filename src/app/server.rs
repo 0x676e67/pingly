@@ -26,6 +26,7 @@ use hyper_util::{
     service::TowerToHyperService,
 };
 use pingora_runtime::current_handle;
+pub(crate) use tls::acme::AcmeRuntime;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::{TcpListener, TcpStream},
@@ -34,7 +35,7 @@ use tower::{Service, ServiceExt};
 pub(crate) use tracker::accept::TrackAcceptor;
 
 use self::{
-    accept::{Accept, DefaultAcceptor},
+    accept::{Accept, AcceptOutcome, DefaultAcceptor},
     tls::rustls::RustlsAcceptor,
 };
 use crate::Result;
@@ -175,7 +176,7 @@ where
                             .unwrap_or_else(|error| match error {});
 
                         match acceptor.accept(stream, service).await {
-                            Ok((stream, service)) => {
+                            Ok(AcceptOutcome::Serve { stream, service }) => {
                                 if let Err(error) = serve_connection(
                                     builder,
                                     stream,
@@ -187,6 +188,7 @@ where
                                     tracing::warn!(%error, %remote_addr, "failed to serve connection stream");
                                 }
                             }
+                            Ok(AcceptOutcome::Handled) => {}
                             Err(error) => {
                                 tracing::warn!(%error, %remote_addr, "failed to accept connection stream");
                             }
