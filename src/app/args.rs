@@ -54,24 +54,27 @@ pub(crate) enum Command {
     /// Run tracking server
     Run(ServerArgs),
 
-    /// Install, enable, and start the systemd service
+    /// Manage the systemd service
     #[cfg(target_os = "linux")]
+    #[command(subcommand)]
+    Systemd(SystemdCommand),
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Subcommand)]
+pub(crate) enum SystemdCommand {
+    /// Install, enable, and start the systemd service
     Start(ServerArgs),
 
     /// Update and restart the systemd service
-    #[cfg(target_os = "linux")]
     Restart(ServerArgs),
 
     /// Stop the systemd service
-    #[cfg(target_os = "linux")]
     Stop,
 
     /// Show recent systemd logs and follow new entries
-    #[cfg(target_os = "linux")]
-    Log,
+    Logs,
 
     /// Show the systemd service status
-    #[cfg(target_os = "linux")]
-    #[command(visible_alias = "status")]
-    Ps,
+    Status,
 }

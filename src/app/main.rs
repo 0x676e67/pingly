@@ -9,6 +9,8 @@ mod tcp;
 
 use std::str::FromStr;
 
+#[cfg(target_os = "linux")]
+use args::SystemdCommand;
 use args::{AppArgs, Command, ServerArgs};
 #[cfg(target_os = "linux")]
 use axum::Extension;
@@ -40,16 +42,20 @@ fn main() -> Result<()> {
     match args.command {
         Command::Run(args) => run(args),
         #[cfg(target_os = "linux")]
-        Command::Start(args) => systemd::start(args),
-        #[cfg(target_os = "linux")]
-        Command::Restart(args) => systemd::restart(args),
-        #[cfg(target_os = "linux")]
-        Command::Stop => systemd::stop(),
-        #[cfg(target_os = "linux")]
-        Command::Log => systemd::log(),
-        #[cfg(target_os = "linux")]
-        Command::Ps => systemd::status(),
+        Command::Systemd(command) => match command {
+            SystemdCommand::Start(args) => systemd::start(args, systemd_server_arguments()),
+            SystemdCommand::Restart(args) => systemd::restart(args, systemd_server_arguments()),
+            SystemdCommand::Stop => systemd::stop(),
+            SystemdCommand::Logs => systemd::log(),
+            SystemdCommand::Status => systemd::status(),
+        },
     }
+}
+
+/// Returns the server arguments after Clap validates `pingly systemd <action>`.
+#[cfg(target_os = "linux")]
+fn systemd_server_arguments() -> impl Iterator<Item = std::ffi::OsString> {
+    std::env::args_os().skip(3)
 }
 
 fn log_filter(default_level: &str) -> EnvFilter {

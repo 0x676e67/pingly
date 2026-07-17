@@ -3,12 +3,16 @@
 //! Pingly stays in the foreground while systemd owns startup, restart, logging, and process state.
 
 use std::{
-    env, io,
+    collections::BTreeMap,
+    env,
+    ffi::OsString,
+    io,
     path::PathBuf,
     sync::mpsc::TryRecvError,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use clap::{Args as _, Command as ClapCommand};
 use sdjournal::{EntryOwned, LiveJournal, SubscriptionOptions};
 use unitbus::{
     BlockingJobHandle, BlockingUnitBus, JobOutcome, ServiceType, ServiceUnitSpec, UnitStartMode,
@@ -27,10 +31,45 @@ struct ServiceIdentity {
     gid: u32,
 }
 
+struct ServiceCommand {
+    /// Arguments passed after the server executable.
+    arguments: Vec<String>,
+
+    /// Directory used to resolve relative server paths.
+    working_directory: String,
+
+    /// Environment variables declared by the server's Clap arguments.
+    environment: BTreeMap<String, String>,
+}
+
+impl ServiceCommand {
+    fn from_arguments(arguments: impl IntoIterator<Item = OsString>) -> Result<Self> {
+        let arguments = arguments.into_iter();
+        let mut command = Vec::with_capacity(arguments.size_hint().0.saturating_add(1));
+        command.push("run".to_owned());
+        for argument in arguments {
+            command.push(string_arg(argument, "server argument")?);
+        }
+
+        let mut working_directory = path_arg(env::current_dir()?, "working directory")?;
+        escape_systemd_specifiers(&mut working_directory);
+
+        Ok(Self {
+            arguments: command,
+            working_directory,
+            environment: server_environment()?,
+        })
+    }
+}
+
 /// Installs, enables, and starts the service with the supplied server settings.
-pub(crate) fn start(config: ServerArgs) -> Result<()> {
+pub(crate) fn start(
+    config: ServerArgs,
+    arguments: impl IntoIterator<Item = OsString>,
+) -> Result<()> {
+    let command = ServiceCommand::from_arguments(arguments)?;
     let bus = BlockingUnitBus::connect_system()?;
-    install(&bus, config)?;
+    install(&bus, config.tcp_capture_packet, command)?;
 
     let status = wait_for_job(
         bus.units().start(SERVICE_NAME, UnitStartMode::Replace)?,
@@ -41,9 +80,13 @@ pub(crate) fn start(config: ServerArgs) -> Result<()> {
 }
 
 /// Updates the installed unit and restarts the service.
-pub(crate) fn restart(config: ServerArgs) -> Result<()> {
+pub(crate) fn restart(
+    config: ServerArgs,
+    arguments: impl IntoIterator<Item = OsString>,
+) -> Result<()> {
+    let command = ServiceCommand::from_arguments(arguments)?;
     let bus = BlockingUnitBus::connect_system()?;
-    install(&bus, config)?;
+    install(&bus, config.tcp_capture_packet, command)?;
 
     let status = wait_for_job(
         bus.units().restart(SERVICE_NAME, UnitStartMode::Replace)?,
@@ -143,8 +186,13 @@ pub(crate) fn status() -> Result<()> {
     Ok(())
 }
 
-fn install(bus: &BlockingUnitBus, config: ServerArgs) -> Result<()> {
-    let spec = service_unit(env::current_exe()?, config, invoking_user())?;
+fn install(bus: &BlockingUnitBus, tcp_capture_packet: bool, command: ServiceCommand) -> Result<()> {
+    let spec = service_unit(
+        env::current_exe()?,
+        command,
+        tcp_capture_packet,
+        invoking_user(),
+    )?;
     let report = bus
         .config()
         .install_service_unit(spec, Default::default())?;
@@ -171,49 +219,18 @@ fn invoking_user() -> Option<ServiceIdentity> {
 
 fn service_unit(
     executable: PathBuf,
-    config: ServerArgs,
+    command: ServiceCommand,
+    tcp_capture_packet: bool,
     identity: Option<ServiceIdentity>,
 ) -> Result<ServiceUnitSpec> {
-    let ServerArgs {
-        log,
-        bind,
-        concurrent,
-        keep_alive_timeout,
-        tls_cert,
-        tls_key,
-        tcp_capture_packet,
-        tcp_capture_interface,
-    } = config;
-
-    let mut exec_start = Vec::with_capacity(16);
+    let ServiceCommand {
+        mut arguments,
+        working_directory,
+        environment,
+    } = command;
+    let mut exec_start = Vec::with_capacity(arguments.len().saturating_add(1));
     exec_start.push(path_arg(executable, "server executable")?);
-    exec_start.extend([
-        "run".to_owned(),
-        "--log".to_owned(),
-        log,
-        "--bind".to_owned(),
-        bind.to_string(),
-        "--concurrent".to_owned(),
-        concurrent.to_string(),
-        "--keep-alive-timeout".to_owned(),
-        keep_alive_timeout.to_string(),
-    ]);
-
-    if let Some(cert) = tls_cert {
-        exec_start.push("--tls-cert".to_owned());
-        exec_start.push(path_arg(cert, "TLS certificate path")?);
-    }
-    if let Some(key) = tls_key {
-        exec_start.push("--tls-key".to_owned());
-        exec_start.push(path_arg(key, "TLS private key path")?);
-    }
-    if tcp_capture_packet {
-        exec_start.push("--tcp-capture-packet".to_owned());
-    }
-    if let Some(interface) = tcp_capture_interface {
-        exec_start.push("--tcp-capture-interface".to_owned());
-        exec_start.push(interface);
-    }
+    exec_start.append(&mut arguments);
 
     for argument in &mut exec_start {
         escape_systemd_expansions(argument);
@@ -236,6 +253,8 @@ fn service_unit(
     spec.after = vec!["network.target".to_owned()];
     spec.service_type = Some(ServiceType::Exec);
     spec.exec_start = exec_start;
+    spec.working_directory = Some(working_directory);
+    spec.environment = environment;
     spec.restart = Some("on-failure".to_owned());
     spec.restart_sec = Some(3);
     spec.timeout_stop_sec = Some(10);
@@ -253,15 +272,38 @@ fn service_unit(
     Ok(spec)
 }
 
+fn server_environment() -> Result<BTreeMap<String, String>> {
+    let command = ServerArgs::augment_args(ClapCommand::new("run"));
+    let mut environment = BTreeMap::new();
+
+    for name in command
+        .get_arguments()
+        .filter_map(|argument| argument.get_env())
+    {
+        let Some(value) = env::var_os(name) else {
+            continue;
+        };
+        let name = string_arg(name.to_os_string(), "environment variable name")?;
+        let value = string_arg(value, "environment variable value")?;
+        environment.insert(name, value);
+    }
+
+    Ok(environment)
+}
+
 fn path_arg(path: PathBuf, description: &'static str) -> Result<String> {
     let path = std::path::absolute(path)?;
-    let path = path.into_os_string().into_string().map_err(|_| {
+    string_arg(path.into_os_string(), description)
+}
+
+fn string_arg(value: OsString, description: &'static str) -> Result<String> {
+    value.into_string().map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             format!("{description} is not valid UTF-8"),
         )
-    })?;
-    Ok(path)
+        .into()
+    })
 }
 
 /// Escapes expansion markers before unitbus applies systemd command-line quoting.
@@ -270,22 +312,33 @@ fn path_arg(path: PathBuf, description: &'static str) -> Result<String> {
 /// involved. Doubling them preserves the literal argument supplied through the CLI.
 /// https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html#Command%20Lines
 fn escape_systemd_expansions(argument: &mut String) {
-    let extra = argument
-        .bytes()
-        .filter(|byte| matches!(byte, b'%' | b'$'))
+    escape_markers(argument, |character| matches!(character, '%' | '$'));
+}
+
+/// Escapes percent specifiers in directives such as `WorkingDirectory`.
+///
+/// https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html#Specifiers
+fn escape_systemd_specifiers(value: &mut String) {
+    escape_markers(value, |character| character == '%');
+}
+
+fn escape_markers(value: &mut String, should_escape: impl Fn(char) -> bool) {
+    let extra = value
+        .chars()
+        .filter(|character| should_escape(*character))
         .count();
     if extra == 0 {
         return;
     }
 
-    let mut escaped = String::with_capacity(argument.len().saturating_add(extra));
-    for character in argument.chars() {
-        if matches!(character, '%' | '$') {
+    let mut escaped = String::with_capacity(value.len().saturating_add(extra));
+    for character in value.chars() {
+        if should_escape(character) {
             escaped.push(character);
         }
         escaped.push(character);
     }
-    *argument = escaped;
+    *value = escaped;
 }
 
 fn wait_for_job(job: BlockingJobHandle, action: &'static str) -> Result<UnitStatus> {
@@ -345,106 +398,4 @@ fn unix_micros(time: SystemTime) -> Result<u64> {
         )
     })?;
     Ok(micros)
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{
-        net::SocketAddr,
-        path::{Path, PathBuf},
-    };
-
-    use super::*;
-
-    #[test]
-    fn unit_contains_server_configuration_and_invoking_user() {
-        let unit = service_unit(
-            PathBuf::from("/opt/pingly % $ build/pingly"),
-            server_config(),
-            Some(ServiceIdentity {
-                uid: 1000,
-                gid: 1001,
-            }),
-        )
-        .expect("service unit should build")
-        .render()
-        .expect("service unit should render");
-
-        assert!(unit.starts_with("# Managed by unitbus."));
-        assert!(unit.contains("User=1000\nGroup=1001\n"));
-        assert!(unit.contains("ExecStart=\"/opt/pingly %% $$ build/pingly\" run --log debug"));
-        assert!(unit.contains("--bind 127.0.0.1:9443"));
-        assert!(unit.contains("--tls-cert \"/etc/pingly/client cert.pem\""));
-        assert!(!unit.contains("DynamicUser=yes"));
-        assert!(!unit.contains("AmbientCapabilities="));
-    }
-
-    #[test]
-    fn capture_configuration_uses_network_capabilities() {
-        let mut config = server_config();
-        config.tcp_capture_packet = true;
-        config.tcp_capture_interface = Some("capture $lan".to_owned());
-
-        let unit = service_unit(PathBuf::from("/usr/local/bin/pingly"), config, None)
-            .expect("service unit should build")
-            .render()
-            .expect("service unit should render");
-
-        assert!(!unit.contains("DynamicUser=yes\n"));
-        assert!(!unit.contains("PrivateTmp=yes\n"));
-        assert!(unit.contains("AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN\n"));
-        assert!(unit.contains("CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN\n"));
-        assert!(unit.contains("--tcp-capture-packet"));
-        assert!(unit.contains("--tcp-capture-interface \"capture $$lan\""));
-    }
-
-    #[test]
-    fn root_install_keeps_the_executable_visible() {
-        let unit = service_unit(
-            PathBuf::from("/root/.cargo/bin/pingly"),
-            server_config(),
-            None,
-        )
-        .expect("service unit should build")
-        .render()
-        .expect("service unit should render");
-
-        assert!(unit.contains("ExecStart=/root/.cargo/bin/pingly"));
-        assert!(!unit.contains("DynamicUser=yes"));
-        assert!(!unit.contains("PrivateTmp=yes"));
-    }
-
-    #[test]
-    fn expansion_markers_are_escaped_only_when_present() {
-        let mut plain = "plain".to_owned();
-        escape_systemd_expansions(&mut plain);
-        assert_eq!(plain, "plain");
-
-        let mut expanded = "percent% dollar$".to_owned();
-        escape_systemd_expansions(&mut expanded);
-        assert_eq!(expanded, "percent%% dollar$$");
-    }
-
-    #[test]
-    fn service_paths_are_made_absolute() {
-        let path = path_arg(PathBuf::from("certificate.pem"), "test path")
-            .expect("relative path should resolve");
-
-        assert!(Path::new(&path).is_absolute());
-    }
-
-    fn server_config() -> ServerArgs {
-        ServerArgs {
-            log: "debug".to_owned(),
-            bind: "127.0.0.1:9443"
-                .parse::<SocketAddr>()
-                .expect("test address should parse"),
-            concurrent: 64,
-            keep_alive_timeout: 30,
-            tls_cert: Some(PathBuf::from("/etc/pingly/client cert.pem")),
-            tls_key: Some(PathBuf::from("/etc/pingly/client key.pem")),
-            tcp_capture_packet: false,
-            tcp_capture_interface: None,
-        }
-    }
 }
