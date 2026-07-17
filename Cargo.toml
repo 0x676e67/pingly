@@ -115,7 +115,7 @@ sdjournal = { version = "=0.1.21", optional = true }
 unitbus = { version = "=0.1.7", default-features = false, features = [
     "blocking",
     "config",
-    "rt-async-io",
+    "rt-tokio",
 ], optional = true }
 
 [dev-dependencies]
