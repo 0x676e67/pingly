@@ -188,7 +188,6 @@ pub(crate) fn status() -> Result<()> {
 
 fn install(bus: &BlockingUnitBus, config: &ServerArgs, command: ServiceCommand) -> Result<()> {
     let identity = invoking_user();
-    prepare_acme_cache_directory(config, identity)?;
     let spec = service_unit(env::current_exe()?, command, config, identity)?;
     let report = bus
         .config()
@@ -200,26 +199,6 @@ fn install(bus: &BlockingUnitBus, config: &ServerArgs, command: ServiceCommand) 
         "unchanged"
     };
     println!("systemd unit {state}: {}", report.wrote.path_written);
-    Ok(())
-}
-
-/// Creates a custom cache before systemd applies the ReadWritePaths sandbox.
-///
-/// https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#ReadWritePaths=
-fn prepare_acme_cache_directory(
-    config: &ServerArgs,
-    identity: Option<ServiceIdentity>,
-) -> Result<()> {
-    let Some(path) = config.acme_cache_path() else {
-        return Ok(());
-    };
-    let path = std::path::absolute(path)?;
-    crate::state::prepare_private_directory(&path)?;
-
-    if let Some(identity) = identity {
-        std::os::unix::fs::chown(path, Some(identity.uid), Some(identity.gid))?;
-    }
-
     Ok(())
 }
 
@@ -280,15 +259,6 @@ fn service_unit(
         "UMask=0077".to_owned(),
     ]);
 
-    if let Some(cache_path) = config.acme_cache_path() {
-        let mut cache_path = path_arg(cache_path.to_path_buf(), "ACME cache directory")?;
-        escape_systemd_specifiers(&mut cache_path);
-        extra_service.push(format!(
-            "ReadWritePaths={}",
-            quote_systemd_value(&cache_path)
-        ));
-    }
-
     extra_service.extend([
         "NoNewPrivileges=yes".to_owned(),
         "ProtectSystem=strict".to_owned(),
@@ -317,19 +287,6 @@ fn service_unit(
     }
 
     Ok(spec)
-}
-
-fn quote_systemd_value(value: &str) -> String {
-    let mut quoted = String::with_capacity(value.len().saturating_add(2));
-    quoted.push('"');
-    for character in value.chars() {
-        if matches!(character, '\\' | '"') {
-            quoted.push('\\');
-        }
-        quoted.push(character);
-    }
-    quoted.push('"');
-    quoted
 }
 
 fn server_environment() -> Result<BTreeMap<String, String>> {
