@@ -5,7 +5,12 @@ use std::{io, net::SocketAddr, path::PathBuf};
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
-#[clap(author, version, about, arg_required_else_help = true)]
+#[clap(
+    author,
+    version,
+    about = "TLS and HTTP/1/2 fingerprint analysis server",
+    arg_required_else_help = true
+)]
 #[command(args_conflicts_with_subcommands = true)]
 pub(crate) struct AppArgs {
     #[clap(subcommand)]

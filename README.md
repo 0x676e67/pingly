@@ -19,7 +19,7 @@
 
 ```bash
 $ pingly -h
-TLS and HTTP/1/2 fingerprint analysis server and Rust library
+TLS and HTTP/1/2 fingerprint analysis server
 
 Usage: pingly
        pingly <COMMAND>
