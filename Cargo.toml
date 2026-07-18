@@ -16,7 +16,6 @@ path = "src/app/main.rs"
 required-features = ["server"]
 
 [features]
-default = ["server", "mimalloc"]
 server = [
     "dep:axum",
     "dep:axum-extra",
@@ -133,9 +132,6 @@ unitbus = { version = "=0.1.7", default-features = false, features = [
 
 [dev-dependencies]
 serde_json = "1.0"
-
-[package.metadata.docs.rs]
-no-default-features = true
 
 [profile.release]
 opt-level = 's'
