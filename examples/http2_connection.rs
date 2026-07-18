@@ -7,8 +7,7 @@ use std::{env, fs, io, path::PathBuf};
 
 use pingly::h2::{AkamaiFingerprint, Frame, Http2Parser};
 
-const USAGE: &str =
-    "usage: cargo run --example http2_connection --no-default-features -- <http2-connection.bin>";
+const USAGE: &str = "usage: cargo run --example http2_connection -- <http2-connection.bin>";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bytes = fs::read(input_path()?)?;

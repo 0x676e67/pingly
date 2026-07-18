@@ -74,11 +74,11 @@ account data use the platform cache directory; systemd services use their manage
 
 ## Example
 
-Add Pingly without the server features:
+Add Pingly to your project:
 
 ```toml
 [dependencies]
-pingly = { version = "0.1", default-features = false }
+pingly = "0.1"
 ```
 
 And then parse a captured TLS ClientHello:

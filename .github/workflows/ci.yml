@@ -37,7 +37,9 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy check
-        run: cargo clippy --all-targets
+        run: |
+          cargo clippy --all-targets
+          cargo clippy --all-targets --features server,mimalloc
         
   build:
     name: Build
