@@ -141,7 +141,6 @@ function init() {
     refs.themeButton = document.getElementById("theme-button");
 
     refs.downloadButton = document.getElementById("download-button");
-    refs.refreshButton = document.getElementById("refresh-button");
     refs.retryButton = document.getElementById("retry-button");
 
     refs.copyJsonButton = document.getElementById("copy-json-button");
@@ -189,7 +188,6 @@ function bindEvents() {
         });
     });
 
-    refs.refreshButton.addEventListener("click", fetchAnalysis);
     refs.retryButton.addEventListener("click", fetchAnalysis);
 
     refs.downloadButton.addEventListener("click", downloadJson);
@@ -349,7 +347,6 @@ function showLoading() {
     refs.loading.hidden = false;
     refs.error.hidden = true;
     refs.workspace.hidden = true;
-    refs.refreshButton.disabled = true;
     setStatus("Analyzing", "");
 }
 
@@ -357,7 +354,6 @@ function showError(error) {
     refs.loading.hidden = true;
     refs.workspace.hidden = true;
     refs.error.hidden = false;
-    refs.refreshButton.disabled = false;
     refs.errorMessage.textContent = error instanceof Error
         ? error.message
         : "The analysis response could not be loaded.";
@@ -417,7 +413,6 @@ function loadAnalysis(data) {
     refs.loading.hidden = true;
     refs.error.hidden = true;
     refs.workspace.hidden = false;
-    refs.refreshButton.disabled = false;
     refs.downloadButton.disabled = false;
 
     renderSummary(data);
