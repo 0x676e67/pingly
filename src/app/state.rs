@@ -7,10 +7,11 @@ use std::{
 
 /// Returns the systemd state directory or Pingly's platform cache directory.
 pub(crate) fn directory() -> PathBuf {
+    let dir = env!("CARGO_PKG_NAME");
     env::var_os("STATE_DIRECTORY")
         .map(PathBuf::from)
-        .or_else(|| dirs::cache_dir().map(|path| path.join(env!("CARGO_PKG_NAME"))))
-        .unwrap_or_else(|| PathBuf::from(".pingly"))
+        .or_else(|| dirs::cache_dir().map(|path| path.join(dir)))
+        .unwrap_or_else(|| PathBuf::from(dir))
 }
 
 /// Creates a directory for private certificate and account material.

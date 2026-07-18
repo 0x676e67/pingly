@@ -34,12 +34,12 @@ impl AcmeRuntime {
         let AcmeOptions {
             domains,
             contacts,
-            cache_dir,
             challenge,
             http_bind,
             production,
         } = options;
 
+        let cache_dir = crate::state::directory().join("acme");
         crate::state::prepare_private_directory(&cache_dir)?;
 
         let challenge_type = match challenge {
