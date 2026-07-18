@@ -358,7 +358,7 @@ mod tests {
         assert!(UI_SCRIPT.contains("function stylePrimerButton"));
         assert!(UI_SCRIPT.contains("button-primary-bgColor-rest"));
         assert!(UI_TEMPLATE.contains("\"--tblr-code-bg\": \"var(--bgColor-accent-muted)\""));
-        assert!(UI_TEMPLATE.contains("\"--tblr-code-color\": \"var(--fgColor-default)\""));
+        assert!(UI_TEMPLATE.contains("\"--tblr-code-color\": \"var(--fgColor-accent)\""));
         assert!(UI_TEMPLATE.contains("\"--tblr-primary\": \"var(--button-primary-bgColor-rest)\""));
         assert!(UI_TEMPLATE.contains("bg-body-tertiary text-body border fw-bold"));
         assert!(UI_TEMPLATE.contains("fill='%23212830'"));
