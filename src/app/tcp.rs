@@ -72,7 +72,7 @@ impl TcpCaptureTrack {
                 tracing::info!("Packet capture test passed, using device: {}", device_name);
 
                 // Spawn the actual capture task
-                let _ = tokio::task::spawn_blocking(move || {
+                drop(tokio::task::spawn_blocking(move || {
                     if let Err(e) = run_capture_blocking(
                         packets,
                         max_packets,
@@ -82,7 +82,7 @@ impl TcpCaptureTrack {
                     ) {
                         tracing::error!("Packet capture task error: {}", e);
                     }
-                });
+                }));
 
                 // Give the capture task a moment to initialize before returning
                 std::thread::sleep(std::time::Duration::from_millis(500));
@@ -215,7 +215,7 @@ fn run_capture_blocking(
                     packet.data.len()
                 );
 
-                if let Some(captured_packet) = parser::parse_packet(&packet.data, server_port) {
+                if let Some(captured_packet) = parser::parse_packet(packet.data, server_port) {
                     let mut packets_guard = packets.lock().unwrap();
 
                     if packets_guard.len() >= max_packets {
@@ -231,7 +231,7 @@ fn run_capture_blocking(
                         captured_packet.direction
                     );
                 } else {
-                    let parsed_info = parser::parse_packet_with_pktparse(&packet.data);
+                    let parsed_info = parser::parse_packet_with_pktparse(packet.data);
                     let raw_packet = CapturedPacket {
                         timestamp: SystemTime::now()
                             .duration_since(UNIX_EPOCH)

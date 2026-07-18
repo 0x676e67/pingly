@@ -14,7 +14,7 @@ pub fn parse_packet_with_pktparse(data: &[u8]) -> Option<JsonValue> {
         Ok((remaining, eth_frame)) => {
             let mut parsed = json!({
                 "ethernet": {
-                    "ethertype": to_value(&eth_frame.ethertype).unwrap_or_else(|_| json!("unknown"))
+                    "ethertype": to_value(eth_frame.ethertype).unwrap_or_else(|_| json!("unknown"))
                 }
             });
 
@@ -22,7 +22,7 @@ pub fn parse_packet_with_pktparse(data: &[u8]) -> Option<JsonValue> {
             match eth_frame.ethertype {
                 ethernet::EtherType::IPv4 => {
                     if let Ok((tcp_udp_data, ipv4_hdr)) = ipv4::parse_ipv4_header(remaining) {
-                        parsed["ipv4"] = to_value(&ipv4_hdr).unwrap_or_else(
+                        parsed["ipv4"] = to_value(ipv4_hdr).unwrap_or_else(
                             |_| json!({"error": "Failed to serialize IPv4 header"}),
                         );
 
@@ -50,7 +50,7 @@ pub fn parse_packet_with_pktparse(data: &[u8]) -> Option<JsonValue> {
                             }
                             _ => {
                                 parsed["unknown_transport"] = json!({
-                                    "protocol": to_value(&ipv4_hdr.protocol).unwrap_or_else(|_| json!("unknown")),
+                                    "protocol": to_value(ipv4_hdr.protocol).unwrap_or_else(|_| json!("unknown")),
                                     "data_length": tcp_udp_data.len()
                                 });
                             }
@@ -59,7 +59,7 @@ pub fn parse_packet_with_pktparse(data: &[u8]) -> Option<JsonValue> {
                 }
                 ethernet::EtherType::IPv6 => {
                     if let Ok((tcp_udp_data, ipv6_hdr)) = ipv6::parse_ipv6_header(remaining) {
-                        parsed["ipv6"] = to_value(&ipv6_hdr).unwrap_or_else(
+                        parsed["ipv6"] = to_value(ipv6_hdr).unwrap_or_else(
                             |_| json!({"error": "Failed to serialize IPv6 header"}),
                         );
 
@@ -87,7 +87,7 @@ pub fn parse_packet_with_pktparse(data: &[u8]) -> Option<JsonValue> {
                             }
                             _ => {
                                 parsed["unknown_transport"] = json!({
-                                    "protocol": to_value(&ipv6_hdr.next_header).unwrap_or_else(|_| json!("unknown")),
+                                    "protocol": to_value(ipv6_hdr.next_header).unwrap_or_else(|_| json!("unknown")),
                                     "data_length": tcp_udp_data.len()
                                 });
                             }
@@ -96,7 +96,7 @@ pub fn parse_packet_with_pktparse(data: &[u8]) -> Option<JsonValue> {
                 }
                 _ => {
                     parsed["unknown_protocol"] = json!({
-                        "ethertype": to_value(&eth_frame.ethertype).unwrap_or_else(|_| json!("unknown")),
+                        "ethertype": to_value(eth_frame.ethertype).unwrap_or_else(|_| json!("unknown")),
                         "data_length": remaining.len()
                     });
                 }
