@@ -180,6 +180,51 @@
         crossorigin="anonymous"
         referrerpolicy="no-referrer"
     >
+    <style>
+        @media (max-width: 767.98px) {
+            #analysis-sidebar {
+                position: fixed;
+                top: var(--pingly-header-height, 0px);
+                bottom: 0;
+                left: 0;
+                z-index: 1025;
+                width: min(20rem, calc(100vw - 3rem));
+                height: calc(100vh - var(--pingly-header-height, 0px));
+                height: calc(100dvh - var(--pingly-header-height, 0px));
+                max-width: none;
+                overflow-y: auto;
+                visibility: hidden;
+                transform: translateX(-100%);
+                transition: transform 160ms ease, visibility 160ms ease;
+            }
+
+            #analysis-sidebar.is-open {
+                visibility: visible;
+                transform: translateX(0);
+                box-shadow: var(--tblr-box-shadow-lg, 0 1rem 2rem rgb(0 0 0 / 20%));
+            }
+
+            .pingly-sidebar-backdrop {
+                position: fixed;
+                top: var(--pingly-header-height, 0px);
+                right: 0;
+                bottom: 0;
+                left: 0;
+                z-index: 1024;
+                background: rgb(0 0 0 / 35%);
+            }
+
+            body.mobile-sidebar-open {
+                overflow: hidden;
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            #analysis-sidebar {
+                transition: none;
+            }
+        }
+    </style>
     <script
         src="https://cdn.jsdelivr.net/npm/lucide@1.24.0/dist/umd/lucide.min.js"
         integrity="sha384-mooE85Luwgx+AyykX7e90VcN8/QCFTSIwPuHLmvcsLVoA0en7lKYb9XlOzn5G2co"
@@ -202,6 +247,18 @@
             id="app-header"
         >
             <div class="container-fluid flex-nowrap">
+                <button
+                    class="btn btn-icon btn-outline-secondary d-md-none flex-shrink-0 me-2"
+                    id="sidebar-toggle"
+                    type="button"
+                    title="Open analysis navigation"
+                    aria-label="Open analysis navigation"
+                    aria-controls="analysis-sidebar"
+                    aria-expanded="false"
+                >
+                    <i class="icon" data-lucide="menu" aria-hidden="true"></i>
+                </button>
+
                 <a
                     class="navbar-brand d-flex align-items-center gap-2 m-0 text-decoration-none"
                     href="/"
@@ -267,6 +324,13 @@
             </div>
         </header>
 
+        <div
+            class="pingly-sidebar-backdrop d-md-none"
+            id="analysis-sidebar-backdrop"
+            aria-hidden="true"
+            hidden
+        ></div>
+
         <div class="page-wrapper">
             <div class="container-fluid p-0">
                 <div class="row g-0 align-items-stretch">
@@ -274,10 +338,11 @@
                         class="col-12 col-md-3 col-lg-2 border-end bg-body align-self-start"
                         id="analysis-sidebar"
                         aria-label="Analysis views"
+                        aria-hidden="true"
                     >
                         <div class="d-flex flex-column w-100">
                             <nav
-                                class="list-group list-group-transparent flex-row flex-md-column flex-nowrap gap-1 overflow-auto p-2 w-100"
+                                class="list-group list-group-transparent flex-column flex-nowrap gap-1 overflow-auto p-2 w-100"
                                 id="analysis-nav"
                                 role="tablist"
                                 aria-orientation="vertical"
