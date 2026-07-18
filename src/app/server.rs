@@ -46,22 +46,6 @@ const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(50);
 
 type ConnectInfoService = AddExtension<Router, ConnectInfo<SocketAddr>>;
 
-#[derive(Clone, Copy)]
-struct ConnectionPolicy {
-    close_after_first_request: bool,
-    http2_ping_interval: Option<Duration>,
-}
-
-impl ConnectionPolicy {
-    fn from_keep_alive_secs(seconds: u64) -> Self {
-        let interval = Duration::from_secs(seconds);
-        Self {
-            close_after_first_request: interval.is_zero(),
-            http2_ping_interval: (!interval.is_zero()).then_some(interval),
-        }
-    }
-}
-
 /// HTTP accept loop for a concrete stream acceptor.
 pub(crate) struct HttpServer<A = DefaultAcceptor> {
     listener: TcpListener,
@@ -79,12 +63,13 @@ impl HttpServer<DefaultAcceptor> {
         keep_alive_timeout: u64,
     ) -> Result<Self> {
         let mut builder = Builder::new(TokioExecutor::new());
-        let policy = ConnectionPolicy::from_keep_alive_secs(keep_alive_timeout);
+        let keep_alive_interval = Duration::from_secs(keep_alive_timeout);
+        let close_after_first_request = keep_alive_interval.is_zero();
 
         builder
             .http1()
             .timer(TokioTimer::new())
-            .keep_alive(!policy.close_after_first_request)
+            .keep_alive(!close_after_first_request)
             .max_buf_size(MAX_HEADER_LIST_SIZE);
 
         let mut http2 = builder.http2();
@@ -93,12 +78,12 @@ impl HttpServer<DefaultAcceptor> {
             .auto_date_header(true)
             .max_header_list_size(MAX_HEADER_LIST_SIZE as _);
 
-        if let Some(interval) = policy.http2_ping_interval {
-            http2
-                .keep_alive_interval(Some(interval))
-                .keep_alive_timeout(interval);
-        } else {
+        if close_after_first_request {
             http2.keep_alive_interval(None).max_concurrent_streams(1);
+        } else {
+            http2
+                .keep_alive_interval(Some(keep_alive_interval))
+                .keep_alive_timeout(keep_alive_interval);
         }
 
         Ok(Self {
@@ -106,7 +91,7 @@ impl HttpServer<DefaultAcceptor> {
             router,
             acceptor: DefaultAcceptor,
             builder,
-            close_after_first_request: policy.close_after_first_request,
+            close_after_first_request,
         })
     }
 
@@ -281,28 +266,5 @@ async fn wait_for_first_request(receiver: &mut Option<watch::Receiver<bool>>) {
     let first_request_seen = *receiver.borrow_and_update();
     if !first_request_seen {
         let _ = receiver.changed().await;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::time::Duration;
-
-    use super::ConnectionPolicy;
-
-    #[test]
-    fn zero_keep_alive_closes_after_one_request_without_http2_pings() {
-        let policy = ConnectionPolicy::from_keep_alive_secs(0);
-
-        assert!(policy.close_after_first_request);
-        assert_eq!(policy.http2_ping_interval, None);
-    }
-
-    #[test]
-    fn positive_keep_alive_reuses_connections_and_enables_http2_pings() {
-        let policy = ConnectionPolicy::from_keep_alive_secs(30);
-
-        assert!(!policy.close_after_first_request);
-        assert_eq!(policy.http2_ping_interval, Some(Duration::from_secs(30)));
     }
 }

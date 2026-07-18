@@ -20,11 +20,9 @@ pub(crate) struct Runtime(pingora_runtime::Runtime);
 impl Runtime {
     /// Creates a no-steal runtime with the selected thread count.
     pub(crate) fn new(threads: NonZeroUsize) -> Self {
-        const RUNTIME_NAME: &str = env!("CARGO_PKG_NAME");
-
         Self(pingora_runtime::Runtime::new_no_steal(
             threads.get(),
-            RUNTIME_NAME,
+            env!("CARGO_PKG_NAME"),
         ))
     }
 

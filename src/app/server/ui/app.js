@@ -745,11 +745,11 @@ function createFingerprintCard(item) {
     body.append(header, value);
 
     if (source && source !== primary) {
-        const details = create("details", "mt-2 pt-2 border-top");
-        details.append(
+        const sourceBlock = create("div", "mt-2 pt-2 border-top");
+        sourceBlock.append(
             create(
-                "summary",
-                "text-secondary small fw-medium cursor-pointer",
+                "div",
+                "text-secondary small fw-medium",
                 "Source string"
             )
         );
@@ -765,8 +765,8 @@ function createFingerprintCard(item) {
                 "Copy " + item.label + " source string"
             )
         );
-        details.append(row);
-        body.append(details);
+        sourceBlock.append(row);
+        body.append(sourceBlock);
     }
 
     card.append(body);
