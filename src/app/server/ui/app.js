@@ -149,8 +149,10 @@ function init() {
     refs.jsonRouteLabel = document.getElementById("json-route-label");
     refs.toast = document.getElementById("toast");
     refs.header = document.getElementById("app-header");
+    refs.main = document.getElementById("main-content");
     refs.sidebar = document.getElementById("analysis-sidebar");
-    refs.nav = document.getElementById("analysis-nav");
+    refs.sidebarToggle = document.getElementById("sidebar-toggle");
+    refs.sidebarBackdrop = document.getElementById("analysis-sidebar-backdrop");
     refs.navItems = Array.from(document.querySelectorAll("[data-view]"));
     refs.panels = Array.from(document.querySelectorAll("[data-panel]"));
 
@@ -164,14 +166,21 @@ function init() {
     }
     activateView(state.activeView, false);
     paintIcons();
-    syncStickySidebar();
+    syncSidebarLayout();
     fetchAnalysis();
 }
 
 function bindEvents() {
     refs.navItems.forEach(function (item) {
         item.addEventListener("click", function () {
+            const mobile = !desktopLayout.matches;
+
             activateView(item.dataset.view, true);
+            setMobileSidebar(false);
+
+            if (mobile) {
+                refs.main.focus();
+            }
         });
 
         item.addEventListener("keydown", function (event) {
@@ -203,24 +212,75 @@ function bindEvents() {
         }
     });
     refs.themeButton.addEventListener("click", toggleTheme);
+    refs.sidebarToggle.addEventListener("click", function () {
+        const opening = !refs.sidebar.classList.contains("is-open");
+        setMobileSidebar(opening);
+
+        if (opening) {
+            const activeItem = refs.navItems.find(function (item) {
+                return item.dataset.view === state.activeView;
+            });
+            activeItem?.focus();
+        }
+    });
+    refs.sidebarBackdrop.addEventListener("click", function () {
+        setMobileSidebar(false);
+        refs.sidebarToggle.focus();
+    });
+    document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape" && refs.sidebar.classList.contains("is-open")) {
+            setMobileSidebar(false);
+            refs.sidebarToggle.focus();
+        }
+    });
     systemTheme.addEventListener("change", syncSystemTheme);
-    desktopLayout.addEventListener("change", syncStickySidebar);
-    window.addEventListener("resize", syncStickySidebar, { passive: true });
-    window.addEventListener("load", syncStickySidebar, { once: true });
+    desktopLayout.addEventListener("change", syncSidebarLayout);
+    window.addEventListener("resize", syncSidebarLayout, { passive: true });
+    window.addEventListener("load", syncSidebarLayout, { once: true });
 }
 
-function syncStickySidebar() {
+function syncSidebarLayout() {
     const desktop = desktopLayout.matches;
-    refs.nav.setAttribute("aria-orientation", desktop ? "vertical" : "horizontal");
+    const headerHeight = Math.ceil(refs.header.getBoundingClientRect().height);
+
+    document.documentElement.style.setProperty(
+        "--pingly-header-height",
+        headerHeight + "px"
+    );
     refs.sidebar.classList.toggle("position-sticky", desktop);
 
-    if (!desktop) {
+    if (desktop) {
+        refs.sidebar.style.top = headerHeight + "px";
+    } else {
         refs.sidebar.style.removeProperty("top");
-        return;
     }
 
-    const headerHeight = Math.ceil(refs.header.getBoundingClientRect().height);
-    refs.sidebar.style.top = headerHeight + "px";
+    setMobileSidebar(refs.sidebar.classList.contains("is-open"));
+}
+
+function setMobileSidebar(open) {
+    const mobile = !desktopLayout.matches;
+    const visible = mobile && open;
+
+    refs.sidebar.classList.toggle("is-open", visible);
+    refs.sidebarToggle.setAttribute("aria-expanded", String(visible));
+    refs.sidebarToggle.setAttribute(
+        "aria-label",
+        visible ? "Close analysis navigation" : "Open analysis navigation"
+    );
+    refs.sidebarToggle.title = visible
+        ? "Close analysis navigation"
+        : "Open analysis navigation";
+    refs.sidebar.toggleAttribute("inert", mobile && !visible);
+
+    if (mobile) {
+        refs.sidebar.setAttribute("aria-hidden", String(!visible));
+    } else {
+        refs.sidebar.removeAttribute("aria-hidden");
+    }
+
+    refs.sidebarBackdrop.hidden = !visible;
+    document.body.classList.toggle("mobile-sidebar-open", visible);
 }
 
 function restoreTheme() {
