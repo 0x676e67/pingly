@@ -38,8 +38,8 @@ jobs:
 
       - name: Clippy check
         run: |
-          cargo clippy --all-targets
-          cargo clippy --all-targets --features server,mimalloc
+          cargo clippy --all-targets -- -D warnings
+          cargo clippy --all-targets --features server,mimalloc -- -D warnings
         
   build:
     name: Build
