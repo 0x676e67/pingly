@@ -30,6 +30,7 @@ pub(crate) use tls::acme::AcmeRuntime;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::{TcpListener, TcpStream},
+    sync::watch,
 };
 use tower::{Service, ServiceExt};
 pub(crate) use tracker::accept::TrackAcceptor;
@@ -45,15 +46,29 @@ const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(50);
 
 type ConnectInfoService = AddExtension<Router, ConnectInfo<SocketAddr>>;
 
+#[derive(Clone, Copy)]
+struct ConnectionPolicy {
+    close_after_first_request: bool,
+    http2_ping_interval: Option<Duration>,
+}
+
+impl ConnectionPolicy {
+    fn from_keep_alive_secs(seconds: u64) -> Self {
+        let interval = Duration::from_secs(seconds);
+        Self {
+            close_after_first_request: interval.is_zero(),
+            http2_ping_interval: (!interval.is_zero()).then_some(interval),
+        }
+    }
+}
+
 /// HTTP accept loop for a concrete stream acceptor.
 pub(crate) struct HttpServer<A = DefaultAcceptor> {
     listener: TcpListener,
-
     router: Router,
-
     acceptor: A,
-
     builder: Builder<TokioExecutor>,
+    close_after_first_request: bool,
 }
 
 impl HttpServer<DefaultAcceptor> {
@@ -64,21 +79,26 @@ impl HttpServer<DefaultAcceptor> {
         keep_alive_timeout: u64,
     ) -> Result<Self> {
         let mut builder = Builder::new(TokioExecutor::new());
-        let keep_alive_timeout = Duration::from_secs(keep_alive_timeout);
+        let policy = ConnectionPolicy::from_keep_alive_secs(keep_alive_timeout);
 
         builder
             .http1()
-            .max_buf_size(MAX_HEADER_LIST_SIZE)
-            .timer(TokioTimer::new());
+            .timer(TokioTimer::new())
+            .keep_alive(!policy.close_after_first_request)
+            .max_buf_size(MAX_HEADER_LIST_SIZE);
+
         let mut http2 = builder.http2();
         http2
-            .max_header_list_size(MAX_HEADER_LIST_SIZE as _)
             .timer(TokioTimer::new())
-            .auto_date_header(true);
-        if !keep_alive_timeout.is_zero() {
+            .auto_date_header(true)
+            .max_header_list_size(MAX_HEADER_LIST_SIZE as _);
+
+        if let Some(interval) = policy.http2_ping_interval {
             http2
-                .keep_alive_interval(keep_alive_timeout)
-                .keep_alive_timeout(keep_alive_timeout);
+                .keep_alive_interval(Some(interval))
+                .keep_alive_timeout(interval);
+        } else {
+            http2.keep_alive_interval(None).max_concurrent_streams(1);
         }
 
         Ok(Self {
@@ -86,6 +106,7 @@ impl HttpServer<DefaultAcceptor> {
             router,
             acceptor: DefaultAcceptor,
             builder,
+            close_after_first_request: policy.close_after_first_request,
         })
     }
 
@@ -111,6 +132,7 @@ impl<A> HttpServer<A> {
             router: self.router,
             acceptor: map(self.acceptor),
             builder: self.builder,
+            close_after_first_request: self.close_after_first_request,
         }
     }
 }
@@ -164,6 +186,7 @@ where
                     let builder = self.builder.clone();
                     let router = self.router.clone();
                     let handle = handle.clone();
+                    let close_after_first_request = self.close_after_first_request;
 
                     // Pingora strategy: inside a no-steal runtime, `current_handle()` randomly
                     // selects a worker from the runtime pool.
@@ -182,15 +205,16 @@ where
                                     stream,
                                     service,
                                     handle,
+                                    close_after_first_request,
                                 )
                                 .await
                                 {
-                                    tracing::warn!(%error, %remote_addr, "failed to serve connection stream");
+                                    tracing::debug!(%error, %remote_addr, "failed to serve connection stream");
                                 }
                             }
                             Ok(AcceptOutcome::Handled) => {}
                             Err(error) => {
-                                tracing::warn!(%error, %remote_addr, "failed to accept connection stream");
+                                tracing::debug!(%error, %remote_addr, "failed to accept connection stream");
                             }
                         }
                     });
@@ -205,13 +229,25 @@ async fn serve_connection<I, S>(
     stream: I,
     service: S,
     handle: Handle,
+    close_after_first_request: bool,
 ) -> io::Result<()>
 where
     I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     S: Service<Request<Body>, Response = Response, Error = Infallible> + Clone + Send + 'static,
     S::Future: Send + 'static,
 {
-    let service = service.map_request(|request: Request<Incoming>| request.map(Body::new));
+    let (first_request_tx, mut first_request_rx) = if close_after_first_request {
+        let (sender, receiver) = watch::channel(false);
+        (Some(sender), Some(receiver))
+    } else {
+        (None, None)
+    };
+    let service = service.map_request(move |request: Request<Incoming>| {
+        if let Some(sender) = first_request_tx.as_ref() {
+            sender.send_replace(true);
+        }
+        request.map(Body::new)
+    });
     let service = TowerToHyperService::new(service);
     let connection = builder.serve_connection_with_upgrades(TokioIo::new(stream), service);
     tokio::pin!(connection);
@@ -226,6 +262,47 @@ where
                 shutting_down = true;
                 connection.as_mut().graceful_shutdown();
             }
+            _ = wait_for_first_request(&mut first_request_rx),
+                if close_after_first_request && !shutting_down =>
+            {
+                shutting_down = true;
+                connection.as_mut().graceful_shutdown();
+            }
         }
+    }
+}
+
+async fn wait_for_first_request(receiver: &mut Option<watch::Receiver<bool>>) {
+    let Some(receiver) = receiver.as_mut() else {
+        std::future::pending::<()>().await;
+        return;
+    };
+
+    let first_request_seen = *receiver.borrow_and_update();
+    if !first_request_seen {
+        let _ = receiver.changed().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::ConnectionPolicy;
+
+    #[test]
+    fn zero_keep_alive_closes_after_one_request_without_http2_pings() {
+        let policy = ConnectionPolicy::from_keep_alive_secs(0);
+
+        assert!(policy.close_after_first_request);
+        assert_eq!(policy.http2_ping_interval, None);
+    }
+
+    #[test]
+    fn positive_keep_alive_reuses_connections_and_enables_http2_pings() {
+        let policy = ConnectionPolicy::from_keep_alive_secs(30);
+
+        assert!(!policy.close_after_first_request);
+        assert_eq!(policy.http2_ping_interval, Some(Duration::from_secs(30)));
     }
 }

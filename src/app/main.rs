@@ -13,19 +13,13 @@ use std::str::FromStr;
 #[cfg(target_os = "linux")]
 use args::SystemdCommand;
 use args::{AppArgs, Command, ServerArgs, TlsSource};
-#[cfg(target_os = "linux")]
-use axum::Extension;
-use axum::{routing::any, Router};
 use clap::Parser;
 use error::Result;
 use pingora_runtime::current_handle;
-use server::{
-    routes::{http1_track, http2_track, tls_track, track},
-    runtime::Runtime,
-    AcmeRuntime, HttpServer, TrackAcceptor,
-};
+use server::{routes, runtime::Runtime, AcmeRuntime, HttpServer, TrackAcceptor};
 use tower::{limit::ConcurrencyLimitLayer, ServiceBuilder};
 use tower_http::{
+    compression::CompressionLayer,
     cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer},
     trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnResponse, TraceLayer},
 };
@@ -33,7 +27,7 @@ use tracing::Level;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 #[cfg(target_os = "linux")]
-use crate::{server::routes::tcp_track, tcp::TcpCaptureTrack};
+use crate::tcp::TcpCaptureTrack;
 
 const APP_NAME: &str = env!("CARGO_PKG_NAME");
 
@@ -96,19 +90,13 @@ pub(crate) fn run(mut args: ServerArgs) -> Result<()> {
                 .allow_methods(AllowMethods::mirror_request())
                 .allow_origin(AllowOrigin::mirror_request()),
         )
+        .layer(CompressionLayer::new())
         .layer(ConcurrencyLimitLayer::new(args.concurrent));
-
-    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
-    let mut router = Router::new()
-        .route("/api/all", any(track))
-        .route("/api/tls", any(tls_track))
-        .route("/api/http1", any(http1_track))
-        .route("/api/http2", any(http2_track));
 
     Runtime::new(threads).block_on(move |handle| async move {
         #[cfg(target_os = "linux")]
-        {
-            let mut tcp_capture_track: Option<TcpCaptureTrack> = None;
+        let tcp_capture_track = {
+            let mut track = None;
             if args.tcp_capture_packet {
                 tracing::info!("Enabling TCP/IP packet capture (requires root)");
                 let capture = TcpCaptureTrack::new(128, args.bind.port());
@@ -118,23 +106,24 @@ pub(crate) fn run(mut args: ServerArgs) -> Result<()> {
                     if let Some(interface) = args.tcp_capture_interface {
                         tracing::info!(%interface, "TCP/IP packet capture started");
                     }
-                    tcp_capture_track = Some(capture);
+                    track = Some(capture);
                 }
             }
+            track
+        };
 
-            if let Some(capture) = tcp_capture_track.as_ref() {
-                router = router
-                    .route("/api/tcp", any(tcp_track))
-                    .layer(Extension(capture.clone()));
-            }
+        let router = routes::router(
+            #[cfg(target_os = "linux")]
+            tcp_capture_track.as_ref(),
+        );
 
-            if let Some(capture) = tcp_capture_track {
-                let shutdown = handle.clone();
-                current_handle().spawn(async move {
-                    shutdown.wait_graceful_shutdown().await;
-                    capture.shutdown();
-                });
-            }
+        #[cfg(target_os = "linux")]
+        if let Some(capture) = tcp_capture_track {
+            let shutdown = handle.clone();
+            current_handle().spawn(async move {
+                shutdown.wait_graceful_shutdown().await;
+                capture.shutdown();
+            });
         }
 
         let server =

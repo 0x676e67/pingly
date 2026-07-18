@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="description" content="Pingly TLS, HTTP, and TCP protocol analysis">
+    <title>Pingly Protocol Inspector</title>
+    <script>
+        (() => {
+            let theme;
+            try {
+                const stored = window.localStorage.getItem("pingly-theme");
+                if (stored === "light" || stored === "dark") {
+                    theme = stored;
+                }
+            } catch (_) {
+                // The system preference remains available when storage is blocked.
+            }
+
+            theme ??= window.matchMedia("(prefers-color-scheme: dark)").matches
+                ? "dark"
+                : "light";
+            const root = document.documentElement;
+
+            // Primer supplies the palette; these variables bridge it to Tabler components.
+            window.pinglyPrimerTheme = Object.freeze({
+                shared: Object.freeze({
+                    "--tblr-active-bg": "var(--bgColor-neutral-muted)",
+                    "--tblr-azure": "var(--fgColor-accent)",
+                    "--tblr-azure-lt": "var(--bgColor-accent-muted)",
+                    "--tblr-backdrop-bg": "var(--bgColor-inset)",
+                    "--tblr-bg-forms": "var(--bgColor-inset)",
+                    "--tblr-bg-surface": "var(--card-bgColor)",
+                    "--tblr-bg-surface-dark": "var(--bgColor-inset)",
+                    "--tblr-bg-surface-primary": "var(--bgColor-default)",
+                    "--tblr-bg-surface-secondary": "var(--bgColor-default)",
+                    "--tblr-bg-surface-tertiary": "var(--bgColor-muted)",
+                    "--tblr-blue": "var(--fgColor-accent)",
+                    "--tblr-blue-lt": "var(--bgColor-accent-muted)",
+                    "--tblr-body-bg": "var(--bgColor-default)",
+                    "--tblr-body-color": "var(--fgColor-default)",
+                    "--tblr-border-active-color": "var(--borderColor-emphasis)",
+                    "--tblr-border-color": "var(--borderColor-default)",
+                    "--tblr-border-color-translucent": "var(--borderColor-muted)",
+                    "--tblr-code-bg": "var(--bgColor-accent-muted)",
+                    "--tblr-code-color": "var(--fgColor-default)",
+                    "--tblr-danger": "var(--fgColor-danger)",
+                    "--tblr-danger-lt": "var(--bgColor-danger-muted)",
+                    "--tblr-disabled-bg": "var(--bgColor-disabled)",
+                    "--tblr-disabled-color": "var(--fgColor-disabled)",
+                    "--tblr-emphasis-color": "var(--fgColor-onEmphasis)",
+                    "--tblr-focus-ring-color": "var(--borderColor-accent-muted)",
+                    "--tblr-green": "var(--fgColor-success)",
+                    "--tblr-green-lt": "var(--bgColor-success-muted)",
+                    "--tblr-icon-color": "var(--fgColor-muted)",
+                    "--tblr-info": "var(--fgColor-accent)",
+                    "--tblr-info-lt": "var(--bgColor-accent-muted)",
+                    "--tblr-link-color": "var(--fgColor-accent)",
+                    "--tblr-link-hover-color": "var(--fgColor-link)",
+                    "--tblr-list-group-action-hover-bg": "var(--bgColor-neutral-muted)",
+                    "--tblr-list-group-action-hover-color": "var(--fgColor-default)",
+                    "--tblr-list-group-active-bg": "var(--bgColor-neutral-muted)",
+                    "--tblr-list-group-active-border-color": "var(--borderColor-muted)",
+                    "--tblr-list-group-active-color": "var(--fgColor-default)",
+                    "--tblr-nav-pills-link-active-bg": "var(--button-default-bgColor-active)",
+                    "--tblr-nav-pills-link-active-color": "var(--button-default-fgColor-rest)",
+                    "--tblr-orange": "var(--fgColor-severe)",
+                    "--tblr-orange-lt": "var(--bgColor-severe-muted)",
+                    "--tblr-primary": "var(--button-primary-bgColor-rest)",
+                    "--tblr-primary-fg": "var(--fgColor-onEmphasis)",
+                    "--tblr-primary-lt": "var(--bgColor-success-muted)",
+                    "--tblr-purple": "var(--fgColor-done)",
+                    "--tblr-purple-lt": "var(--bgColor-done-muted)",
+                    "--tblr-red": "var(--fgColor-danger)",
+                    "--tblr-red-lt": "var(--bgColor-danger-muted)",
+                    "--tblr-secondary": "var(--fgColor-muted)",
+                    "--tblr-secondary-bg": "var(--bgColor-muted)",
+                    "--tblr-secondary-color": "var(--fgColor-muted)",
+                    "--tblr-secondary-lt": "var(--bgColor-neutral-muted)",
+                    "--tblr-shadow-border": "inset 0 0 0 1px var(--borderColor-muted)",
+                    "--tblr-shadow-card": "none",
+                    "--tblr-tertiary-bg": "var(--bgColor-inset)",
+                    "--tblr-tertiary-color": "var(--fgColor-muted)",
+                    "--tblr-warning": "var(--fgColor-attention)",
+                    "--tblr-warning-lt": "var(--bgColor-attention-muted)",
+                }),
+                light: Object.freeze({
+                    "--tblr-azure-rgb": "9, 105, 218",
+                    "--tblr-blue-rgb": "9, 105, 218",
+                    "--tblr-body-bg-rgb": "255, 255, 255",
+                    "--tblr-body-color-rgb": "31, 35, 40",
+                    "--tblr-danger-rgb": "209, 36, 47",
+                    "--tblr-emphasis-color-rgb": "255, 255, 255",
+                    "--tblr-green-rgb": "26, 127, 55",
+                    "--tblr-info-rgb": "9, 105, 218",
+                    "--tblr-orange-rgb": "188, 76, 0",
+                    "--tblr-primary-rgb": "31, 136, 61",
+                    "--tblr-purple-rgb": "130, 80, 223",
+                    "--tblr-red-rgb": "209, 36, 47",
+                    "--tblr-secondary-bg-rgb": "246, 248, 250",
+                    "--tblr-secondary-color-rgb": "89, 99, 110",
+                    "--tblr-secondary-rgb": "89, 99, 110",
+                    "--tblr-tertiary-bg-rgb": "246, 248, 250",
+                    "--tblr-tertiary-color-rgb": "89, 99, 110",
+                    "--tblr-warning-rgb": "154, 103, 0",
+                }),
+                dark: Object.freeze({
+                    "--tblr-azure-rgb": "71, 139, 230",
+                    "--tblr-blue-rgb": "71, 139, 230",
+                    "--tblr-body-bg-rgb": "33, 40, 48",
+                    "--tblr-body-color-rgb": "209, 215, 224",
+                    "--tblr-danger-rgb": "244, 112, 103",
+                    "--tblr-emphasis-color-rgb": "240, 246, 252",
+                    "--tblr-green-rgb": "87, 171, 90",
+                    "--tblr-info-rgb": "71, 139, 230",
+                    "--tblr-orange-rgb": "246, 157, 80",
+                    "--tblr-primary-rgb": "52, 125, 57",
+                    "--tblr-purple-rgb": "152, 110, 226",
+                    "--tblr-red-rgb": "244, 112, 103",
+                    "--tblr-secondary-bg-rgb": "38, 44, 54",
+                    "--tblr-secondary-color-rgb": "145, 152, 161",
+                    "--tblr-secondary-rgb": "145, 152, 161",
+                    "--tblr-tertiary-bg-rgb": "21, 27, 35",
+                    "--tblr-tertiary-color-rgb": "145, 152, 161",
+                    "--tblr-warning-rgb": "218, 170, 63",
+                }),
+            });
+
+            window.applyPinglyPrimerTheme = function (selectedTheme) {
+                const palette = window.pinglyPrimerTheme;
+                root.dataset.theme = selectedTheme;
+                root.dataset.bsTheme = selectedTheme;
+                root.dataset.colorMode = selectedTheme;
+                root.dataset.lightTheme = "light";
+                root.dataset.darkTheme = "dark_dimmed";
+
+                [palette.shared, palette[selectedTheme] || palette.light].forEach(
+                    function (values) {
+                        Object.entries(values).forEach(function (entry) {
+                            root.style.setProperty(entry[0], entry[1]);
+                        });
+                    }
+                );
+            };
+
+            window.applyPinglyPrimerTheme(theme);
+        })();
+    </script>
+    <link
+        rel="icon"
+        href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='10' fill='%23212830' stroke='%233d444d' stroke-width='2'/%3E%3Ctext x='32' y='43' text-anchor='middle' font-family='Arial,sans-serif' font-size='34' font-weight='700' fill='%23f0f6fc'%3EP%3C/text%3E%3C/svg%3E"
+    >
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/@primer/primitives@11.7.1/dist/css/functional/themes/light.css"
+        integrity="sha384-Dr6x7dVhkHJRYxojTVMY8ZZt494t/y5kZYqWFzpiIz+7hZMNw+4N3O1qG+yFGtHD"
+        crossorigin="anonymous"
+        referrerpolicy="no-referrer"
+    >
+    <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/@primer/primitives@11.7.1/dist/css/functional/themes/dark-dimmed.css"
+        integrity="sha384-tyGOUiC6/O2IZry7gBhZ2iuyYIp+dgaAjQVXkX8ZUSuP7D8KoMhPKYCeqKY8lykt"
+        crossorigin="anonymous"
+        referrerpolicy="no-referrer"
+    >
+    <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/css/tabler.min.css"
+        integrity="sha384-kz+I4+mczbNiZfLAJMxOlJaZmnbRYhARHNkR2k6tal4gz7OL33/0puDD3SvkiNX9"
+        crossorigin="anonymous"
+        referrerpolicy="no-referrer"
+    >
+    <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.44.0/dist/tabler-icons.min.css"
+        integrity="sha384-ccZHbezhtZWmNy0cg8odL0D/jFU5k5HIls9y78Qd6lWor7rpvFIZtK0fTFG4z456"
+        crossorigin="anonymous"
+        referrerpolicy="no-referrer"
+    >
+    <script
+        src="https://cdn.jsdelivr.net/npm/lucide@1.24.0/dist/umd/lucide.min.js"
+        integrity="sha384-mooE85Luwgx+AyykX7e90VcN8/QCFTSIwPuHLmvcsLVoA0en7lKYb9XlOzn5G2co"
+        crossorigin="anonymous"
+        defer
+        referrerpolicy="no-referrer"
+    ></script>
+</head>
+<body>
+    <a
+        class="visually-hidden-focusable position-absolute top-0 start-0 z-3 m-2 btn btn-primary"
+        href="#main-content"
+    >
+        Skip to analysis
+    </a>
+
+    <div class="page">
+        <header
+            class="navbar navbar-expand-md d-print-none border-bottom bg-body sticky-top"
+            id="app-header"
+        >
+            <div class="container-fluid flex-nowrap">
+                <a
+                    class="navbar-brand d-flex align-items-center gap-2 m-0 text-decoration-none"
+                    href="/"
+                    aria-label="Pingly home"
+                >
+                    <span class="avatar avatar-sm bg-body-tertiary text-body border fw-bold" aria-hidden="true">
+                        P
+                    </span>
+                    <span class="d-flex flex-column lh-sm">
+                        <strong>Pingly</strong>
+                        <small class="text-secondary d-none d-lg-block">Protocol Inspector</small>
+                    </span>
+                </a>
+
+                <div class="d-flex flex-row flex-nowrap align-items-center gap-2 ms-auto">
+                    <span
+                        class="badge bg-secondary-lt text-secondary d-none d-lg-inline-flex align-items-center"
+                        id="capture-status"
+                        role="status"
+                        aria-live="polite"
+                    >
+                        <span
+                            class="status-dot status-dot-animated bg-secondary me-2"
+                            id="capture-status-dot"
+                            aria-hidden="true"
+                        ></span>
+                        <span id="capture-status-label">Connecting</span>
+                    </span>
+
+                    <a
+                        class="btn btn-icon btn-outline-secondary"
+                        href="https://github.com/0x676e67/pingly"
+                        target="_blank"
+                        rel="noreferrer"
+                        title="View Pingly on GitHub"
+                        aria-label="View Pingly on GitHub"
+                    >
+                        <i class="ti ti-brand-github fs-2" aria-hidden="true"></i>
+                    </a>
+                    <button
+                        class="btn btn-icon btn-outline-secondary"
+                        id="theme-button"
+                        type="button"
+                        title="Toggle color theme"
+                        aria-label="Toggle color theme"
+                    >
+                        <i class="icon" data-lucide="moon" aria-hidden="true"></i>
+                    </button>
+
+
+                    <button
+                        class="btn btn-icon btn-outline-secondary d-none d-sm-inline-flex"
+                        id="download-button"
+                        type="button"
+                        title="Download analysis JSON"
+                        aria-label="Download analysis JSON"
+                        disabled
+                    >
+                        <i class="icon" data-lucide="download" aria-hidden="true"></i>
+                    </button>
+
+                    <button
+                        class="btn btn-primary"
+                        id="refresh-button"
+                        type="button"
+                        title="Run analysis again"
+                    >
+                        <i class="icon" data-lucide="refresh-cw" aria-hidden="true"></i>
+                        <span class="d-none d-sm-inline">Refresh</span>
+                    </button>
+
+                </div>
+            </div>
+        </header>
+
+        <div class="page-wrapper">
+            <div class="container-fluid p-0">
+                <div class="row g-0 align-items-stretch">
+                    <aside
+                        class="col-12 col-md-3 col-lg-2 border-end bg-body align-self-start"
+                        id="analysis-sidebar"
+                        aria-label="Analysis views"
+                    >
+                        <div class="d-flex flex-column w-100">
+                            <nav
+                                class="list-group list-group-transparent flex-row flex-md-column flex-nowrap gap-1 overflow-auto p-2 w-100"
+                                id="analysis-nav"
+                                role="tablist"
+                                aria-orientation="vertical"
+                            >
+                                <button
+                                    class="list-group-item list-group-item-action active d-flex align-items-center gap-2 flex-shrink-0 rounded-2 text-start"
+                                    type="button"
+                                    role="tab"
+                                    aria-selected="true"
+                                    aria-controls="panel-overview"
+                                    data-view="overview"
+                                >
+                                    <i class="icon" data-lucide="layout-dashboard" aria-hidden="true"></i>
+                                    <span>Overview</span>
+                                </button>
+                                <button
+                                    class="list-group-item list-group-item-action d-flex align-items-center gap-2 flex-shrink-0 rounded-2 text-start"
+                                    type="button"
+                                    role="tab"
+                                    aria-selected="false"
+                                    aria-controls="panel-tls"
+                                    data-view="tls"
+                                >
+                                    <i class="icon" data-lucide="shield-check" aria-hidden="true"></i>
+                                    <span>TLS</span>
+                                    <span class="badge bg-secondary-lt text-secondary ms-auto" id="tls-count">0</span>
+                                </button>
+                                <button
+                                    class="list-group-item list-group-item-action d-flex align-items-center gap-2 flex-shrink-0 rounded-2 text-start"
+                                    type="button"
+                                    role="tab"
+                                    aria-selected="false"
+                                    aria-controls="panel-http"
+                                    data-view="http"
+                                >
+                                    <i class="icon" data-lucide="rows-3" aria-hidden="true"></i>
+                                    <span>HTTP</span>
+                                    <span class="badge bg-secondary-lt text-secondary ms-auto" id="http-count">0</span>
+                                </button>
+                                <button
+                                    class="list-group-item list-group-item-action d-flex align-items-center gap-2 flex-shrink-0 rounded-2 text-start"
+                                    type="button"
+                                    role="tab"
+                                    aria-selected="false"
+                                    aria-controls="panel-h2"
+                                    data-view="h2"
+                                >
+                                    <i class="icon" data-lucide="network" aria-hidden="true"></i>
+                                    <span>HTTP/2</span>
+                                    <span class="badge bg-secondary-lt text-secondary ms-auto" id="h2-count">0</span>
+                                </button>
+                                <button
+                                    class="list-group-item list-group-item-action d-flex align-items-center gap-2 flex-shrink-0 rounded-2 text-start"
+                                    type="button"
+                                    role="tab"
+                                    aria-selected="false"
+                                    aria-controls="panel-tcp"
+                                    data-view="tcp"
+                                >
+                                    <i class="icon" data-lucide="waypoints" aria-hidden="true"></i>
+                                    <span>TCP</span>
+                                    <span class="badge bg-secondary-lt text-secondary ms-auto" id="tcp-count">0</span>
+                                </button>
+                                <button
+                                    class="list-group-item list-group-item-action d-flex align-items-center gap-2 flex-shrink-0 rounded-2 text-start"
+                                    type="button"
+                                    role="tab"
+                                    aria-selected="false"
+                                    aria-controls="panel-json"
+                                    data-view="json"
+                                >
+                                    <i class="icon" data-lucide="braces" aria-hidden="true"></i>
+                                    <span>JSON</span>
+                                </button>
+                            </nav>
+                        </div>
+                    </aside>
+
+                    <main id="main-content" class="col-12 col-md-9 col-lg-10" tabindex="-1">
+                        <div class="page-body m-0">
+                            <div class="container-xl py-4">
+                                <section class="placeholder-glow" id="loading-state" aria-live="polite">
+                                    <div class="d-flex justify-content-between align-items-center mb-4">
+                                        <span class="placeholder col-4"></span>
+                                        <span class="placeholder col-2"></span>
+                                    </div>
+                                    <div class="row row-cards mb-4" aria-hidden="true">
+                                        <div class="col-sm-6 col-xl-3">
+                                            <div class="card"><div class="card-body"><span class="placeholder col-8"></span></div></div>
+                                        </div>
+                                        <div class="col-sm-6 col-xl-3">
+                                            <div class="card"><div class="card-body"><span class="placeholder col-8"></span></div></div>
+                                        </div>
+                                        <div class="col-sm-6 col-xl-3">
+                                            <div class="card"><div class="card-body"><span class="placeholder col-8"></span></div></div>
+                                        </div>
+                                        <div class="col-sm-6 col-xl-3">
+                                            <div class="card"><div class="card-body"><span class="placeholder col-8"></span></div></div>
+                                        </div>
+                                    </div>
+                                    <div class="card" aria-hidden="true">
+                                        <div class="card-body py-5"><span class="placeholder col-12"></span></div>
+                                    </div>
+                                </section>
+
+                                <section class="empty py-5" id="error-state" role="alert" hidden>
+                                    <div class="empty-icon">
+                                        <i class="icon" data-lucide="circle-alert" aria-hidden="true"></i>
+                                    </div>
+                                    <p class="empty-title">Analysis unavailable</p>
+                                    <p class="empty-subtitle text-secondary" id="error-message">
+                                        The analysis response could not be loaded.
+                                    </p>
+                                    <div class="empty-action">
+                                        <button class="btn btn-primary" id="retry-button" type="button">
+                                            <i class="icon" data-lucide="refresh-cw" aria-hidden="true"></i>
+                                            <span>Try again</span>
+                                        </button>
+                                    </div>
+                                </section>
+
+                                <div id="analysis-workspace" hidden>
+                                    <div class="page-header d-print-none mb-4">
+                                        <div class="row align-items-start g-2">
+                                            <div class="col-12 col-sm">
+                                                <div class="page-pretitle" id="view-eyebrow">Current request</div>
+                                                <h1 class="page-title" id="view-title">Connection analysis</h1>
+                                            </div>
+                                            <div class="col-12 col-sm-auto ms-sm-auto">
+                                                <time class="text-secondary font-monospace small" id="captured-at"></time>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <section class="row row-cards mb-4" aria-label="Connection summary">
+                                        <div class="col-sm-6 col-xl-3">
+                                            <article class="card card-sm h-100">
+                                                <div class="card-body">
+                                                    <div class="d-flex align-items-start gap-3">
+                                                        <span class="avatar avatar-sm bg-blue-lt text-blue flex-shrink-0" aria-hidden="true">
+                                                            <i class="icon" data-lucide="map-pin"></i>
+                                                        </span>
+                                                        <div class="flex-fill overflow-hidden">
+                                                            <div class="text-secondary small fw-medium mb-1">Remote address</div>
+                                                            <strong class="font-monospace text-break" id="summary-address">Unavailable</strong>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </article>
+                                        </div>
+                                        <div class="col-sm-6 col-xl-3">
+                                            <article class="card card-sm h-100">
+                                                <div class="card-body">
+                                                    <div class="d-flex align-items-start gap-3">
+                                                        <span class="avatar avatar-sm bg-orange-lt text-orange flex-shrink-0" aria-hidden="true">
+                                                            <i class="icon" data-lucide="arrow-up-right"></i>
+                                                        </span>
+                                                        <div class="flex-fill overflow-hidden">
+                                                            <div class="text-secondary small fw-medium mb-1">Request</div>
+                                                            <strong class="font-monospace text-break" id="summary-http">Unavailable</strong>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </article>
+                                        </div>
+                                        <div class="col-sm-6 col-xl-3">
+                                            <article class="card card-sm h-100">
+                                                <div class="card-body">
+                                                    <div class="d-flex align-items-start gap-3">
+                                                        <span class="avatar avatar-sm bg-green-lt text-green flex-shrink-0" aria-hidden="true">
+                                                            <i class="icon" data-lucide="shield-check"></i>
+                                                        </span>
+                                                        <div class="flex-fill overflow-hidden">
+                                                            <div class="text-secondary small fw-medium mb-1">Negotiated TLS</div>
+                                                            <strong class="font-monospace text-break" id="summary-tls">Unavailable</strong>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </article>
+                                        </div>
+                                        <div class="col-sm-6 col-xl-3">
+                                            <article class="card card-sm h-100">
+                                                <div class="card-body">
+                                                    <div class="d-flex align-items-start gap-3">
+                                                        <span class="avatar avatar-sm bg-purple-lt text-purple flex-shrink-0" aria-hidden="true">
+                                                            <i class="icon" data-lucide="network"></i>
+                                                        </span>
+                                                        <div class="flex-fill overflow-hidden">
+                                                            <div class="text-secondary small fw-medium mb-1">HTTP/2 frames</div>
+                                                            <strong class="font-monospace text-break" id="summary-frames">0</strong>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </article>
+                                        </div>
+                                    </section>
+
+                                    <section id="panel-overview" role="tabpanel" data-panel="overview">
+                                        <div id="overview-content"></div>
+                                    </section>
+                                    <section id="panel-tls" role="tabpanel" data-panel="tls" hidden>
+                                        <div id="tls-content"></div>
+                                    </section>
+                                    <section id="panel-http" role="tabpanel" data-panel="http" hidden>
+                                        <div id="http-content"></div>
+                                    </section>
+                                    <section id="panel-h2" role="tabpanel" data-panel="h2" hidden>
+                                        <div id="h2-content"></div>
+                                    </section>
+                                    <section id="panel-tcp" role="tabpanel" data-panel="tcp" hidden>
+                                        <div id="tcp-content"></div>
+                                    </section>
+                                    <section id="panel-json" role="tabpanel" data-panel="json" hidden>
+                                        <div class="card">
+                                            <div class="card-header flex-column align-items-stretch gap-3">
+                                                <div class="d-flex align-items-center">
+                                                    <div>
+                                                        <div class="page-pretitle">Serialized response</div>
+                                                        <div class="d-flex align-items-center gap-2">
+                                                            <h2 class="card-title">Raw JSON</h2>
+                                                            <code
+                                                                class="badge bg-blue-lt text-blue font-monospace"
+                                                                id="json-route-label"
+                                                            >/api/all</code>
+                                                        </div>
+                                                    </div>
+                                                    <div class="card-actions ms-auto">
+                                                        <button
+                                                            class="btn btn-icon btn-outline-secondary"
+                                                            id="copy-json-button"
+                                                            type="button"
+                                                            title="Copy raw JSON"
+                                                            aria-label="Copy raw JSON"
+                                                            disabled
+                                                        >
+                                                            <i
+                                                                class="icon"
+                                                                data-lucide="copy"
+                                                                aria-hidden="true"
+                                                            ></i>
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                <div
+                                                    class="nav nav-pills flex-nowrap gap-1 overflow-x-auto"
+                                                    id="json-route-options"
+                                                    role="group"
+                                                    aria-label="JSON response route"
+                                                ></div>
+                                            </div>
+                                            <pre
+                                                class="card-body bg-body-tertiary font-monospace overflow-auto m-0"
+                                                id="json-content"
+                                                tabindex="0"
+                                            ></pre>
+                                        </div>
+                                    </section>
+
+                                    <p class="alert alert-secondary mt-4 mb-0" id="support-note"></p>
+                                </div>
+                            </div>
+                        </div>
+                    </main>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast-container position-fixed bottom-0 end-0 p-3">
+        <div
+            class="toast show p-3 text-bg-dark border-0"
+            id="toast"
+            role="status"
+            aria-live="polite"
+            hidden
+        ></div>
+    </div>
+
+    <!-- PINGLY_SCRIPT -->
+</body>
+</html>

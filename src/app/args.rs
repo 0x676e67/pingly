@@ -125,8 +125,8 @@ pub(crate) struct ServerArgs {
     #[arg(short, long, default_value = "1024")]
     pub(crate) concurrent: usize,
 
-    /// Keep alive timeout (seconds)
-    #[arg(short, long, default_value = "60")]
+    /// Connection reuse and HTTP/2 PING interval in seconds; 0 serves one request per connection
+    #[arg(short, long, default_value = "0")]
     pub(crate) keep_alive_timeout: u64,
 
     /// TLS certificate file path
