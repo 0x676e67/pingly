@@ -311,14 +311,19 @@ impl Frame {
 pub enum FrameType {
     /// SETTINGS (`0x04`).
     Settings,
+
     /// WINDOW_UPDATE (`0x08`).
     WindowUpdate,
+
     /// HEADERS (`0x01`).
     Headers,
+    
     /// CONTINUATION (`0x09`).
     Continuation,
+    
     /// PRIORITY (`0x02`).
     Priority,
+    
     /// A frame retained without type-specific decoding.
     Unknown,
 }
