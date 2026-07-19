@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{quic::varint, tls::HexBytes};
@@ -663,6 +665,7 @@ impl TryFrom<OpaqueFrameRepr> for OpaqueFrame {
 pub(super) fn parse_settings(payload: &[u8]) -> Result<SettingsFrame, Http3FrameError> {
     let mut offset = 0usize;
     let mut settings = Vec::new();
+    let mut setting_ids = HashSet::new();
 
     while offset < payload.len() {
         let (id, id_len) =
@@ -672,12 +675,7 @@ pub(super) fn parse_settings(payload: &[u8]) -> Result<SettingsFrame, Http3Frame
             varint::decode(&payload[offset..]).ok_or(Http3FrameError::IncompleteSetting)?;
         offset += value_len;
 
-        if matches!(id, 0x02..=0x05) {
-            return Err(Http3FrameError::ForbiddenSetting { id });
-        }
-        if settings.iter().any(|setting: &Setting| setting.id == id) {
-            return Err(Http3FrameError::DuplicateSetting { id });
-        }
+        validate_setting_id(&mut setting_ids, id)?;
         settings.push(Setting::try_from_wire(id, value)?);
     }
 
@@ -715,16 +713,19 @@ pub(super) fn parse_headers(
 }
 
 fn validate_settings(settings: &[Setting]) -> Result<(), Http3FrameError> {
-    for (index, setting) in settings.iter().enumerate() {
-        if matches!(setting.id, 0x02..=0x05) {
-            return Err(Http3FrameError::ForbiddenSetting { id: setting.id });
-        }
-        if settings[..index]
-            .iter()
-            .any(|previous| previous.id == setting.id)
-        {
-            return Err(Http3FrameError::DuplicateSetting { id: setting.id });
-        }
+    let mut setting_ids = HashSet::with_capacity(settings.len());
+    for setting in settings {
+        validate_setting_id(&mut setting_ids, setting.id)?;
+    }
+    Ok(())
+}
+
+fn validate_setting_id(setting_ids: &mut HashSet<u64>, id: u64) -> Result<(), Http3FrameError> {
+    if matches!(id, 0x02..=0x05) {
+        return Err(Http3FrameError::ForbiddenSetting { id });
+    }
+    if !setting_ids.insert(id) {
+        return Err(Http3FrameError::DuplicateSetting { id });
     }
     Ok(())
 }
@@ -780,7 +781,7 @@ mod tests {
 
     use super::{
         parse_settings, FrameType, HeaderField, Http3FrameError, OpaqueFrame, Setting,
-        SettingValue, StreamType,
+        SettingValue, SettingsFrame, StreamType,
     };
     use crate::quic::varint;
     #[test]
@@ -843,6 +844,42 @@ mod tests {
             parse_settings(&[0x02, 0x00]).unwrap_err(),
             Http3FrameError::ForbiddenSetting { id: 2 }
         );
+    }
+
+    #[test]
+    fn settings_scale_to_many_unique_ids_and_reject_a_late_duplicate() {
+        const SETTING_COUNT: u64 = 4_096;
+        const FIRST_ID: u64 = 1 << 40;
+
+        let mut payload = Vec::new();
+        for index in 0..SETTING_COUNT {
+            varint::encode(FIRST_ID + index * 31, &mut payload).unwrap();
+            varint::encode(0, &mut payload).unwrap();
+        }
+
+        let frame = parse_settings(&payload).unwrap();
+        assert_eq!(frame.settings.len(), SETTING_COUNT as usize);
+        assert!(frame
+            .settings
+            .iter()
+            .enumerate()
+            .all(|(index, setting)| setting.id == FIRST_ID + index as u64 * 31));
+
+        let mut duplicate_payload = payload;
+        varint::encode(FIRST_ID, &mut duplicate_payload).unwrap();
+        varint::encode(0, &mut duplicate_payload).unwrap();
+        assert_eq!(
+            parse_settings(&duplicate_payload).unwrap_err(),
+            Http3FrameError::DuplicateSetting { id: FIRST_ID }
+        );
+
+        let mut duplicate_json = serde_json::to_value(frame).unwrap();
+        let first_setting = duplicate_json["settings"][0].clone();
+        duplicate_json["settings"]
+            .as_array_mut()
+            .unwrap()
+            .push(first_setting);
+        assert!(serde_json::from_value::<SettingsFrame>(duplicate_json).is_err());
     }
 
     #[test]
