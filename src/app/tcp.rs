@@ -9,7 +9,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use pcap::{Capture, Device};
+use pcap::{Capture, Device, Direction};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
@@ -100,8 +100,6 @@ impl TcpCaptureTrack {
         &self,
         interface: Option<String>,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        use pcap::{Capture, Device};
-
         let devices = Device::list()?;
         tracing::info!("Available network devices:");
         for (i, device) in devices.iter().enumerate() {
@@ -122,13 +120,7 @@ impl TcpCaptureTrack {
                 .find(|d| d.name == iface)
                 .ok_or(format!("Interface {} not found", iface))?
         } else {
-            // For localhost testing, prefer loopback interface over 'any'
-            devices
-                .iter()
-                .find(|d| d.name == "lo")
-                .cloned()
-                .or_else(|| devices.iter().find(|d| d.name == "any").cloned())
-                .unwrap_or_else(|| devices.into_iter().next().unwrap())
+            Device::lookup()?.ok_or("No default network interface found")?
         };
 
         let use_promisc = device.name != "any";
@@ -176,12 +168,7 @@ fn run_capture_blocking(
             .find(|d| d.name == iface)
             .ok_or(format!("Interface {} not found", iface))?
     } else {
-        devices
-            .iter()
-            .find(|d| d.name == "lo")
-            .cloned()
-            .or_else(|| devices.iter().find(|d| d.name == "any").cloned())
-            .unwrap_or_else(|| devices.into_iter().next().unwrap())
+        Device::lookup()?.ok_or("No default network interface found")?
     };
 
     tracing::info!("Starting packet capture on interface: {}", device.name);
@@ -192,6 +179,7 @@ fn run_capture_blocking(
         .snaplen(65535)
         .timeout(100)
         .open()?;
+    cap.direction(Direction::In)?;
 
     let filter = format!("tcp and dst port {}", server_port);
     tracing::info!("Setting packet filter: {}", filter);

@@ -36,6 +36,11 @@ impl Handle {
         }
     }
 
+    /// Requests graceful shutdown without waiting for a process signal.
+    pub(crate) fn request_graceful_shutdown(&self) {
+        self.graceful_shutdown.send_replace(true);
+    }
+
     /// Waits for a process shutdown signal and then requests graceful shutdown.
     ///
     /// If installing or polling the signal handler fails, the server still starts shutdown. That is
@@ -45,7 +50,7 @@ impl Handle {
             Ok(signal) => tracing::info!(signal, "received graceful shutdown signal"),
             Err(error) => tracing::warn!(%error, "failed to listen for shutdown signal"),
         }
-        self.graceful_shutdown.send_replace(true);
+        self.request_graceful_shutdown();
     }
 }
 
@@ -101,6 +106,6 @@ mod tests {
     }
 
     fn request_graceful_shutdown(handle: &Handle) {
-        handle.graceful_shutdown.send_replace(true);
+        handle.request_graceful_shutdown();
     }
 }

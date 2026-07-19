@@ -1,0 +1,377 @@
+{
+    "donate": "Please consider supporting Pingly to keep this API running. Visit https://github.com/0x676e67/pingly",
+    "address": "180.142.178.158:59233",
+    "http_version": "HTTP/3.0",
+    "method": "GET",
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+    "tls": {
+        "ja3": "771,4865-4866-4867,17613-16-45-43-57-10-13-51-27-0-65037-41,4588-29-23-24,",
+        "ja3_hash": "75183e16aa176c7b1ed4b5829818ded7",
+        "ja4": "q13d0312h3_55b375c5d22e_5a06198afb93",
+        "ja4_r": "q13d0312h3_1301,1302,1303_000a,000d,001b,0029,002b,002d,0033,0039,44cd,fe0d_0403,0804,0401,0503,0805,0501,0806,0601,0201",
+        "tls_version": "TLSv1_2",
+        "tls_version_negotiated": "TLSv1_3",
+        "client_random": "93b112a9cd2b6e4067a2e4e7a6069829a10636f36819e0222cca094d758aa28f",
+        "session_id": null,
+        "compression_algorithms": [
+            "Null"
+        ],
+        "cipher_suites": [
+            {
+                "id": 4865,
+                "name": "TLS_AES_128_GCM_SHA256"
+            },
+            {
+                "id": 4866,
+                "name": "TLS_AES_256_GCM_SHA384"
+            },
+            {
+                "id": 4867,
+                "name": "TLS_CHACHA20_POLY1305_SHA256"
+            }
+        ],
+        "extensions": [
+            {
+                "application_settings": {
+                    "value": 17613,
+                    "data": [
+                        "h3"
+                    ]
+                }
+            },
+            {
+                "application_layer_protocol_negotiation": {
+                    "value": 16,
+                    "data": [
+                        "h3"
+                    ]
+                }
+            },
+            {
+                "psk_key_exchange_modes": {
+                    "value": 45,
+                    "data": {
+                        "ke_modes": [
+                            "psk_dhe_ke"
+                        ]
+                    }
+                }
+            },
+            {
+                "supported_versions": {
+                    "value": 43,
+                    "data": {
+                        "versions": [
+                            {
+                                "id": 772,
+                                "name": "TLSv1_3"
+                            }
+                        ]
+                    }
+                }
+            },
+            {
+                "quic_transport_parameters": {
+                    "value": 57,
+                    "data": [
+                        {
+                            "id": 12583,
+                            "name": "initial_rtt",
+                            "value": 251744
+                        },
+                        {
+                            "id": 8,
+                            "name": "initial_max_streams_bidi",
+                            "value": 100
+                        },
+                        {
+                            "id": 15,
+                            "name": "initial_source_connection_id",
+                            "value": ""
+                        },
+                        {
+                            "id": 12584,
+                            "name": "google_connection_options",
+                            "value": "4f524947"
+                        },
+                        {
+                            "id": 1,
+                            "name": "max_idle_timeout",
+                            "value": 30000
+                        },
+                        {
+                            "id": 3,
+                            "name": "max_udp_payload_size",
+                            "value": 1472
+                        },
+                        {
+                            "id": 4,
+                            "name": "initial_max_data",
+                            "value": 15728640
+                        },
+                        {
+                            "id": 5,
+                            "name": "initial_max_stream_data_bidi_local",
+                            "value": 6291456
+                        },
+                        {
+                            "id": 17,
+                            "name": "version_information",
+                            "value": {
+                                "chosen_version": {
+                                    "id": 1,
+                                    "name": "Version1"
+                                },
+                                "available_versions": [
+                                    {
+                                        "id": 4195003034,
+                                        "name": "Grease"
+                                    },
+                                    {
+                                        "id": 1,
+                                        "name": "Version1"
+                                    }
+                                ]
+                            }
+                        },
+                        {
+                            "id": 6,
+                            "name": "initial_max_stream_data_bidi_remote",
+                            "value": 6291456
+                        },
+                        {
+                            "id": 9,
+                            "name": "initial_max_streams_uni",
+                            "value": 103
+                        },
+                        {
+                            "id": "2607827185491430401",
+                            "name": "grease",
+                            "value": "f4"
+                        },
+                        {
+                            "id": 32,
+                            "name": "max_datagram_frame_size",
+                            "value": 65536
+                        },
+                        {
+                            "id": 7,
+                            "name": "initial_max_stream_data_uni",
+                            "value": 6291456
+                        }
+                    ]
+                }
+            },
+            {
+                "supported_groups": {
+                    "value": 10,
+                    "data": [
+                        {
+                            "id": 4588,
+                            "name": "X25519MLKEM768"
+                        },
+                        {
+                            "id": 29,
+                            "name": "x25519"
+                        },
+                        {
+                            "id": 23,
+                            "name": "secp256r1"
+                        },
+                        {
+                            "id": 24,
+                            "name": "secp384r1"
+                        }
+                    ]
+                }
+            },
+            {
+                "signature_algorithms": {
+                    "value": 13,
+                    "data": [
+                        "ecdsa_secp256r1_sha256",
+                        "rsa_pss_rsae_sha256",
+                        "rsa_pkcs1_sha256",
+                        "ecdsa_secp384r1_sha384",
+                        "rsa_pss_rsae_sha384",
+                        "rsa_pkcs1_sha384",
+                        "rsa_pss_rsae_sha512",
+                        "rsa_pkcs1_sha512",
+                        "rsa_pkcs1_sha1"
+                    ]
+                }
+            },
+            {
+                "key_share": {
+                    "value": 51,
+                    "data": [
+                        {
+                            "id": 4588,
+                            "name": "X25519MLKEM768",
+                            "value": "178b1733070bef2533326917e5c73382e17318d19c53772ed250688c7719e528681132a86dc93207d123f129c2128c1b05dcb6d1b827f1ec44f72092df9669b1a11fb882cdb1c1bea81c5b65436b07555d0220b4df6709b3750c620c339ec76328491412d7b5ba075dbc222551930187d30c9cf46bad4a34598567649a1a6e5c453eb30843770d09877a4677b542ca830b739387982eae560134d2397750798ea9513644319516b52a5156cbd42138b2aea1f52c6f77478db802ae896fc85322b18865d50513e05c6190c0111d8022cbe4c6deab6469409ff30aa409e92353377cc0b92904a4a430188d53498fca416e83152c74817a4e2678f804ba7eb31851e338f6c7646de4b89d1aab6b4a2419744b285a00932977d529ce20a27c289b097b81cf765ca04c2725dfe0c26602862430b4be94654902c287f4179df72c652c8ea040575756c50260af8a9a58dac978ca831faa0b4035ba5273d1811352a46cb0b3b6e25670343e3e210973fa4ac6f8cc8bd0266aa36c7d3407e0c5167cb5cdf7d28b0524a5571c67c469657ce50c61227dcaf2945a001abbb25b1b4366189020e4a182cc5996669c08460914c5a82bac21b76cd5bf20d4616ad5bc1a5025ae76907255846cf3971ed3985a986564f894230697e90ba0623ac920da43f95598850043d78ac5841011606a9bc0ab781e442ee80974c7b6330745262e2607edd85ba4441c013a488b735160614475d5cb093ac3b1da5ce8eaa1aeb61308b8137712a6cd157ccf4aae5213672b6aa08e495a0c43b5bae476385bc85260a319c84c4b492e18856f32e5c312f20a597b39846300ab682a62857bb899cc4b176cd494bf677acb6a339f22d16d8e691cdbc5b947ab421af8c1ad8170a2a48379d67a671a0b7528367189b4ef7b9f6f8232f19252982751872b027920cddf08911fc473e025b1f264930925b4ff94989081b1f0ba1fad025e1c125648ccc6ee4a94d8d46d61a5688aa84d98a94a3e11a1112103090bcc36116219f0abef0847ac8ba671f38553bc2cf2f2ada7a418c85aa8cc8985777a0c19a960806453967199415958fc279033505242380363d3b2343b949ca89398ba24912066973c63547b416011cb6d38373219b816e504858280c83bb36d7c3cd5e2bbe341a395b01ee0916c0778262a997e0f5b36e8c51bd97398bd72bc830974729a4fcff2ca35673c6bdb13dcd04d70437f2cd562e7dc3071838a28447cbb18275aa8418d2c6f57b24fd417af8fe5a08d20c837b8375350445a81bec315264ffcab9697c4d2c6b32a5234aaec123b3289577ba37aacb72c495379804c34aa22f352272b67a788306ffe18818c3937fe9297430689dba59b808a8ce0b2402b03c47e5a6c81a7c949b552668a3e96f28a6e3340c8e86af9331cf0faaed949b7c11720a5661d21e0833b45a3fdc3903b4c27bf325c2e11927c791df650a4860407b920ccce122c03ac99c430113a2b1ade651b72343742090c94425c84dc95b3e1b46fcab59864a4034b3cbfac7344608b9a817728897b7b833bc441ce3e9731aea2b5ee771240b83742756478784f20cba8bbca17f564139e4c856df21d81871c309795cd3c3d388088c2f63d4b60afeb1bd0818635eee28f7661cf5aac8fc76f55cc6821b80d90b1283971117c8ea45d96106beeddb9bb5ebff11aed54c46f6ae1e0ba99f1a2c065f1702507"
+                        },
+                        {
+                            "id": 29,
+                            "name": "x25519",
+                            "value": "f9ef317d7c1482decf886be1bf959543543c6101a74e97c87feaf24e9fcc2d6f"
+                        }
+                    ]
+                }
+            },
+            {
+                "certificate_compression": {
+                    "value": 27,
+                    "data": [
+                        "Brotli"
+                    ]
+                }
+            },
+            {
+                "server_name": {
+                    "value": 0,
+                    "data": [
+                        "pingly.us.kg"
+                    ]
+                }
+            },
+            {
+                "encrypted_client_hello": {
+                    "value": 65037,
+                    "data": {
+                        "Outer": {
+                            "cipher_suite": {
+                                "kdf_id": "HKDF_SHA256",
+                                "aead_id": "AES_128_GCM"
+                            },
+                            "config_id": 175,
+                            "enc": "38c0613306c8095f4db576d7ebf93ec10f22358e68cce29233028b5ebb938c6d",
+                            "payload": "296ebf25211523a59f75615bdf3d8446cf56019ba5be4fdd8ef09b33b4730d0f8db6102a3c1bc6c7b520f1670c9b54043a1babf5656bde0415d068b1531be820434030e5943755fd2df806d2c969ab8b8b7332fdd2597de09cc95105d930dd59767f01897480c47eb32f2adce2c6b9ff05539b2bbd718f05411de43d977222a1012d5555bcf651817dd5a3153fb3a8ca742933da391667ddb4610ba8db9eb0d3119b8a39c40e632d22a3dd7f07bf3961687a30e81dd847fc0449dc092282be496bad5c369331e4d29011161227b3f9b5",
+                            "payload_length": 208
+                        }
+                    }
+                }
+            },
+            {
+                "pre_shared_key": {
+                    "value": 41,
+                    "data": "002600204eb9c85d443fd4360fa4d70c56fc2cdf60200efd0af8e7adb5cbe7f92160bbb7cba479ca002120beb8c8cb2d7a889beae36e7f3a4459819ec90db377b267cbe0743f281a5cfeff"
+                }
+            }
+        ]
+    },
+    "http3": {
+        "h3_text": "1:65536;6:262144;7:100;51:1;4030904985:722650201",
+        "h3_text_hash": "b6d12147301f8cb437ea903abc211dc6",
+        "normalized_h3_text": "1:65536;6:262144;7:100;51:1;GREASE",
+        "normalized_h3_text_hash": "049704d97f9ba830e75590b30b66ad51",
+        "settings": {
+            "frame_type": "Settings",
+            "length": 27,
+            "settings": [
+                {
+                    "id": 1,
+                    "name": "QpackMaxTableCapacity",
+                    "value": 65536
+                },
+                {
+                    "id": 6,
+                    "name": "MaxFieldSectionSize",
+                    "value": 262144
+                },
+                {
+                    "id": 7,
+                    "name": "QpackBlockedStreams",
+                    "value": 100
+                },
+                {
+                    "id": 51,
+                    "name": "H3Datagram",
+                    "value": true
+                },
+                {
+                    "id": 4030904985,
+                    "name": "Grease",
+                    "value": 722650201
+                }
+            ]
+        },
+        "headers": {
+            "frame_type": "Headers",
+            "length": 360,
+            "headers": [
+                {
+                    "name": ":method",
+                    "value": "GET"
+                },
+                {
+                    "name": ":authority",
+                    "value": "pingly.us.kg"
+                },
+                {
+                    "name": ":scheme",
+                    "value": "https"
+                },
+                {
+                    "name": ":path",
+                    "value": "/api/all"
+                },
+                {
+                    "name": "pragma",
+                    "value": "no-cache"
+                },
+                {
+                    "name": "cache-control",
+                    "value": "no-cache"
+                },
+                {
+                    "name": "sec-ch-ua-platform",
+                    "value": "\"Windows\""
+                },
+                {
+                    "name": "user-agent",
+                    "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
+                },
+                {
+                    "name": "accept",
+                    "value": "application/json"
+                },
+                {
+                    "name": "sec-ch-ua",
+                    "value": "\"Not;A=Brand\";v=\"8\", \"Chromium\";v=\"150\", \"Google Chrome\";v=\"150\""
+                },
+                {
+                    "name": "dnt",
+                    "value": "1"
+                },
+                {
+                    "name": "sec-ch-ua-mobile",
+                    "value": "?0"
+                },
+                {
+                    "name": "sec-fetch-site",
+                    "value": "same-origin"
+                },
+                {
+                    "name": "sec-fetch-mode",
+                    "value": "cors"
+                },
+                {
+                    "name": "sec-fetch-dest",
+                    "value": "empty"
+                },
+                {
+                    "name": "accept-encoding",
+                    "value": "gzip, deflate, br, zstd"
+                },
+                {
+                    "name": "accept-language",
+                    "value": "en,zh-CN;q=0.9,zh;q=0.8"
+                },
+                {
+                    "name": "priority",
+                    "value": "u=1, i"
+                }
+            ]
+        }
+    }
+}

@@ -1,4 +1,7 @@
-use std::net::SocketAddr;
+use std::{
+    net::SocketAddr,
+    sync::{Arc, OnceLock},
+};
 
 use axum::{
     body::Body,
@@ -7,12 +10,14 @@ use axum::{
 use pingly::{
     h1::{Http1Head, RequestHead},
     h2::AkamaiFingerprint,
-    tls::TlsVersion,
+    h3::Http3Fingerprint,
+    tls::{ClientHelloHandshakeBuffer, ClientHelloParseError, TlsVersion},
 };
 use serde::{Serialize, Serializer};
 use tokio_rustls::rustls::ProtocolVersion;
 
 use super::inspector::{ClientHello, ClientHelloBuffer, Http1RequestCapture, Http2Frame};
+use crate::server::quic::inspect::{HeadersCapture, SettingsCapture};
 #[cfg(target_os = "linux")]
 use crate::tcp::CapturedPacket;
 
@@ -58,25 +63,71 @@ pub struct Http2TrackInfo {
     sent_frames: Http2Frame,
 }
 
-/// Collects TLS, HTTP/1, and HTTP/2 handshake info for tracking.
+/// HTTP/3 tracking information from the client's control and request streams.
+#[derive(Serialize)]
+pub struct Http3TrackInfo {
+    /// Fingerprint derived from the client SETTINGS frame.
+    #[serde(flatten)]
+    fingerprint: Http3Fingerprint,
+
+    /// Client SETTINGS frame captured from the HTTP/3 control stream.
+    #[serde(serialize_with = "serialize_settings_capture")]
+    settings: SettingsCapture,
+
+    /// First HEADERS frame captured from this request stream.
+    #[serde(serialize_with = "serialize_headers_capture")]
+    headers: HeadersCapture,
+}
+
+#[derive(Clone)]
+enum ClientHelloCapture {
+    /// ClientHello retained with its TLS record framing on a TCP connection.
+    Records(ClientHelloBuffer),
+
+    /// ClientHello retained directly from QUIC CRYPTO handshake bytes.
+    Handshake(Arc<OnceLock<ClientHelloHandshakeBuffer>>),
+}
+
+impl ClientHelloCapture {
+    fn parse(self) -> Option<Result<ClientHello, ClientHelloParseError>> {
+        match self {
+            Self::Records(buffer) => Some(buffer.parse()),
+            Self::Handshake(capture) => capture.get().map(ClientHelloHandshakeBuffer::parse),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct Http3RequestCapture {
+    /// SETTINGS shared by all requests on one HTTP/3 connection.
+    settings: SettingsCapture,
+
+    /// HEADERS belonging to the current HTTP/3 request stream.
+    headers: HeadersCapture,
+}
+
+/// Collects TLS, HTTP/1, HTTP/2, and HTTP/3 handshake info for tracking.
 #[derive(Clone, Default)]
 pub struct ConnectionTrack {
     /// The TLS protocol version that was negotiated for this connection, if any.
     tls_version_negotiated: Option<ProtocolVersion>,
 
     /// Raw TLS records retained until the ClientHello can be analyzed.
-    client_hello: Option<ClientHelloBuffer>,
+    client_hello: Option<ClientHelloCapture>,
 
     /// Raw HTTP/1 request head shared with the stream inspector for delayed parsing.
     http1_capture: Option<Http1RequestCapture>,
 
     /// HTTP/2 client frames retained in their received order.
     http2_frames: Option<Http2Frame>,
+
+    /// HTTP/3 control-stream SETTINGS and request-stream HEADERS captures.
+    http3_capture: Option<Http3RequestCapture>,
 }
 
 /// Tracking details collected for a single connection.
 ///
-/// Includes the TLS, HTTP/1, and HTTP/2 analysis selected for the response.
+/// Includes the TLS, HTTP/1, HTTP/2, and HTTP/3 analysis selected for the response.
 #[derive(Serialize)]
 pub struct TrackInfo {
     /// Project information included in every analysis response.
@@ -108,6 +159,10 @@ pub struct TrackInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     http2: Option<Http2TrackInfo>,
 
+    /// HTTP/3 and QUIC analysis requested for this response, when available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    http3: Option<Http3TrackInfo>,
+
     /// Captured TCP packets included by the Linux `/api/all` endpoint.
     #[cfg(target_os = "linux")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -122,6 +177,7 @@ pub enum Track {
     Tls,
     HTTP1,
     HTTP2,
+    HTTP3,
 }
 
 impl Track {
@@ -136,17 +192,20 @@ impl Track {
     const fn includes_http2(self) -> bool {
         matches!(self, Track::All | Track::HTTP2)
     }
+
+    const fn includes_http3(self) -> bool {
+        matches!(self, Track::All | Track::HTTP3)
+    }
 }
 
 struct ProtocolTrackInfo {
     tls: Option<TlsTrackInfo>,
-
     http1: Option<Http1TrackInfo>,
-
     http2: Option<Http2TrackInfo>,
+    http3: Option<Http3TrackInfo>,
 }
 
-// ==== impl Http1TrackInfo ====
+// ==== impl TlsTrackInfo ====
 
 impl TlsTrackInfo {
     /// Create a new [`TlsTrackInfo`] instance.
@@ -214,6 +273,50 @@ where
     vec.serialize(serializer)
 }
 
+// ==== impl Http3TrackInfo ====
+
+impl Http3TrackInfo {
+    /// Builds HTTP/3 analysis only after both client frames have been captured.
+    fn new(capture: Http3RequestCapture) -> Option<Self> {
+        let settings = capture.settings.get()?;
+        capture.headers.get()?;
+        let fingerprint = Http3Fingerprint::from_settings(&settings.settings);
+
+        Some(Self {
+            fingerprint,
+            settings: capture.settings,
+            headers: capture.headers,
+        })
+    }
+}
+
+fn serialize_settings_capture<S>(
+    capture: &SettingsCapture,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match capture.get() {
+        Some(frame) => frame.serialize(serializer),
+        None => Err(serde::ser::Error::custom(
+            "HTTP/3 SETTINGS capture is not complete",
+        )),
+    }
+}
+
+fn serialize_headers_capture<S>(capture: &HeadersCapture, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match capture.get() {
+        Some(frame) => frame.serialize(serializer),
+        None => Err(serde::ser::Error::custom(
+            "HTTP/3 HEADERS capture is not complete",
+        )),
+    }
+}
+
 // ==== impl ConnectionTrack ====
 
 impl ConnectionTrack {
@@ -223,22 +326,41 @@ impl ConnectionTrack {
         self.tls_version_negotiated = version;
     }
 
-    /// Set TLS client hello
+    /// Sets a ClientHello captured with TLS record framing.
     #[inline]
     pub fn set_client_hello(&mut self, client_hello: Option<ClientHelloBuffer>) {
-        self.client_hello = client_hello;
+        self.client_hello = client_hello.map(ClientHelloCapture::Records);
     }
 
-    /// Set the raw HTTP/1 request head shared with delayed analysis.
+    /// Sets a ClientHello captured from QUIC CRYPTO handshake bytes.
+    #[inline]
+    pub fn set_client_hello_handshake(
+        &mut self,
+        client_hello: Arc<OnceLock<ClientHelloHandshakeBuffer>>,
+    ) {
+        self.client_hello = Some(ClientHelloCapture::Handshake(client_hello));
+    }
+
+    /// Sets the raw HTTP/1 request head shared with delayed analysis.
     #[inline]
     pub fn set_http1_request_capture(&mut self, capture: Http1RequestCapture) {
         self.http1_capture = Some(capture);
     }
 
-    /// Set HTTP/2 frames
+    /// Sets captured HTTP/2 frames.
     #[inline]
     pub fn set_http2_frames(&mut self, frames: Http2Frame) {
         self.http2_frames = Some(frames);
+    }
+
+    /// Sets HTTP/3 control-stream SETTINGS and request-stream HEADERS captures.
+    #[inline]
+    pub(in crate::server) fn set_http3_capture(
+        &mut self,
+        settings: SettingsCapture,
+        headers: HeadersCapture,
+    ) {
+        self.http3_capture = Some(Http3RequestCapture { settings, headers });
     }
 }
 
@@ -248,16 +370,42 @@ fn protocol_track_info(track: Track, connection_track: ConnectionTrack) -> Proto
         client_hello,
         http1_capture,
         http2_frames,
+        http3_capture,
     } = connection_track;
 
-    let mut tls = if track.includes_tls() {
-        client_hello
-            .and_then(|client_hello| client_hello.parse().ok())
-            .map(TlsTrackInfo::new)
+    let mut client_hello = if track.includes_tls() {
+        client_hello.and_then(|capture| match capture.parse() {
+            Some(Ok(client_hello)) => Some(client_hello),
+            Some(Err(error)) => {
+                tracing::debug!(?error, "failed to parse captured ClientHello");
+                None
+            }
+            None => {
+                tracing::debug!("ClientHello capture was not complete before analysis");
+                None
+            }
+        })
     } else {
         None
     };
 
+    let http3 = if track.includes_http3() {
+        http3_capture.and_then(|capture| {
+            let info = Http3TrackInfo::new(capture);
+            if info.is_none() {
+                tracing::debug!("HTTP/3 SETTINGS or HEADERS capture was not complete");
+            }
+            info
+        })
+    } else {
+        None
+    };
+
+    let mut tls = track
+        .includes_tls()
+        .then(|| client_hello.take())
+        .flatten()
+        .map(TlsTrackInfo::new);
     if let Some(tls) = tls.as_mut() {
         tls.set_tls_version_negotiated(tls_version_negotiated);
     }
@@ -286,7 +434,12 @@ fn protocol_track_info(track: Track, connection_track: ConnectionTrack) -> Proto
         None
     };
 
-    ProtocolTrackInfo { tls, http1, http2 }
+    ProtocolTrackInfo {
+        tls,
+        http1,
+        http2,
+        http3,
+    }
 }
 
 // ==== impl TrackInfo ====
@@ -307,8 +460,12 @@ impl TrackInfo {
 
         #[cfg(not(target_os = "linux"))]
         {
-            let ProtocolTrackInfo { tls, http1, http2 } =
-                protocol_track_info(track, connection_track);
+            let ProtocolTrackInfo {
+                tls,
+                http1,
+                http2,
+                http3,
+            } = protocol_track_info(track, connection_track);
 
             TrackInfo {
                 donate: Self::DONATE_MESSAGE,
@@ -319,6 +476,7 @@ impl TrackInfo {
                 tls,
                 http1,
                 http2,
+                http3,
             }
         }
     }
@@ -333,7 +491,12 @@ impl TrackInfo {
         connection_track: ConnectionTrack,
         tcp_packets: Vec<CapturedPacket>,
     ) -> TrackInfo {
-        let ProtocolTrackInfo { tls, http1, http2 } = protocol_track_info(track, connection_track);
+        let ProtocolTrackInfo {
+            tls,
+            http1,
+            http2,
+            http3,
+        } = protocol_track_info(track, connection_track);
 
         TrackInfo {
             donate: Self::DONATE_MESSAGE,
@@ -344,6 +507,7 @@ impl TrackInfo {
             tls,
             http1,
             http2,
+            http3,
             #[cfg(target_os = "linux")]
             tcp: if matches!(track, Track::All) {
                 tcp_packets
@@ -378,10 +542,30 @@ where
 mod tests {
     use std::sync::{Arc, OnceLock};
 
-    use pingly::h1::Http1HeadBuffer;
+    use pingly::{
+        h1::Http1HeadBuffer,
+        h3::{FrameType, HeaderField, HeadersFrame, Setting, SettingsFrame},
+        tls::ClientHelloHandshakeBuffer,
+    };
     use serde_json::json;
 
     use super::{protocol_track_info, ConnectionTrack, Track};
+    use crate::server::quic::inspect::SettingsCapture;
+
+    fn quic_client_hello() -> ClientHelloHandshakeBuffer {
+        let transport_parameters = [0x00, 0x39, 0x00, 0x03, 0x04, 0x01, 0x20];
+        let mut body = vec![0x03, 0x03];
+        body.extend_from_slice(&[0; 32]);
+        body.extend_from_slice(&[0, 0, 2, 0x13, 0x01, 1, 0]);
+        let extensions_len = u16::try_from(transport_parameters.len()).unwrap();
+        body.extend_from_slice(&extensions_len.to_be_bytes());
+        body.extend_from_slice(&transport_parameters);
+
+        let length = u32::try_from(body.len()).unwrap().to_be_bytes();
+        let mut handshake = vec![1, length[1], length[2], length[3]];
+        handshake.extend_from_slice(&body);
+        ClientHelloHandshakeBuffer::from_bytes(handshake)
+    }
 
     #[test]
     fn http1_capture_is_parsed_when_analysis_is_built() {
@@ -403,16 +587,78 @@ mod tests {
     }
 
     #[test]
+    fn http3_capture_is_fingerprinted_when_analysis_is_built() {
+        let settings = SettingsCapture::new();
+        settings.set(SettingsFrame {
+            frame_type: FrameType::Settings,
+            length: 5,
+            settings: vec![Setting::try_from_wire(1, 65_536).unwrap()],
+        });
+
+        let headers = Arc::new(OnceLock::new());
+        headers
+            .set(HeadersFrame {
+                frame_type: FrameType::Headers,
+                length: 16,
+                headers: vec![
+                    HeaderField {
+                        name: b":method".as_slice().into(),
+                        value: b"GET".as_slice().into(),
+                    },
+                    HeaderField {
+                        name: b":path".as_slice().into(),
+                        value: b"/api/http3".as_slice().into(),
+                    },
+                ],
+            })
+            .unwrap();
+
+        let client_hello = Arc::new(OnceLock::new());
+        client_hello.set(quic_client_hello()).unwrap();
+
+        let mut connection = ConnectionTrack::default();
+        connection.set_client_hello_handshake(client_hello);
+        connection.set_http3_capture(settings, headers);
+        let analysis = protocol_track_info(Track::All, connection);
+        let tls = serde_json::to_value(analysis.tls.unwrap()).unwrap();
+        let http3 = analysis.http3.unwrap();
+        let value = serde_json::to_value(http3).unwrap();
+
+        assert_eq!(value["h3_text"], "1:65536");
+        assert_eq!(value["normalized_h3_text"], "1:65536");
+        assert_eq!(
+            value["settings"]["settings"][0]["name"],
+            "QpackMaxTableCapacity"
+        );
+        assert_eq!(value["headers"]["headers"][1]["name"], ":path");
+        assert_eq!(
+            tls["extensions"][0]["quic_transport_parameters"]["data"],
+            json!([{"id": 4, "name": "initial_max_data", "value": 32}])
+        );
+        assert!(tls["ja4"].as_str().is_some_and(|ja4| ja4.starts_with('q')));
+        assert!(tls["ja4_r"]
+            .as_str()
+            .is_some_and(|ja4_r| ja4_r.starts_with('q')));
+        assert!(value.get("fingerprint").is_none());
+        assert!(value.get("normalized_fingerprint").is_none());
+        assert!(value.get("quic_transport_parameters").is_none());
+    }
+
+    #[test]
     fn track_only_includes_requested_protocol_analysis() {
         assert!(Track::All.includes_tls());
         assert!(Track::All.includes_http1());
         assert!(Track::All.includes_http2());
+        assert!(Track::All.includes_http3());
         assert!(Track::Tls.includes_tls());
         assert!(Track::HTTP1.includes_http1());
         assert!(Track::HTTP2.includes_http2());
+        assert!(Track::HTTP3.includes_http3());
         assert!(!Track::HTTP1.includes_tls());
         assert!(!Track::HTTP2.includes_tls());
+        assert!(!Track::HTTP3.includes_tls());
         assert!(!Track::Tls.includes_http1());
         assert!(!Track::Tls.includes_http2());
+        assert!(!Track::Tls.includes_http3());
     }
 }

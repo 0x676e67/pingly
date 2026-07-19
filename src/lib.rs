@@ -1,7 +1,8 @@
 //! Protocol data models and fingerprint parsers used by the pingly server.
 //!
-//! The crate can parse TLS ClientHello captures, HTTP/1 message heads, and HTTP/2 byte streams.
-//! Decoded structures can be serialized to JSON and restored without losing protocol data.
+//! The crate can parse TLS ClientHello captures, HTTP/1 message heads, HTTP/2 byte streams,
+//! decrypted HTTP/3 streams, and QUIC transport parameters. Decoded structures can be serialized
+//! to JSON and restored without losing protocol data.
 //!
 //! # TLS ClientHello
 //!
@@ -71,6 +72,16 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! # HTTP/3 and QUIC
+//!
+//! [`h3::Http3Parser`] accepts decrypted bytes from one HTTP/3 request stream or client-initiated
+//! unidirectional stream. It does not decrypt QUIC packets, and its stateless QPACK decoder rejects
+//! field sections that reference the dynamic table. [`quic::parse_transport_parameters`] decodes
+//! the QUIC parameters carried in a TLS ClientHello. See
+//! [RFC 9114](https://www.rfc-editor.org/rfc/rfc9114),
+//! [RFC 9204](https://www.rfc-editor.org/rfc/rfc9204), and
+//! [RFC 9001, Section 8.2](https://www.rfc-editor.org/rfc/rfc9001#section-8.2).
 
 #![deny(unused)]
 #![deny(unsafe_code)]
@@ -79,4 +90,6 @@
 
 pub mod h1;
 pub mod h2;
+pub mod h3;
+pub mod quic;
 pub mod tls;

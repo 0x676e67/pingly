@@ -1,4 +1,3 @@
-mod alloc;
 mod args;
 mod error;
 mod server;
@@ -8,19 +7,21 @@ mod systemd;
 #[cfg(target_os = "linux")]
 mod tcp;
 
-use std::str::FromStr;
+use std::{io, str::FromStr};
 
 #[cfg(target_os = "linux")]
 use args::SystemdCommand;
 use args::{AppArgs, Command, ServerArgs, TlsSource};
+use axum::http::{header, HeaderValue};
 use clap::Parser;
 use error::Result;
 use pingora_runtime::current_handle;
-use server::{routes, runtime::Runtime, AcmeRuntime, HttpServer, TrackAcceptor};
+use server::{routes, runtime::Runtime, AcmeRuntime, HttpServer, RustlsAcceptor, TrackAcceptor};
 use tower::{limit::ConcurrencyLimitLayer, ServiceBuilder};
 use tower_http::{
     compression::CompressionLayer,
     cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer},
+    set_header::SetResponseHeaderLayer,
     trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnResponse, TraceLayer},
 };
 use tracing::Level;
@@ -28,6 +29,26 @@ use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 #[cfg(target_os = "linux")]
 use crate::tcp::TcpCaptureTrack;
+
+#[cfg(feature = "jemalloc")]
+#[global_allocator]
+static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
+
+#[cfg(feature = "tcmalloc")]
+#[global_allocator]
+static ALLOC: tcmalloc::TCMalloc = tcmalloc::TCMalloc;
+
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+#[cfg(feature = "snmalloc")]
+#[global_allocator]
+static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
+
+#[cfg(feature = "rpmalloc")]
+#[global_allocator]
+static ALLOC: rpmalloc::RpMalloc = rpmalloc::RpMalloc;
 
 const APP_NAME: &str = env!("CARGO_PKG_NAME");
 
@@ -76,6 +97,11 @@ pub(crate) fn run(mut args: ServerArgs) -> Result<()> {
 
     let threads = std::thread::available_parallelism()?;
 
+    // HTTPS responses advertise HTTP/3 on the matching UDP port.
+    // https://www.rfc-editor.org/rfc/rfc9114#section-3.1.1
+    let alt_svc = HeaderValue::from_str(&format!("h3=\":{}\"; ma=86400", args.bind.port()))
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+
     let layer = ServiceBuilder::new()
         .layer(
             TraceLayer::new_for_http()
@@ -90,6 +116,10 @@ pub(crate) fn run(mut args: ServerArgs) -> Result<()> {
                 .allow_methods(AllowMethods::mirror_request())
                 .allow_origin(AllowOrigin::mirror_request()),
         )
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::ALT_SVC,
+            alt_svc,
+        ))
         .layer(CompressionLayer::new())
         .layer(ConcurrencyLimitLayer::new(args.concurrent));
 
@@ -126,34 +156,6 @@ pub(crate) fn run(mut args: ServerArgs) -> Result<()> {
             });
         }
 
-        let server =
-            HttpServer::new(args.bind, router.layer(layer), args.keep_alive_timeout).await?;
-
-        let server = match tls_source {
-            TlsSource::SelfSigned => server.with_rustls(None)?,
-            TlsSource::Files { cert, key } => {
-                server.with_rustls(Some((cert.as_path(), key.as_path())))?
-            }
-            TlsSource::Acme(options) => {
-                let acme = AcmeRuntime::new(options)?;
-                let (acceptor, http01, state) = acme.into_parts(handle.clone());
-
-                if let Some(challenge) = http01 {
-                    let bind = challenge.bind();
-                    let challenge_server =
-                        HttpServer::new(bind, challenge.into_router(), args.keep_alive_timeout)
-                            .await?;
-
-                    tracing::info!("starting ACME HTTP-01 challenge listener on {bind}");
-                    current_handle().spawn(challenge_server.serve(handle.clone()));
-                }
-
-                current_handle().spawn(state);
-                server.map_acceptor(|_| acceptor)
-            }
-        }
-        .map_acceptor(TrackAcceptor::new);
-
         tracing::info!(
             threads = threads.get(),
             concurrent_limit = args.concurrent,
@@ -162,8 +164,43 @@ pub(crate) fn run(mut args: ServerArgs) -> Result<()> {
             args.bind,
         );
 
-        server.serve(handle).await;
-        Ok(())
+        let acceptor = match tls_source {
+            TlsSource::SelfSigned => RustlsAcceptor::self_signed()?,
+            TlsSource::Files { cert, key } => {
+                RustlsAcceptor::from_pem_files(cert.as_path(), key.as_path())?
+            }
+            TlsSource::Acme(options) => {
+                let acme = AcmeRuntime::new(options)?;
+                let (acceptor, http01, state) = acme.into_parts(handle.clone());
+
+                if let Some(challenge) = http01 {
+                    let bind = challenge.bind();
+                    let challenge_server = HttpServer::new_plain(
+                        bind,
+                        challenge.into_router(),
+                        args.keep_alive_timeout,
+                    )
+                    .await?;
+
+                    tracing::info!("starting ACME HTTP-01 challenge listener on {bind}");
+                    current_handle().spawn(challenge_server.serve(handle.clone()));
+                }
+
+                current_handle().spawn(state);
+                acceptor
+            }
+        };
+
+        HttpServer::new(
+            args.bind,
+            args.keep_alive_timeout,
+            acceptor,
+            router.layer(layer),
+        )
+        .await?
+        .map_acceptor(TrackAcceptor::new)
+        .serve(handle)
+        .await
     })
 }
 

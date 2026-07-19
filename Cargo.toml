@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.96"
 license = "Apache-2.0"
-description = "TLS and HTTP/1/2 fingerprint analysis server and Rust library"
-keywords = ["http", "server", "web", "ja3", "ja4"]
+description = "TLS and HTTP/1/2/3 fingerprint analysis server and Rust library"
+keywords = ["http", "http3", "quic", "ja3", "ja4"]
 authors = ["0x676e67 <gngppz@gmail.com>"]
 repository = "https://github.com/0x676e67/pingly"
 documentation = "https://docs.rs/pingly"
@@ -16,6 +16,7 @@ path = "src/app/main.rs"
 required-features = ["server"]
 
 [features]
+# Build the server binary and its runtime integrations.
 server = [
     "dep:axum",
     "dep:axum-extra",
@@ -23,25 +24,33 @@ server = [
     "dep:clap",
     "dep:dirs",
     "dep:futures-util",
+    "dep:h3",
+    "dep:h3-quinn",
+    "dep:http-body-util",
     "dep:hyper",
     "dep:hyper-util",
+    "dep:pcap",
     "dep:pin-project-lite",
     "dep:pingora-runtime",
+    "dep:pktparse",
+    "dep:pnet",
+    "dep:quinn",
+    "dep:quinn-proto",
     "dep:rcgen",
     "dep:rustls-pemfile",
     "dep:rustls-acme",
+    "dep:sdjournal",
+    "dep:serde_json",
+    "dep:socket2",
     "dep:tokio",
     "dep:tokio-rustls",
     "dep:tower",
     "dep:tower-http",
     "dep:tracing-subscriber",
-    "dep:pcap",
-    "dep:pktparse",
-    "dep:pnet",
-    "dep:serde_json",
-    "dep:sdjournal",
     "dep:unitbus",
 ]
+
+# Select an optional global allocator for the server binary.
 jemalloc = ["jemallocator"]
 tcmalloc = ["tcmalloc/bundled"]
 snmalloc = ["snmalloc-rs"]
@@ -49,11 +58,30 @@ rpmalloc = ["dep:rpmalloc"]
 mimalloc = ["dep:mimalloc"]
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1.0", optional = true }
-thiserror = "2"
+bytes = "1.9.0"
+hex = "0.4.3"
+httlib-hpack = "0.1.3"
+httparse = "1.8.0"
+md5 = "0.8.0"
+nom = "8.0.0"
+qpack = { version = "0.1.0", default-features = false }
+serde = { version = "1.0.229", features = ["derive"] }
+sha2 = { version = "0.11.0", default-features = false }
+thiserror = "2.0.19"
+tls-parser = "0.12.0"
+tracing = { version = "0.1.40" }
+
+# Optional dependencies.
+
+## Application and runtime.
+boxcar = { version = "0.2.8", optional = true }
 clap = { version = "4", features = ["derive", "env"], optional = true }
 dirs = { version = "6.0", optional = true }
+futures-util = { version = "0.3.33", optional = true }
+pin-project-lite = { version = "0.2.9", optional = true }
+pingora-runtime = { version = "0.8.1", optional = true }
+serde_json = { version = "1.0", optional = true }
+socket2 = { version = "0.6", optional = true }
 tokio = { version = "1", optional = true, features = [
     "io-util",
     "macros",
@@ -63,8 +91,14 @@ tokio = { version = "1", optional = true, features = [
     "sync",
     "time",
 ] }
-tracing = { version = "0.1.40" }
 tracing-subscriber = { version = "0.3.0", features = ["env-filter"], optional = true }
+
+## HTTP routing and connection serving.
+axum = { version = "0.8.1", features = ["http2"], optional = true }
+axum-extra = { version = "0.12.1", default-features = false, optional = true, features = [
+    "erased-json",
+] }
+http-body-util = { version = "0.1.4", optional = true }
 hyper = { version = "1.10.1", features = ["http1", "http2", "server"], optional = true }
 hyper-util = { version = "0.1.20", default-features = false, optional = true, features = [
     "http1",
@@ -73,56 +107,52 @@ hyper-util = { version = "0.1.20", default-features = false, optional = true, fe
     "service",
     "tokio",
 ] }
-pingora-runtime = { version = "0.8.1", optional = true }
-axum = { version = "0.8.1", features = ["http2"], optional = true }
-axum-extra = { version = "0.12.1", default-features = false, optional = true, features = [
-    "erased-json",
+tower = { version = "0.5.2", default-features = false, optional = true, features = [
+    "limit",
+    "util",
 ] }
 tower-http = { version = "0.7.0", default-features = false, optional = true, features = [
     "trace",
     "cors",
     "compression-br",
     "compression-gzip",
+    "set-header",
 ] }
-tower = { version = "0.5.2", default-features = false, optional = true, features = [
-    "limit",
-    "util",
-] }
+
+## TLS certificates and ACME.
 rcgen = { version = "0.13", default-features = false, features = [
     "aws_lc_rs",
     "pem",
 ], optional = true }
-bytes = "1.9.0"
-hex = "0.4.3"
-md5 = "0.8.0"
-nom = "8.0.0"
-sha2 = { version = "0.11.0", default-features = false }
-
-tokio-rustls = { version = "0.26", optional = true }
-rustls-pemfile = { version = "2.0", optional = true }
 rustls-acme = { version = "0.15.3", default-features = false, features = [
     "aws-lc-rs",
     "tls12",
     "tower",
     "webpki-roots",
 ], optional = true }
-futures-util = { version = "0.3.31", optional = true }
-httlib-hpack = "0.1.3"
-pin-project-lite = { version = "0.2.9", optional = true }
-tls-parser = "0.12.0"
-httparse = "1.8.0"
-boxcar = { version = "0.2.8", optional = true }
+rustls-pemfile = { version = "2.0", optional = true }
+tokio-rustls = { version = "0.26", optional = true }
 
+## HTTP/3 and QUIC serving.
+h3 = { version = "0.0.8", optional = true }
+h3-quinn = { version = "0.0.10", optional = true, features = ["tracing"] }
+quinn = { version = "0.11.11", default-features = false, optional = true, features = ["runtime-tokio", "rustls-aws-lc-rs"] }
+quinn-proto = { version = "0.11.16", default-features = false, optional = true, features = ["rustls-aws-lc-rs"] }
+
+## Global allocators.
 tcmalloc = { version = "0.3.0", optional = true }
 snmalloc-rs = { version = "0.7.4", optional = true }
 rpmalloc = { version = "0.2.2", optional = true }
-jemallocator = { package = "tikv-jemallocator", version = "0.7", optional = true }
+jemallocator = { package = "tikv-jemallocator", version = "0.7.0", optional = true }
 mimalloc = { version = "0.1.39", default-features = false, optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# Optional packet capture.
 pcap = { version = "2.0", optional = true }
-pnet = { version = "0.35", optional = true }
 pktparse = { version = "0.7.1", features = ["serde"], optional = true }
+pnet = { version = "0.35", optional = true }
+
+# Optional systemd integration.
 sdjournal = { version = "=0.1.21", optional = true }
 unitbus = { version = "=0.1.7", default-features = false, features = [
     "blocking",

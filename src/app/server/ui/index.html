@@ -399,6 +399,18 @@
                                     type="button"
                                     role="tab"
                                     aria-selected="false"
+                                    aria-controls="panel-h3"
+                                    data-view="h3"
+                                >
+                                    <i class="icon" data-lucide="radio-tower" aria-hidden="true"></i>
+                                    <span>HTTP/3</span>
+                                    <span class="badge bg-secondary-lt text-secondary ms-auto" id="h3-count">0</span>
+                                </button>
+                                <button
+                                    class="list-group-item list-group-item-action d-flex align-items-center gap-2 flex-shrink-0 rounded-2 text-start"
+                                    type="button"
+                                    role="tab"
+                                    aria-selected="false"
                                     aria-controls="panel-tcp"
                                     data-view="tcp"
                                 >
@@ -531,7 +543,7 @@
                                                             <i class="icon" data-lucide="network"></i>
                                                         </span>
                                                         <div class="flex-fill overflow-hidden">
-                                                            <div class="text-secondary small fw-medium mb-1">HTTP/2 frames</div>
+                                                            <div class="text-secondary small fw-medium mb-1">Protocol frames</div>
                                                             <strong class="font-monospace text-break" id="summary-frames">0</strong>
                                                         </div>
                                                     </div>
@@ -551,6 +563,9 @@
                                     </section>
                                     <section id="panel-h2" role="tabpanel" data-panel="h2" hidden>
                                         <div id="h2-content"></div>
+                                    </section>
+                                    <section id="panel-h3" role="tabpanel" data-panel="h3" hidden>
+                                        <div id="h3-content"></div>
                                     </section>
                                     <section id="panel-tcp" role="tabpanel" data-panel="tcp" hidden>
                                         <div id="tcp-content"></div>
@@ -601,7 +616,15 @@
                                         </div>
                                     </section>
 
-                                    <p class="alert alert-secondary mt-4 mb-0" id="support-note"></p>
+                                    <footer class="py-4 text-center text-secondary small">
+                                        Powered by
+                                        <a
+                                            class="fw-semibold"
+                                            href="https://github.com/0x676e67/pingly"
+                                            target="_blank"
+                                            rel="noreferrer"
+                                        >Pingly</a>
+                                    </footer>
                                 </div>
                             </div>
                         </div>

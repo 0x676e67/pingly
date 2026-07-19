@@ -6,6 +6,7 @@ const VIEW_META = {
     tls: ["Client hello", "TLS analysis"],
     http: ["Header order", "HTTP request"],
     h2: ["Frame sequence", "HTTP/2 analysis"],
+    h3: ["Transport parameters", "HTTP/3 analysis"],
     tcp: ["Packet capture", "TCP analysis"],
     json: ["Serialized response", "Raw JSON"],
 };
@@ -481,9 +482,9 @@ function loadAnalysis(data) {
     renderTls(data.tls);
     renderHttp(data);
     renderHttp2(data.http2);
+    renderHttp3(data.http3, data.tls);
     renderTcp(data.tcp);
     showJsonResponse(DEFAULT_JSON_ROUTE, data);
-    renderSupport(data.donate);
 
     const now = new Intl.DateTimeFormat(undefined, {
         dateStyle: "medium",
@@ -617,6 +618,7 @@ async function selectJsonRoute(path) {
 
 function renderSummary(data) {
     const frames = getFrames(data.http2);
+    const http3Frames = getHttp3FrameCount(data.http3);
 
     setText("summary-address", valueOr(data.address, "Unavailable"));
     setText(
@@ -629,7 +631,7 @@ function renderSummary(data) {
             ? data.tls.tls_version_negotiated
             : "Unavailable"
     );
-    setText("summary-frames", String(frames.length));
+    setText("summary-frames", String(frames.length + http3Frames));
 }
 
 function renderNavigationCounts(data) {
@@ -638,11 +640,13 @@ function renderNavigationCounts(data) {
         ? data.tls.cipher_suites
         : [];
     const frames = getFrames(data.http2);
+    const http3Settings = getHttp3Settings(data.http3);
     const packets = Array.isArray(data.tcp) ? data.tcp : [];
 
     setText("tls-count", String(ciphers.length));
     setText("http-count", String(headers.length));
     setText("h2-count", String(frames.length));
+    setText("h3-count", String(http3Settings.length));
     setText("tcp-count", String(packets.length));
 }
 
@@ -676,6 +680,7 @@ function renderOverview(data) {
     const root = document.getElementById("overview-content");
     const tls = isObject(data.tls) ? data.tls : {};
     const http2 = isObject(data.http2) ? data.http2 : {};
+    const http3 = isObject(data.http3) ? data.http3 : {};
 
     const fingerprints = createFingerprintSection("Client identity", [
         fingerprintItem("JA4", "blue", tls.ja4, tls.ja4_r),
@@ -685,6 +690,12 @@ function renderOverview(data) {
             "orange",
             http2.akamai_fingerprint_hash,
             http2.akamai_fingerprint
+        ),
+        fingerprintItem(
+            "HTTP/3",
+            "purple",
+            http3.h3_text_hash,
+            http3.h3_text
         ),
     ]);
 
@@ -754,7 +765,9 @@ function createFingerprintSection(title, items) {
     const grid = create("div", "row g-3");
     let columnClass = "col-12 col-xl-6";
 
-    if (items.length >= 3) {
+    if (items.length >= 4) {
+        columnClass = "col-12 col-md-6 col-xl-3";
+    } else if (items.length === 3) {
         columnClass = "col-12 col-md-6 col-xl-4";
     } else if (items.length === 2) {
         columnClass = "col-12 col-md-6";
@@ -773,7 +786,7 @@ function createFingerprintSection(title, items) {
 function createFingerprintCard(item) {
     const primary = item.primary;
     const source = item.source;
-    const tone = ["blue", "green", "orange"].includes(item.tone)
+    const tone = ["blue", "green", "orange", "purple"].includes(item.tone)
         ? item.tone
         : "secondary";
     const card = create("article", "card h-100");
@@ -1070,6 +1083,10 @@ function getHeaderSource(data) {
         return "HTTP/1";
     }
 
+    if (getHttp3Headers(data.http3).length > 0) {
+        return "HTTP/3";
+    }
+
     if (getFrames(data.http2).some(function (frame) {
         return frame.frame_type === "Headers" && Array.isArray(frame.headers);
     })) {
@@ -1086,6 +1103,11 @@ function getRequestHeaders(data) {
 
     if (isObject(data.http1) && Array.isArray(data.http1.headers)) {
         return normalizeHeaders(data.http1.headers);
+    }
+
+    const http3Headers = getHttp3Headers(data.http3);
+    if (http3Headers.length > 0) {
+        return normalizeHeaders(http3Headers);
     }
 
     const frames = getFrames(data.http2);
@@ -1182,6 +1204,129 @@ function renderHttp2(http2) {
         renderChromiumResourcePrioritySection(),
         frameSection
     );
+}
+
+function renderHttp3(http3, tls) {
+    const root = document.getElementById("h3-content");
+    if (!isObject(http3)) {
+        root.replaceChildren(createEmptyState("HTTP/3 data is unavailable", "radio-tower"));
+        return;
+    }
+
+    const settings = getHttp3Settings(http3);
+    const headers = getHttp3Headers(http3);
+    const transportParameters = getHttp3TransportParameters(tls);
+    const fingerprint = createFingerprintSection("HTTP/3 fingerprint", [
+        fingerprintItem(
+            "HTTP/3",
+            "purple",
+            http3.h3_text_hash,
+            http3.h3_text
+        ),
+        fingerprintItem(
+            "HTTP/3 normalized",
+            "blue",
+            http3.normalized_h3_text_hash,
+            http3.normalized_h3_text
+        ),
+    ]);
+
+    const settingsSection = createSection(
+        "Control stream",
+        "SETTINGS",
+        http3FrameMeta(http3.settings, settings.length)
+    );
+    if (settings.length === 0) {
+        settingsSection.append(
+            createEmptyState("No HTTP/3 settings were captured", "sliders-horizontal")
+        );
+    } else {
+        settingsSection.append(createValueNode(settings));
+    }
+
+    const headersSection = createSection(
+        "Request stream",
+        "QPACK headers",
+        http3FrameMeta(http3.headers, headers.length)
+    );
+    if (headers.length === 0) {
+        headersSection.append(
+            createEmptyState("No HTTP/3 headers were captured", "rows-3")
+        );
+    } else {
+        headersSection.append(renderHeaderTable(normalizeHeaders(headers)));
+    }
+
+    const transportSection = createSection(
+        "QUIC handshake",
+        "Transport parameters",
+        transportParameters.length + " entries"
+    );
+    if (transportParameters.length === 0) {
+        transportSection.append(
+            createEmptyState("No QUIC transport parameters were captured", "radio-tower")
+        );
+    } else {
+        transportSection.append(createValueNode(transportParameters));
+    }
+
+    root.replaceChildren(
+        fingerprint,
+        settingsSection,
+        headersSection,
+        transportSection
+    );
+}
+
+function getHttp3Settings(http3) {
+    return isObject(http3)
+        && isObject(http3.settings)
+        && Array.isArray(http3.settings.settings)
+        ? http3.settings.settings
+        : [];
+}
+
+function getHttp3Headers(http3) {
+    return isObject(http3)
+        && isObject(http3.headers)
+        && Array.isArray(http3.headers.headers)
+        ? http3.headers.headers
+        : [];
+}
+
+function getHttp3TransportParameters(tls) {
+    if (!isObject(tls) || !Array.isArray(tls.extensions)) {
+        return [];
+    }
+
+    for (const extension of tls.extensions) {
+        if (!isObject(extension)) {
+            continue;
+        }
+
+        const payload = extension.quic_transport_parameters;
+        if (isObject(payload) && Array.isArray(payload.data)) {
+            return payload.data;
+        }
+    }
+
+    return [];
+}
+
+function getHttp3FrameCount(http3) {
+    if (!isObject(http3)) {
+        return 0;
+    }
+
+    return Number(isObject(http3.settings)) + Number(isObject(http3.headers));
+}
+
+function http3FrameMeta(frame, entryCount) {
+    const parts = [entryCount + " entries"];
+    if (isObject(frame) && Number.isInteger(frame.length)) {
+        parts.push(frame.length + " bytes");
+    }
+    return parts.join(" / ");
 }
 
 function renderPriorityProbeSection() {
@@ -1904,44 +2049,6 @@ function isHeaderValue(value) {
         Object.prototype.hasOwnProperty.call(value, "value");
 }
 
-function renderSupport(message) {
-    const root = document.getElementById("support-note");
-    root.replaceChildren();
-
-    if (!message) {
-        root.hidden = true;
-        return;
-    }
-
-    root.hidden = false;
-    const text = String(message);
-    const match = text.match(/https?:\/\/[^\s]+/);
-    if (!match || match.index === undefined) {
-        root.textContent = text;
-        return;
-    }
-
-    const before = text.slice(0, match.index);
-    const after = text.slice(match.index + match[0].length);
-    root.append(document.createTextNode(before));
-
-    try {
-        const url = new URL(match[0]);
-        if (url.protocol !== "http:" && url.protocol !== "https:") {
-            root.textContent = text;
-            return;
-        }
-
-        const link = create("a", "", url.host);
-        link.href = url.href;
-        link.target = "_blank";
-        link.rel = "noreferrer";
-        root.append(link, document.createTextNode(after));
-    } catch (_) {
-        root.textContent = text;
-    }
-}
-
 function createSection(eyebrow, title, meta) {
     const section = create("section", "mb-5");
     const heading = create(
@@ -2214,12 +2321,20 @@ function formatKey(value) {
 }
 
 function formatHex(value) {
-    const numeric = Number(value);
-    if (!Number.isFinite(numeric) || numeric < 0) {
+    let numeric;
+
+    if (typeof value === "number") {
+        if (!Number.isSafeInteger(value) || value < 0) {
+            return "-";
+        }
+        numeric = BigInt(value);
+    } else if (typeof value === "string" && /^\d+$/.test(value)) {
+        numeric = BigInt(value);
+    } else {
         return "-";
     }
 
-    return "0x" + Math.trunc(numeric).toString(16).padStart(4, "0");
+    return "0x" + numeric.toString(16).padStart(4, "0");
 }
 
 function padIndex(value) {

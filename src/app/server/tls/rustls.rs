@@ -1,6 +1,6 @@
 //! rustls support for HTTPS connections.
 
-use std::{sync::Arc, time::Duration};
+use std::{path::Path, sync::Arc, time::Duration};
 
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_rustls::{rustls::ServerConfig, server::TlsStream};
@@ -31,6 +31,18 @@ enum RustlsMode {
 }
 
 impl RustlsAcceptor {
+    /// Creates an acceptor with Pingly's reusable self-signed certificate.
+    pub(crate) fn self_signed() -> crate::Result<Self> {
+        Ok(Self::new(crate::server::certificate::config_self_signed()?))
+    }
+
+    /// Creates an acceptor from a PEM certificate chain and private key.
+    pub(crate) fn from_pem_files(cert: &Path, key: &Path) -> crate::Result<Self> {
+        Ok(Self::new(
+            crate::server::certificate::config_from_pem_chain_file(cert, key)?,
+        ))
+    }
+
     /// Creates an acceptor with one fixed rustls configuration.
     pub(in crate::server) fn new(config: RustlsConfig) -> Self {
         Self {
@@ -50,6 +62,14 @@ impl RustlsAcceptor {
                 challenge_config,
             },
             handshake_timeout: TLS_HANDSHAKE_TIMEOUT,
+        }
+    }
+
+    /// Returns the certificate configuration used for regular HTTPS connections.
+    pub(in crate::server) fn default_config(&self) -> Arc<ServerConfig> {
+        match &self.mode {
+            RustlsMode::Fixed(config) => config.clone(),
+            RustlsMode::Acme { default_config, .. } => default_config.clone(),
         }
     }
 }

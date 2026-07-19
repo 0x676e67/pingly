@@ -10,8 +10,8 @@
 
 ## Features
 
-- JA3, JA4, and Akamai HTTP/2 fingerprints
-- HTTP/1 headers and HTTP/2 frames
+- JA3, JA4, Akamai HTTP/2, and HTTP/3 fingerprints
+- HTTP/1 headers, HTTP/2 frames, and HTTP/3/QUIC wire details
 - Incremental parsing and serialization
 - Automatic ACME certificates with TLS-ALPN-01 or HTTP-01
 
@@ -19,7 +19,7 @@
 
 ```bash
 $ pingly -h
-TLS and HTTP/1/2 fingerprint analysis server
+TLS and HTTP/1/2/3 fingerprint analysis server
 
 Usage: pingly
        pingly <COMMAND>
@@ -97,7 +97,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-See [examples](./examples) for incremental parsing, HTTP/2 fingerprints, and saved JSON.
+See [examples](./examples) for incremental parsing, protocol fingerprints, and saved JSON.
 
 ## License
 

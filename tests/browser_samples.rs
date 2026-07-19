@@ -1,5 +1,6 @@
 use pingly::{
     h2::{frame::StreamDependency, AkamaiFingerprint, Frame},
+    h3::{HeadersFrame, Http3Fingerprint, SettingsFrame},
     tls::ClientHello,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -10,6 +11,12 @@ struct BrowserSample {
     response: &'static [u8],
 
     priority: StreamDependency,
+}
+
+struct Http3BrowserSample {
+    name: &'static str,
+
+    response: &'static [u8],
 }
 
 const BROWSER_SAMPLES: &[BrowserSample] = &[
@@ -33,11 +40,29 @@ const BROWSER_SAMPLES: &[BrowserSample] = &[
     },
 ];
 
+const HTTP3_BROWSER_SAMPLES: &[Http3BrowserSample] = &[
+    Http3BrowserSample {
+        name: "Chrome",
+        response: include_bytes!("data/h3_chrome.json"),
+    },
+    Http3BrowserSample {
+        name: "Firefox",
+        response: include_bytes!("data/h3_firefox.json"),
+    },
+];
+
 #[derive(Deserialize)]
 struct ApiResponse {
     tls: TlsResponse,
 
     http2: Http2Response,
+}
+
+#[derive(Deserialize)]
+struct Http3ApiResponse {
+    tls: TlsResponse,
+
+    http3: Http3Response,
 }
 
 #[derive(Deserialize)]
@@ -65,10 +90,27 @@ struct Http2Response {
     sent_frames: Vec<Frame>,
 }
 
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct Http3Response {
+    #[serde(flatten)]
+    fingerprint: Http3Fingerprint,
+
+    settings: SettingsFrame,
+
+    headers: HeadersFrame,
+}
+
 #[test]
 fn browser_samples_roundtrip_tls_and_http2_models() {
     for sample in BROWSER_SAMPLES {
         assert_browser_sample(sample);
+    }
+}
+
+#[test]
+fn browser_samples_roundtrip_tls_and_http3_models() {
+    for sample in HTTP3_BROWSER_SAMPLES {
+        assert_http3_browser_sample(sample);
     }
 }
 
@@ -77,6 +119,46 @@ fn assert_browser_sample(sample: &BrowserSample) {
 
     assert_tls(sample.name, &response.tls);
     assert_http2(sample, &response.http2);
+}
+
+fn assert_http3_browser_sample(sample: &Http3BrowserSample) {
+    let response: Http3ApiResponse = serde_json::from_slice(sample.response).unwrap();
+
+    assert_tls(sample.name, &response.tls);
+    assert!(
+        response.tls.ja4_fingerprint.starts_with('q'),
+        "{} HTTP/3 JA4 transport marker",
+        sample.name
+    );
+    assert!(
+        response.tls.ja4_raw.starts_with('q'),
+        "{} HTTP/3 JA4_r transport marker",
+        sample.name
+    );
+
+    assert!(
+        response
+            .tls
+            .client_hello
+            .quic_transport_parameters()
+            .is_some(),
+        "{} HTTP/3 QUIC transport parameters",
+        sample.name
+    );
+    let calculated = Http3Fingerprint::from_settings(&response.http3.settings.settings);
+
+    assert_eq!(
+        calculated, response.http3.fingerprint,
+        "{} HTTP/3 fingerprint",
+        sample.name
+    );
+
+    let restored: Http3Response = json_roundtrip(&response.http3);
+    assert_eq!(
+        restored, response.http3,
+        "{} HTTP/3 JSON roundtrip",
+        sample.name
+    );
 }
 
 fn assert_tls(browser: &str, tls: &TlsResponse) {
