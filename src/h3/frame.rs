@@ -22,6 +22,7 @@ pub struct StreamType {
 /// Semantic name of an HTTP/3 unidirectional stream type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
+#[non_exhaustive]
 pub enum StreamTypeName {
     /// The HTTP/3 control stream (`0x00`).
     Control,
@@ -83,6 +84,7 @@ pub enum SettingValue {
 /// Semantic name of an HTTP/3 SETTINGS identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
+#[non_exhaustive]
 pub enum SettingName {
     /// `SETTINGS_QPACK_MAX_TABLE_CAPACITY` (`0x01`).
     QpackMaxTableCapacity,
@@ -222,6 +224,7 @@ pub struct OpaqueFrame {
 /// HTTP/3 frames represented by the analyzer.
 #[derive(Debug, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum Frame {
     /// A SETTINGS frame from the control stream.
     Settings(SettingsFrame),
@@ -237,6 +240,7 @@ pub enum Frame {
 ///
 /// Registered values follow the [IANA HTTP/3 Frame Types registry](https://www.iana.org/assignments/http3-parameters/http3-parameters.xhtml#http3-parameters-1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum FrameType {
     /// DATA (0x00).
     Data,

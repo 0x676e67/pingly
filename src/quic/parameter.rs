@@ -27,6 +27,7 @@ pub struct QuicTransportParameter {
 /// Semantic name of a QUIC transport parameter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum QuicTransportParameterName {
     /// `original_destination_connection_id` (`0x00`).
     OriginalDestinationConnectionId,
@@ -115,6 +116,7 @@ pub enum QuicTransportParameterName {
 /// Value representation used by a QUIC transport parameter.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum QuicTransportParameterValue {
     /// A QUIC variable-length integer.
     Integer(#[serde(with = "varint::serde")] u64),
@@ -152,6 +154,7 @@ pub struct QuicVersion {
 
 /// Semantic name of a QUIC version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum QuicVersionName {
     /// QUIC version 1 (`0x00000001`).
     Version1,
