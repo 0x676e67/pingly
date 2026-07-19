@@ -64,12 +64,18 @@ impl HttpServer<RustlsAcceptor> {
     pub(crate) async fn new(
         bind: SocketAddr,
         keep_alive_timeout: u64,
+        concurrent_limit: usize,
         acceptor: RustlsAcceptor,
         router: Router,
     ) -> Result<Self> {
         let rustls = acceptor.default_config();
         let mut server = Self::bind_tcp(bind, router, keep_alive_timeout, acceptor).await?;
-        server.quic_endpoint = Some(quic::bind(server.tcp_listener.local_addr()?, rustls)?);
+        server.quic_endpoint = Some(quic::bind(
+            server.tcp_listener.local_addr()?,
+            rustls,
+            concurrent_limit,
+            server.close_after_first_request,
+        )?);
         Ok(server)
     }
 
@@ -499,13 +505,29 @@ mod quic {
     const CONNECTION_CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
     const SERVER_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 
+    const MAX_REQUEST_STREAMS_PER_CONNECTION: usize = 128;
+    const MAX_UNIDIRECTIONAL_STREAMS_PER_CONNECTION: u32 = 16;
+    const STREAM_RECEIVE_WINDOW: u32 = 64 * 1024;
+    const CONNECTION_RECEIVE_WINDOW: u32 = 1024 * 1024;
+    const CONNECTION_SEND_WINDOW: u64 = 1024 * 1024;
+
     // HTTP/3 application error codes are carried as QUIC variable-length integers.
     // https://www.rfc-editor.org/rfc/rfc9114#section-8.1
     const H3_NO_ERROR: quinn::VarInt = quinn::VarInt::from_u32(0x100);
 
     /// Binds a QUIC endpoint with H3 ALPN and ClientHello capture.
-    pub(super) fn bind(bind: SocketAddr, rustls: Arc<ServerConfig>) -> Result<quinn::Endpoint> {
-        let config = crypto::server_config((*rustls).clone())?;
+    pub(super) fn bind(
+        bind: SocketAddr,
+        rustls: Arc<ServerConfig>,
+        concurrent_limit: usize,
+        close_after_first_request: bool,
+    ) -> Result<quinn::Endpoint> {
+        let mut config = crypto::server_config((*rustls).clone())?;
+        config.transport_config(transport_config(
+            concurrent_limit,
+            close_after_first_request,
+        ));
+
         if bind.is_ipv6() {
             let socket = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
             socket.set_only_v6(!bind.ip().is_unspecified())?;
@@ -522,6 +544,61 @@ mod quic {
         }
 
         Ok(quinn::Endpoint::server(config, bind)?)
+    }
+
+    /// Builds QUIC flow-control and stream limits for incoming HTTP/3 connections.
+    fn transport_config(
+        concurrent_limit: usize,
+        close_after_first_request: bool,
+    ) -> Arc<quinn::TransportConfig> {
+        let mut config = quinn::TransportConfig::default();
+
+        // Each HTTP/3 request uses a client-initiated bidirectional stream. Capping these streams
+        // also bounds request tasks retained by one connection.
+        // https://www.rfc-editor.org/rfc/rfc9114#section-6.1
+        config.max_concurrent_bidi_streams(request_stream_limit(
+            concurrent_limit,
+            close_after_first_request,
+        ));
+
+        // HTTP/3 needs control and QPACK streams, with spare capacity for GREASE and extensions.
+        // https://www.rfc-editor.org/rfc/rfc9114#section-6.2
+        config.max_concurrent_uni_streams(quinn::VarInt::from_u32(
+            MAX_UNIDIRECTIONAL_STREAMS_PER_CONNECTION,
+        ));
+
+        // QUIC flow-control windows bound buffered request data per stream and connection.
+        // https://www.rfc-editor.org/rfc/rfc9000#section-4.1
+        config
+            .stream_receive_window(quinn::VarInt::from_u32(STREAM_RECEIVE_WINDOW))
+            .receive_window(quinn::VarInt::from_u32(CONNECTION_RECEIVE_WINDOW))
+            .send_window(CONNECTION_SEND_WINDOW);
+
+        Arc::new(config)
+    }
+
+    fn request_stream_limit(
+        concurrent_limit: usize,
+        close_after_first_request: bool,
+    ) -> quinn::VarInt {
+        let per_connection_limit = if close_after_first_request {
+            concurrent_limit.min(1)
+        } else {
+            concurrent_limit.min(MAX_REQUEST_STREAMS_PER_CONNECTION)
+        };
+        let per_connection_limit = u32::try_from(per_connection_limit).unwrap_or(u32::MAX);
+        quinn::VarInt::from_u32(per_connection_limit)
+    }
+
+    /// Builds the HTTP/3 SETTINGS and request field-section policy.
+    fn connection_builder() -> h3::server::Builder {
+        let mut builder = h3::server::builder();
+
+        // SETTINGS_MAX_FIELD_SECTION_SIZE advertises and enforces the decoded request header
+        // bound. RFC 9114 counts each field's name, value, and 32 bytes of overhead.
+        // https://www.rfc-editor.org/rfc/rfc9114#section-4.1.1.3
+        builder.max_field_section_size(MAX_HEADER_LIST_SIZE as u64);
+        builder
     }
 
     /// Accepts QUIC connections until graceful shutdown starts.
@@ -618,9 +695,7 @@ mod quic {
         let capture = Http3Capture::new();
         let inspected =
             InspectedConnection::new(h3_quinn::Connection::new(connection), capture.clone());
-        let mut builder = h3::server::builder();
-        builder.max_field_section_size(MAX_HEADER_LIST_SIZE as u64);
-        let connection = match builder.build(inspected).await {
+        let connection = match connection_builder().build(inspected).await {
             Ok(connection) => connection,
             Err(error) => {
                 tracing::debug!(%error, %remote_addr, "failed to initialize HTTP/3 connection");
@@ -1004,6 +1079,21 @@ mod quic {
             }
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{request_stream_limit, MAX_REQUEST_STREAMS_PER_CONNECTION};
+
+        #[test]
+        fn request_stream_limit_follows_connection_policy() {
+            assert_eq!(
+                request_stream_limit(usize::MAX, false),
+                quinn::VarInt::from_u32(MAX_REQUEST_STREAMS_PER_CONNECTION as u32)
+            );
+            assert_eq!(request_stream_limit(32, false), quinn::VarInt::from_u32(32));
+            assert_eq!(request_stream_limit(32, true), quinn::VarInt::from_u32(1));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1043,6 +1133,7 @@ mod tests {
         let server = HttpServer::new(
             SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
             0,
+            1,
             acceptor,
             test_router(),
         )

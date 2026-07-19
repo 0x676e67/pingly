@@ -121,7 +121,7 @@ pub(crate) fn run(mut args: ServerArgs) -> Result<()> {
             alt_svc,
         ))
         .layer(CompressionLayer::new())
-        .layer(ConcurrencyLimitLayer::new(args.concurrent));
+        .layer(ConcurrencyLimitLayer::new(args.concurrent.get()));
 
     Runtime::new(threads).block_on(move |handle| async move {
         #[cfg(target_os = "linux")]
@@ -158,7 +158,7 @@ pub(crate) fn run(mut args: ServerArgs) -> Result<()> {
 
         tracing::info!(
             threads = threads.get(),
-            concurrent_limit = args.concurrent,
+            concurrent_limit = args.concurrent.get(),
             keep_alive_timeout_secs = args.keep_alive_timeout,
             "starting {APP_NAME} on {}",
             args.bind,
@@ -194,6 +194,7 @@ pub(crate) fn run(mut args: ServerArgs) -> Result<()> {
         HttpServer::new(
             args.bind,
             args.keep_alive_timeout,
+            args.concurrent.get(),
             acceptor,
             router.layer(layer),
         )

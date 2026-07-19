@@ -1,6 +1,6 @@
 //! Command-line arguments for the pingly process.
 
-use std::{io, net::SocketAddr, path::PathBuf};
+use std::{io, net::SocketAddr, num::NonZeroUsize, path::PathBuf};
 
 use clap::{Parser, Subcommand, ValueEnum};
 
@@ -114,9 +114,9 @@ pub(crate) struct ServerArgs {
     #[arg(short, long, default_value = "0.0.0.0:8181")]
     pub(crate) bind: SocketAddr,
 
-    /// Concurrent connections
+    /// Maximum concurrent requests
     #[arg(short, long, default_value = "1024")]
-    pub(crate) concurrent: usize,
+    pub(crate) concurrent: NonZeroUsize,
 
     /// Connection reuse and HTTP/2 PING interval in seconds; 0 serves one request per connection
     #[arg(short, long, default_value = "0")]
