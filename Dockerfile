@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM rust:1.96.1-alpine3.22 AS builder
+FROM rust:alpine3.22 AS builder
 
 RUN apk add --no-cache build-base libpcap-dev
 
