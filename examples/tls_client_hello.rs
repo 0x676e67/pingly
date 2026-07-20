@@ -4,8 +4,7 @@ use std::{env, fs, io, path::PathBuf};
 
 use pingly::tls::{ClientHello, ClientHelloBuffer};
 
-const USAGE: &str =
-    "usage: cargo run --example tls_client_hello --no-default-features -- <client-hello.bin>";
+const USAGE: &str = "usage: cargo run --example tls_client_hello -- <client-hello.bin>";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bytes = fs::read(input_path()?)?;

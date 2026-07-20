@@ -5,7 +5,12 @@ use std::{io, net::SocketAddr, path::PathBuf};
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
-#[clap(author, version, about, arg_required_else_help = true)]
+#[clap(
+    author,
+    version,
+    about = "TLS and HTTP/1/2 fingerprint analysis server",
+    arg_required_else_help = true
+)]
 #[command(args_conflicts_with_subcommands = true)]
 pub(crate) struct AppArgs {
     #[clap(subcommand)]
@@ -34,42 +39,33 @@ pub(crate) enum AcmeChallenge {
 pub(crate) struct AcmeArgs {
     /// Domain to include in the certificate; may be supplied more than once
     #[arg(
-        long = "acme-domain",
+        long,
         value_name = "DOMAIN",
         value_parser = clap::builder::NonEmptyStringValueParser::new(),
         conflicts_with_all = ["tls_cert", "tls_key"]
     )]
-    domains: Vec<String>,
+    acme_domain: Vec<String>,
 
     /// ACME account email; may be supplied more than once
     #[arg(
-        long = "acme-email",
+        long,
         value_name = "EMAIL",
         value_parser = clap::builder::NonEmptyStringValueParser::new(),
-        requires = "domains"
+        requires = "acme_domain"
     )]
-    emails: Vec<String>,
+    acme_email: Vec<String>,
 
     /// ACME challenge type
-    #[arg(
-        long = "acme-challenge",
-        value_enum,
-        default_value_t,
-        requires = "domains"
-    )]
-    challenge: AcmeChallenge,
+    #[arg(long, value_enum, default_value_t, requires = "acme_domain")]
+    acme_challenge: AcmeChallenge,
 
     /// Address for the HTTP-01 challenge listener
-    #[arg(long = "acme-http-bind", value_name = "ADDR", requires = "domains")]
-    http_bind: Option<SocketAddr>,
-
-    /// Directory used to cache the ACME account and certificate
-    #[arg(long = "acme-cache", value_name = "PATH", requires = "domains")]
-    cache: Option<PathBuf>,
+    #[arg(long, value_name = "ADDR", requires = "acme_domain")]
+    acme_http_bind: Option<SocketAddr>,
 
     /// Use the production ACME directory instead of staging
-    #[arg(long = "acme-production", requires = "domains")]
-    production: bool,
+    #[arg(long, requires = "acme_domain")]
+    acme_production: bool,
 }
 
 /// Validated ACME settings consumed by the server.
@@ -79,9 +75,6 @@ pub(crate) struct AcmeOptions {
 
     /// ACME account contacts in mailto URI form.
     pub(crate) contacts: Vec<String>,
-
-    /// Persistent account and certificate cache.
-    pub(crate) cache_dir: PathBuf,
 
     /// Domain-control validation method.
     pub(crate) challenge: AcmeChallenge,
@@ -125,16 +118,26 @@ pub(crate) struct ServerArgs {
     #[arg(short, long, default_value = "1024")]
     pub(crate) concurrent: usize,
 
-    /// Keep alive timeout (seconds)
-    #[arg(short, long, default_value = "60")]
+    /// Connection reuse and HTTP/2 PING interval in seconds; 0 serves one request per connection
+    #[arg(short, long, default_value = "0")]
     pub(crate) keep_alive_timeout: u64,
 
     /// TLS certificate file path
-    #[arg(short = 'C', long, requires = "tls_key", conflicts_with = "domains")]
+    #[arg(
+        short = 'C',
+        long,
+        requires = "tls_key",
+        conflicts_with = "acme_domain"
+    )]
     pub(crate) tls_cert: Option<PathBuf>,
 
     /// TLS private key file path (EC/PKCS8/RSA)
-    #[arg(short = 'K', long, requires = "tls_cert", conflicts_with = "domains")]
+    #[arg(
+        short = 'K',
+        long,
+        requires = "tls_cert",
+        conflicts_with = "acme_domain"
+    )]
     pub(crate) tls_key: Option<PathBuf>,
 
     #[command(flatten)]
@@ -156,7 +159,7 @@ impl ServerArgs {
     pub(crate) fn take_tls_source(&mut self) -> crate::Result<TlsSource> {
         match (self.tls_cert.take(), self.tls_key.take()) {
             (Some(cert), Some(key)) => Ok(TlsSource::Files { cert, key }),
-            (None, None) if self.acme.domains.is_empty() => Ok(TlsSource::SelfSigned),
+            (None, None) if self.acme.acme_domain.is_empty() => Ok(TlsSource::SelfSigned),
             (None, None) => Ok(TlsSource::Acme(self.acme.take_options()?)),
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -167,17 +170,12 @@ impl ServerArgs {
     }
 
     #[cfg(target_os = "linux")]
-    pub(crate) fn acme_cache_path(&self) -> Option<&std::path::Path> {
-        self.acme.cache.as_deref()
-    }
-
-    #[cfg(target_os = "linux")]
     pub(crate) fn requires_privileged_bind(&self) -> bool {
         self.bind.port() < 1024
-            || (self.acme.challenge == AcmeChallenge::Http01
+            || (self.acme.acme_challenge == AcmeChallenge::Http01
                 && self
                     .acme
-                    .http_bind
+                    .acme_http_bind
                     .unwrap_or(AcmeArgs::DEFAULT_HTTP_BIND)
                     .port()
                     < 1024)
@@ -189,7 +187,7 @@ impl AcmeArgs {
         SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 80);
 
     fn take_options(&mut self) -> crate::Result<AcmeOptions> {
-        let http_bind = match (self.challenge, self.http_bind) {
+        let http_bind = match (self.acme_challenge, self.acme_http_bind) {
             (AcmeChallenge::Http01, bind) => Some(bind.unwrap_or(Self::DEFAULT_HTTP_BIND)),
             (AcmeChallenge::TlsAlpn01, None) => None,
             (AcmeChallenge::TlsAlpn01, Some(_)) => {
@@ -201,12 +199,7 @@ impl AcmeArgs {
             }
         };
 
-        let cache_dir = self
-            .cache
-            .take()
-            .unwrap_or_else(|| crate::state::directory().join("acme"));
-
-        let contacts = std::mem::take(&mut self.emails)
+        let contacts = std::mem::take(&mut self.acme_email)
             .into_iter()
             .map(|email| {
                 if email.starts_with("mailto:") {
@@ -218,12 +211,11 @@ impl AcmeArgs {
             .collect();
 
         Ok(AcmeOptions {
-            domains: std::mem::take(&mut self.domains),
+            domains: std::mem::take(&mut self.acme_domain),
             contacts,
-            cache_dir,
-            challenge: self.challenge,
+            challenge: self.acme_challenge,
             http_bind,
-            production: self.production,
+            production: self.acme_production,
         })
     }
 }

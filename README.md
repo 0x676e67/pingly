@@ -19,7 +19,7 @@
 
 ```bash
 $ pingly -h
-TLS and HTTP/1/2 fingerprint analysis server and Rust library
+TLS and HTTP/1/2 fingerprint analysis server
 
 Usage: pingly
        pingly <COMMAND>
@@ -102,11 +102,11 @@ HTTP-01 additionally needs `-p 80:8080`, `--acme-challenge http-01`, and
 
 ## Example
 
-Add Pingly without the server features:
+Add Pingly to your project:
 
 ```toml
 [dependencies]
-pingly = { version = "0.1", default-features = false }
+pingly = "0.1"
 ```
 
 And then parse a captured TLS ClientHello:
