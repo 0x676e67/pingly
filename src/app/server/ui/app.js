@@ -48,6 +48,7 @@ const PRIMER_PRIMARY_BUTTON_STYLE = Object.freeze({
     "--tblr-btn-hover-color": "var(--button-primary-fgColor-rest)",
 });
 const PRIMER_BUTTON_PROPERTIES = Object.keys(PRIMER_DEFAULT_BUTTON_STYLE);
+const JSON_ROUTE_FEEDBACK_MS = 300;
 const PRIORITY_PROBE_TIMEOUT_MS = 10_000;
 const PRIORITY_PROBE_SETTLE_MS = 250;
 const PRIORITY_PROBES = [
@@ -115,6 +116,7 @@ const state = {
     data: null,
     jsonData: null,
     jsonRoute: DEFAULT_JSON_ROUTE,
+    jsonLoadingRoute: null,
 
     priorityProbes: new Map(),
     priorityProbeRunning: new Set(),
@@ -423,10 +425,7 @@ function showError(error) {
 }
 
 async function fetchAnalysis() {
-    if (state.jsonController) {
-        state.jsonController.abort();
-        state.jsonController = null;
-    }
+    cancelJsonRequest();
 
     if (state.controller) {
         state.controller.abort();
@@ -518,10 +517,15 @@ function renderJsonRouteOptions() {
     SERVER_ROUTES.filter(function (route) {
         return route.path.startsWith("/api/");
     }).forEach(function (route) {
-        const button = create(
-            "button",
-            "nav-link flex-shrink-0 px-2",
-            jsonRouteLabel(route.path)
+        const button = create("button", "nav-link flex-shrink-0 px-2");
+        const spinner = create(
+            "span",
+            "spinner-border spinner-border-sm json-route-spinner"
+        );
+        spinner.setAttribute("aria-hidden", "true");
+        button.append(
+            create("span", "json-route-option-label", jsonRouteLabel(route.path)),
+            spinner
         );
         button.type = "button";
         button.dataset.jsonRoute = route.path;
@@ -536,11 +540,38 @@ function renderJsonRouteOptions() {
 
 function syncJsonRouteOptions() {
     refs.jsonRouteLabel.textContent = state.jsonRoute;
+    if (state.jsonLoadingRoute) {
+        refs.jsonRoutes.setAttribute("aria-busy", "true");
+    } else {
+        refs.jsonRoutes.removeAttribute("aria-busy");
+    }
+
     refs.jsonRoutes.querySelectorAll("[data-json-route]").forEach(function (button) {
         const active = button.dataset.jsonRoute === state.jsonRoute;
+        const loading = button.dataset.jsonRoute === state.jsonLoadingRoute;
         button.classList.toggle("active", active);
+        button.classList.toggle("is-loading", loading);
+        button.disabled = loading;
         button.setAttribute("aria-pressed", String(active));
+        if (loading) {
+            button.setAttribute("aria-busy", "true");
+        } else {
+            button.removeAttribute("aria-busy");
+        }
     });
+}
+
+function cancelJsonRequest() {
+    const controller = state.jsonController;
+    state.jsonController = null;
+    state.jsonLoadingRoute = null;
+
+    if (controller) {
+        controller.abort();
+    }
+
+    refs.json.removeAttribute("aria-busy");
+    syncJsonRouteOptions();
 }
 
 function showJsonResponse(path, data) {
@@ -560,26 +591,30 @@ async function selectJsonRoute(path) {
         return;
     }
 
-    if (state.jsonController) {
-        state.jsonController.abort();
-        state.jsonController = null;
-    }
-
-    if (path === DEFAULT_JSON_ROUTE) {
-        showJsonResponse(path, state.data);
-        return;
-    }
+    cancelJsonRequest();
 
     const controller = new AbortController();
     state.jsonController = controller;
     state.jsonRoute = path;
+    state.jsonLoadingRoute = path;
     state.jsonData = null;
     refs.copyJsonButton.disabled = true;
     refs.json.setAttribute("aria-busy", "true");
     refs.json.textContent = "Loading " + path + "...";
     syncJsonRouteOptions();
+    const feedbackDelay = new Promise(function (resolve) {
+        window.setTimeout(resolve, JSON_ROUTE_FEEDBACK_MS);
+    });
 
     try {
+        await new Promise(function (resolve) {
+            window.requestAnimationFrame(resolve);
+        });
+
+        if (controller.signal.aborted) {
+            return;
+        }
+
         const response = await fetch(path, {
             cache: "no-store",
             headers: {
@@ -595,6 +630,7 @@ async function selectJsonRoute(path) {
         const data = await response.json();
         if (state.jsonController === controller) {
             showJsonResponse(path, data);
+            await feedbackDelay;
         }
     } catch (error) {
         if (error && error.name === "AbortError") {
@@ -607,11 +643,14 @@ async function selectJsonRoute(path) {
                 : "The route response could not be loaded.";
             refs.json.textContent = "Unable to load " + path + "." + String.fromCharCode(10, 10) + message;
             showToast("Could not load " + path);
+            await feedbackDelay;
         }
     } finally {
         if (state.jsonController === controller) {
             state.jsonController = null;
+            state.jsonLoadingRoute = null;
             refs.json.removeAttribute("aria-busy");
+            syncJsonRouteOptions();
         }
     }
 }
@@ -738,7 +777,7 @@ function createServerRoutesSection() {
 
         return {
             cells: [
-                create("code", "badge bg-blue-lt text-blue font-monospace", route.method),
+                create("code", "badge bg-blue-lt text-blue font-monospace route-method", route.method),
                 path,
                 route.purpose,
                 route.availability,
@@ -766,7 +805,7 @@ function createFingerprintSection(title, items) {
     let columnClass = "col-12 col-xl-6";
 
     if (items.length >= 4) {
-        columnClass = "col-12 col-md-6 col-xl-3";
+        columnClass = "col-12 col-lg-6";
     } else if (items.length === 3) {
         columnClass = "col-12 col-md-6 col-xl-4";
     } else if (items.length === 2) {
@@ -789,13 +828,13 @@ function createFingerprintCard(item) {
     const tone = ["blue", "green", "orange", "purple"].includes(item.tone)
         ? item.tone
         : "secondary";
-    const card = create("article", "card h-100");
-    const body = create("div", "card-body p-3");
+    const card = create("article", "card h-100 fingerprint-card fingerprint-card-" + tone);
+    const body = create("div", "card-body p-3 fingerprint-card-body");
     const header = create("div", "d-flex align-items-center gap-2 mb-2");
     header.append(
         create(
             "h3",
-            "badge bg-" + tone + "-lt text-" + tone + " mb-0",
+            "badge bg-" + tone + "-lt text-" + tone + " mb-0 fingerprint-label",
             item.label
         )
     );
@@ -812,13 +851,13 @@ function createFingerprintCard(item) {
 
     const value = create(
         "div",
-        "border-start border-3 border-" + tone + " ps-3 py-1"
+        "border-start border-3 border-" + tone + " ps-3 py-2 fingerprint-value-box"
     );
     value.append(createFingerprintValue(item.label, valueOr(primary, "Not available")));
     body.append(header, value);
 
     if (source && source !== primary) {
-        const sourceBlock = create("div", "mt-2 pt-2 border-top");
+        const sourceBlock = create("div", "mt-3 pt-3 border-top fingerprint-source");
         sourceBlock.append(
             create(
                 "div",
@@ -948,7 +987,7 @@ function renderTls(tls) {
 }
 
 function renderProtocolItems(items, kind) {
-    const list = create("div", "list-group mb-3");
+    const list = create("div", "list-group mb-3 protocol-list");
 
     items.forEach(function (item, index) {
         const normalized = kind === "extension"
@@ -958,10 +997,10 @@ function renderProtocolItems(items, kind) {
                 payload: item,
                 id: null,
             };
-        const details = create("details", "list-group-item p-0");
+        const details = create("details", "list-group-item p-0 protocol-item");
         const summary = create(
             "summary",
-            "d-flex align-items-center gap-2 p-3 cursor-pointer"
+            "d-flex align-items-center gap-2 p-3 cursor-pointer protocol-summary"
         );
         summary.append(
             create("span", "badge bg-secondary-lt text-secondary", padIndex(index + 1)),
@@ -979,7 +1018,7 @@ function renderProtocolItems(items, kind) {
         summary.append(meta);
         details.append(summary);
 
-        const body = create("div", "border-top bg-body-tertiary p-3");
+        const body = create("div", "border-top bg-body-tertiary p-3 protocol-body");
         const payload = kind === "extension"
             ? withoutKey(normalized.payload, "value")
             : withoutKeys(item, ["frame_type", "stream_id", "length"]);
@@ -1725,13 +1764,13 @@ function refreshPriorityProbeView() {
 }
 
 function renderFrames(frames) {
-    const list = create("div", "list-group mb-3");
+    const list = create("div", "list-group mb-3 protocol-list");
 
     frames.forEach(function (frame, index) {
-        const details = create("details", "list-group-item p-0");
+        const details = create("details", "list-group-item p-0 protocol-item");
         const summary = create(
             "summary",
-            "d-flex align-items-center gap-2 p-3 cursor-pointer"
+            "d-flex align-items-center gap-2 p-3 cursor-pointer protocol-summary"
         );
         summary.append(
             create("span", "badge bg-secondary-lt text-secondary", padIndex(index + 1)),
@@ -1751,7 +1790,7 @@ function renderFrames(frames) {
         summary.append(meta);
         details.append(summary);
 
-        const body = create("div", "border-top bg-body-tertiary p-3");
+        const body = create("div", "border-top bg-body-tertiary p-3 protocol-body");
         body.append(
             createValueNode(
                 withoutKeys(frame, ["frame_type", "stream_id", "length"])
@@ -1813,13 +1852,13 @@ function renderTcp(tcp) {
 }
 
 function renderPackets(packets) {
-    const list = create("div", "list-group mb-3");
+    const list = create("div", "list-group mb-3 protocol-list");
 
     packets.forEach(function (packet, index) {
-        const details = create("details", "list-group-item p-0");
+        const details = create("details", "list-group-item p-0 protocol-item");
         const summary = create(
             "summary",
-            "d-flex align-items-center gap-2 p-3 cursor-pointer"
+            "d-flex align-items-center gap-2 p-3 cursor-pointer protocol-summary"
         );
         summary.append(
             create("span", "badge bg-secondary-lt text-secondary", padIndex(index + 1)),
@@ -1855,7 +1894,7 @@ function renderPackets(packets) {
             payload.timestamp = formatPacketTime(packet.timestamp);
         }
 
-        const body = create("div", "border-top bg-body-tertiary p-3");
+        const body = create("div", "border-top bg-body-tertiary p-3 protocol-body");
         body.append(createValueNode(payload));
         details.append(body);
         list.append(details);
@@ -1925,7 +1964,7 @@ function createArrayValue(values) {
             tokens.append(
                 create(
                     "span",
-                    "badge bg-blue-lt text-blue rounded-pill font-monospace text-wrap text-break",
+                    "badge bg-blue-lt text-blue rounded-pill font-monospace text-wrap text-break protocol-token",
                     String(value)
                 )
             );
@@ -2044,10 +2083,10 @@ function isHeaderValue(value) {
 }
 
 function createSection(eyebrow, title, meta) {
-    const section = create("section", "mb-5");
+    const section = create("section", "mb-5 analysis-section");
     const heading = create(
         "div",
-        "d-flex flex-wrap align-items-end justify-content-between gap-2 border-bottom pb-2 mb-3"
+        "d-flex flex-wrap align-items-end justify-content-between gap-2 border-bottom pb-2 mb-3 section-heading"
     );
     const copy = create("div");
     copy.append(
@@ -2065,10 +2104,10 @@ function createSection(eyebrow, title, meta) {
 }
 
 function createDetailGrid(items) {
-    const grid = create("dl", "row g-0 border rounded-2 overflow-hidden mb-4");
+    const grid = create("dl", "row g-0 border rounded-2 overflow-hidden mb-4 detail-grid");
 
     items.forEach(function (item) {
-        const row = create("div", "col-12 col-xl-6 p-3 border-bottom");
+        const row = create("div", "col-12 col-xl-6 p-3 border-bottom detail-item");
         row.append(create("dt", "text-secondary small fw-medium mb-1", item[0]));
 
         const definition = create("dd", "mb-0 text-break");
@@ -2088,10 +2127,10 @@ function createDetailGrid(items) {
 }
 
 function createTable(headers, rows, columnClasses) {
-    const wrap = create("div", "table-responsive border rounded-2 mb-3");
-    const table = create("table", "table table-vcenter table-hover mb-0");
+    const wrap = create("div", "table-responsive border rounded-2 mb-3 data-table-wrap");
+    const table = create("table", "table table-vcenter table-hover mb-0 data-table");
     const head = document.createElement("thead");
-    head.className = "table-light";
+    head.className = "data-table-head";
     const headRow = document.createElement("tr");
 
     headers.forEach(function (header) {
