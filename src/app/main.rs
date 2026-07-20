@@ -28,7 +28,7 @@ use tracing::Level;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 #[cfg(target_os = "linux")]
-use crate::tcp::TcpCaptureTrack;
+use crate::tcp::TcpCapture;
 
 #[cfg(feature = "jemalloc")]
 #[global_allocator]
@@ -125,22 +125,20 @@ pub(crate) fn run(mut args: ServerArgs) -> Result<()> {
 
     Runtime::new(threads).block_on(move |handle| async move {
         #[cfg(target_os = "linux")]
-        let tcp_capture_track = {
-            let mut track = None;
-            if args.tcp_capture_packet {
+        let tcp_capture_track = args
+            .tcp_capture_packet
+            .then(|| {
                 tracing::info!("Enabling TCP/IP packet capture (requires root)");
-                let capture = TcpCaptureTrack::new(128, args.bind.port());
-                if let Err(error) = capture.start_capture(args.tcp_capture_interface.clone()) {
+                TcpCapture::start(
+                    args.concurrent.get(),
+                    args.bind.port(),
+                    args.tcp_capture_interface.as_deref(),
+                )
+                .inspect_err(|error| {
                     tracing::error!(%error, "failed to start TCP/IP packet capture");
-                } else {
-                    if let Some(interface) = args.tcp_capture_interface {
-                        tracing::info!(%interface, "TCP/IP packet capture started");
-                    }
-                    track = Some(capture);
-                }
-            }
-            track
-        };
+                })
+            })
+            .and_then(Result::ok);
 
         let router = routes::router(
             #[cfg(target_os = "linux")]

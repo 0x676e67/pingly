@@ -8,11 +8,14 @@ const VIEW_META = {
     h2: ["Frame sequence", "HTTP/2 analysis"],
     h3: ["Transport parameters", "HTTP/3 analysis"],
     tcp: ["Packet capture", "TCP analysis"],
+    proxy: ["Cross-layer latency", "Latency analysis"],
     json: ["Serialized response", "Raw JSON"],
 };
 const VIEW_ORDER = Object.keys(VIEW_META);
 const SERVER_ROUTES = /* PINGLY_ROUTES */ [];
 const DEFAULT_JSON_ROUTE = "/api/all";
+const LATENCY_PATH = "/api/latency";
+const UNAVAILABLE_LABEL = "Unavailable";
 const PRIMER_DEFAULT_BUTTON_STYLE = Object.freeze({
     "--tblr-btn-active-bg": "var(--button-default-bgColor-active)",
     "--tblr-btn-active-border-color": "var(--button-default-borderColor-active)",
@@ -120,6 +123,14 @@ const state = {
 
     priorityProbes: new Map(),
     priorityProbeRunning: new Set(),
+    proxyAnalysis: null,
+    proxyError: "",
+    proxyProgress: 0,
+    proxyRunning: false,
+    proxySamplesCompleted: 0,
+    proxySamplesTotal: 0,
+    proxySocket: null,
+    proxyTimer: null,
     activeView: "overview",
     controller: null,
     jsonController: null,
@@ -420,7 +431,7 @@ function showError(error) {
     refs.errorMessage.textContent = error instanceof Error
         ? error.message
         : "The analysis response could not be loaded.";
-    setStatus("Unavailable", "error");
+    setStatus(UNAVAILABLE_LABEL, "error");
     paintIcons();
 }
 
@@ -468,6 +479,7 @@ function loadAnalysis(data) {
         return;
     }
 
+    resetProxyProbe();
     recordCurrentPriorityProbe(data);
     state.data = data;
     refs.loading.hidden = true;
@@ -483,6 +495,7 @@ function loadAnalysis(data) {
     renderHttp2(data.http2);
     renderHttp3(data.http3, data.tls);
     renderTcp(data.tcp);
+    renderProxy();
     showJsonResponse(DEFAULT_JSON_ROUTE, data);
 
     const now = new Intl.DateTimeFormat(undefined, {
@@ -515,7 +528,7 @@ function renderJsonRouteOptions() {
     const fragment = document.createDocumentFragment();
 
     SERVER_ROUTES.filter(function (route) {
-        return route.path.startsWith("/api/");
+        return route.path.startsWith("/api/") && route.method !== "WS";
     }).forEach(function (route) {
         const button = create("button", "nav-link flex-shrink-0 px-2");
         const spinner = create(
@@ -585,7 +598,9 @@ function showJsonResponse(path, data) {
 
 async function selectJsonRoute(path) {
     const knownRoute = SERVER_ROUTES.some(function (route) {
-        return route.path === path && route.path.startsWith("/api/");
+        return route.path === path &&
+            route.path.startsWith("/api/") &&
+            route.method !== "WS";
     });
     if (!knownRoute) {
         return;
@@ -659,16 +674,16 @@ function renderSummary(data) {
     const frames = getFrames(data.http2);
     const http3Frames = getHttp3FrameCount(data.http3);
 
-    setText("summary-address", valueOr(data.address, "Unavailable"));
+    setText("summary-address", valueOr(data.address, UNAVAILABLE_LABEL));
     setText(
         "summary-http",
-        [data.method, data.http_version].filter(Boolean).join(" / ") || "Unavailable"
+        [data.method, data.http_version].filter(Boolean).join(" / ") || UNAVAILABLE_LABEL
     );
     setText(
         "summary-tls",
         data.tls && data.tls.tls_version_negotiated
             ? data.tls.tls_version_negotiated
-            : "Unavailable"
+            : UNAVAILABLE_LABEL
     );
     setText("summary-frames", String(frames.length + http3Frames));
 }
@@ -680,7 +695,9 @@ function renderNavigationCounts(data) {
         : [];
     const frames = getFrames(data.http2);
     const http3Settings = getHttp3Settings(data.http3);
-    const packets = Array.isArray(data.tcp) ? data.tcp : [];
+    const packets = isObject(data.tcp) && Array.isArray(data.tcp.packets)
+        ? data.tcp.packets
+        : [];
 
     setText("tls-count", String(ciphers.length));
     setText("http-count", String(headers.length));
@@ -741,19 +758,19 @@ function renderOverview(data) {
     const request = createSection("Connection", "Request details", "");
     request.append(
         createDetailGrid([
-            ["Remote address", valueOr(data.address, "Unavailable"), true],
-            ["Method", valueOr(data.method, "Unavailable"), true],
-            ["HTTP version", valueOr(data.http_version, "Unavailable"), true],
+            ["Remote address", valueOr(data.address, UNAVAILABLE_LABEL), true],
+            ["Method", valueOr(data.method, UNAVAILABLE_LABEL), true],
+            ["HTTP version", valueOr(data.http_version, UNAVAILABLE_LABEL), true],
             [
                 "Negotiated TLS",
-                valueOr(tls.tls_version_negotiated, "Unavailable"),
+                valueOr(tls.tls_version_negotiated, UNAVAILABLE_LABEL),
                 true,
             ],
-            ["Client TLS record", valueOr(tls.tls_version, "Unavailable"), true],
+            ["Client TLS record", valueOr(tls.tls_version, UNAVAILABLE_LABEL), true],
             ["ALPN", extractAlpn(tls).join(", ") || "Not offered", true],
             [
                 "Supported TLS",
-                extractSupportedVersions(tls).join(", ") || "Unavailable",
+                extractSupportedVersions(tls).join(", ") || UNAVAILABLE_LABEL,
                 true,
             ],
             ["User-Agent", valueOr(data.user_agent, "Not provided"), false],
@@ -770,10 +787,15 @@ function createServerRoutesSection() {
         SERVER_ROUTES.length + " routes"
     );
     const rows = SERVER_ROUTES.map(function (route) {
-        const path = create("a", "font-monospace fw-semibold", route.path);
-        path.href = route.path;
-        path.target = "_blank";
-        path.rel = "noreferrer";
+        let path;
+        if (route.method === "WS") {
+            path = create("code", "font-monospace fw-semibold", route.path);
+        } else {
+            path = create("a", "font-monospace fw-semibold", route.path);
+            path.href = route.path;
+            path.target = "_blank";
+            path.rel = "noreferrer";
+        }
 
         return {
             cells: [
@@ -920,19 +942,19 @@ function renderTls(tls) {
     const handshake = createSection("TLS", "Handshake", "");
     handshake.append(
         createDetailGrid([
-            ["Record version", valueOr(tls.tls_version, "Unavailable"), true],
+            ["Record version", valueOr(tls.tls_version, UNAVAILABLE_LABEL), true],
             [
                 "Negotiated version",
-                valueOr(tls.tls_version_negotiated, "Unavailable"),
+                valueOr(tls.tls_version_negotiated, UNAVAILABLE_LABEL),
                 true,
             ],
-            ["Client random", valueOr(tls.client_random, "Unavailable"), false],
+            ["Client random", valueOr(tls.client_random, UNAVAILABLE_LABEL), false],
             ["Session ID", valueOr(tls.session_id, "Not provided"), false],
             [
                 "Compression",
                 Array.isArray(tls.compression_algorithms)
                     ? tls.compression_algorithms.join(", ")
-                    : "Unavailable",
+                    : UNAVAILABLE_LABEL,
                 true,
             ],
             ["ALPN", extractAlpn(tls).join(", ") || "Not offered", true],
@@ -1092,9 +1114,9 @@ function renderHttp(data) {
     const request = createSection("Request", "Request line", source);
     request.append(
         createDetailGrid([
-            ["Method", valueOr(data.method, "Unavailable"), true],
-            ["HTTP version", valueOr(data.http_version, "Unavailable"), true],
-            ["Header source", source || "Unavailable", true],
+            ["Method", valueOr(data.method, UNAVAILABLE_LABEL), true],
+            ["HTTP version", valueOr(data.http_version, UNAVAILABLE_LABEL), true],
+            ["Header source", source || UNAVAILABLE_LABEL, true],
             ["User-Agent", valueOr(data.user_agent, "Not provided"), false],
         ])
     );
@@ -1829,16 +1851,50 @@ function getFrames(http2) {
 
 function renderTcp(tcp) {
     const root = document.getElementById("tcp-content");
-    const packets = Array.isArray(tcp) ? tcp : [];
+    const analysis = isObject(tcp) ? tcp : {};
+    const fingerprint = isObject(analysis.fingerprint) ? analysis.fingerprint : null;
+    const packets = Array.isArray(analysis.packets) ? analysis.packets : [];
+    const content = [];
+
+    if (fingerprint) {
+        const ja4t = isObject(fingerprint.ja4t) ? fingerprint.ja4t : {};
+        const satori = isObject(fingerprint.satori) ? fingerprint.satori : {};
+        content.push(
+            createFingerprintSection("TCP client", [
+                fingerprintItem("JA4T", "blue", ja4t.fingerprint, null),
+                fingerprintItem("Satori", "green", satori.fingerprint, null),
+            ])
+        );
+
+        const network = isObject(fingerprint.network) ? fingerprint.network : {};
+        const link = isObject(fingerprint.link) ? fingerprint.link : {};
+        const networkSection = createSection(
+            "Passive estimate",
+            "Network characteristics",
+            "Initial SYN"
+        );
+        networkSection.append(
+            createDetailGrid([
+                ["Observed hop limit", valueOr(network.observed_hop_limit, UNAVAILABLE_LABEL), true],
+                ["Estimated initial hop limit", valueOr(network.initial_hop_limit, UNAVAILABLE_LABEL), true],
+                ["Estimated distance", formatHopCount(network.distance_hops), true],
+                ["Estimated MTU", formatMtu(link.mtu), true],
+                ["Probable link", valueOr(link.kind, UNAVAILABLE_LABEL), false],
+                ["Satori quirks", valueOr(satori.quirks, "None"), true],
+            ])
+        );
+        content.push(networkSection);
+    }
 
     if (packets.length === 0) {
-        root.replaceChildren(
+        content.push(
             createEmptyState(
                 "No TCP packets were captured",
                 "waypoints",
                 "Packet capture is available when the Linux server enables it."
             )
         );
+        root.replaceChildren(...content);
         return;
     }
 
@@ -1848,7 +1904,323 @@ function renderTcp(tcp) {
         packets.length + " entries"
     );
     packetSection.append(renderPackets(packets));
-    root.replaceChildren(packetSection);
+    content.push(packetSection);
+    root.replaceChildren(...content);
+}
+
+function formatHopCount(value) {
+    if (!hasNumericValue(value)) {
+        return UNAVAILABLE_LABEL;
+    }
+
+    const count = Number(value);
+    return count >= 0 ? count + (count === 1 ? " hop" : " hops") : UNAVAILABLE_LABEL;
+}
+
+function formatMtu(value) {
+    if (!hasNumericValue(value)) {
+        return UNAVAILABLE_LABEL;
+    }
+
+    const mtu = Number(value);
+    return mtu > 0 ? mtu + " bytes" : UNAVAILABLE_LABEL;
+}
+
+function renderProxy() {
+    const root = document.getElementById("proxy-content");
+    const controlSection = createSection(
+        "Live measurement",
+        "Browser latency probe",
+        state.proxyRunning ? "In progress" : "WebSocket"
+    );
+    const control = create("div", "proxy-probe-control p-3 mb-4");
+    const row = create("div", "d-flex flex-wrap align-items-center gap-3");
+    const status = create("div", "d-flex align-items-center gap-2 flex-fill");
+    const statusDot = create("span", "status-dot");
+    const probeStatus = proxyProbeStatus();
+    status.setAttribute("role", "status");
+    status.setAttribute("aria-live", "polite");
+    statusDot.classList.add(probeStatus.color);
+    statusDot.classList.toggle("status-dot-animated", state.proxyRunning);
+    status.append(statusDot, create("span", "text-secondary", probeStatus.text));
+
+    const button = create("button", "btn btn-primary d-inline-flex align-items-center gap-2");
+    button.type = "button";
+    button.disabled = state.proxyRunning;
+    if (state.proxyRunning) {
+        const spinner = create("span", "spinner-border spinner-border-sm");
+        spinner.setAttribute("aria-hidden", "true");
+        button.append(spinner, create("span", "", "Measuring"));
+    } else {
+        const icon = document.createElement("i");
+        icon.className = "icon";
+        icon.dataset.lucide = "activity";
+        icon.setAttribute("aria-hidden", "true");
+        button.append(icon, create("span", "", state.proxyAnalysis ? "Measure again" : "Measure latency"));
+    }
+    button.addEventListener("click", runProxyProbe);
+    row.append(status, button);
+
+    const progress = create("div", "proxy-progress mt-3");
+    const progressBar = create("div", "proxy-progress-bar");
+    const progressValue = Math.min(100, Math.max(0, state.proxyProgress));
+    progress.setAttribute("role", "progressbar");
+    progress.setAttribute("aria-label", "Latency measurement");
+    progress.setAttribute("aria-valuemin", "0");
+    progress.setAttribute("aria-valuemax", "100");
+    progress.setAttribute("aria-valuenow", String(progressValue));
+    progressBar.style.width = progressValue + "%";
+    progress.append(progressBar);
+    control.append(row, progress);
+    controlSection.append(control);
+
+    const content = [controlSection];
+    if (state.proxyAnalysis) {
+        content.push(...createProxyResult(state.proxyAnalysis));
+    }
+    root.replaceChildren(...content);
+    paintIcons();
+}
+
+function proxyProbeStatus() {
+    if (state.proxyError) {
+        return { text: state.proxyError, color: "bg-red" };
+    }
+    if (state.proxyRunning) {
+        const progress = state.proxySamplesTotal > 0
+            ? " " + state.proxySamplesCompleted + "/" + state.proxySamplesTotal
+            : "";
+        return { text: "Measuring browser RTT" + progress, color: "bg-blue" };
+    }
+    if (state.proxyAnalysis) {
+        return { text: "Measurement complete", color: "bg-green" };
+    }
+    return { text: "Ready", color: "bg-secondary" };
+}
+
+function createProxyResult(analysis) {
+    const measurements = isObject(analysis.measurements) ? analysis.measurements : {};
+    const samples = Array.isArray(measurements.application_rtt_samples_ms)
+        ? measurements.application_rtt_samples_ms
+        : [];
+    const measurementSection = createSection(
+        "Server measured",
+        "Latency comparison",
+        samples.length + " samples"
+    );
+    measurementSection.append(
+        createDetailGrid([
+            ["Client address", valueOr(analysis.client_address, UNAVAILABLE_LABEL), true],
+            ["TCP handshake RTT", formatMilliseconds(measurements.tcp_handshake_rtt_ms), true],
+            ["TLS handshake", formatMilliseconds(measurements.tls_handshake_ms), true],
+            ["Browser RTT", formatMilliseconds(measurements.application_rtt_ms), true],
+            ["RTT gap", formatSignedMilliseconds(measurements.rtt_gap_ms), true],
+            ["Relative gap", formatPercentage(measurements.rtt_gap_percent), true],
+        ]),
+        createProxyChart(measurements)
+    );
+
+    const classification = valueOr(analysis.classification, "Unknown");
+    const tone = proxyTone(classification);
+    const confidence = valueOr(analysis.confidence, UNAVAILABLE_LABEL);
+    const verdictSection = createSection("Heuristic", "Proxy signal", confidence + " confidence");
+    const verdict = create(
+        "article",
+        "proxy-verdict proxy-verdict-" + String(classification).toLowerCase() + " p-3 mb-3"
+    );
+    const title = create("div", "d-flex flex-wrap align-items-center gap-2 mb-2");
+    title.append(
+        create("span", "badge bg-" + tone + "-lt text-" + tone, classification),
+        create("strong", "", confidence + " confidence")
+    );
+    verdict.append(
+        title,
+        create("p", "mb-2", valueOr(analysis.reason, "No analysis was returned.")),
+        create("p", "mb-0 text-secondary small", "Latency is an indicator, not proof of proxy use.")
+    );
+    verdictSection.append(verdict);
+
+    if (samples.length > 0) {
+        const sampleSection = createSection("Raw timing", "WebSocket samples", "Milliseconds");
+        sampleSection.append(
+            createValueNode(samples.map(function (sample) {
+                return formatMilliseconds(sample);
+            }))
+        );
+        return [measurementSection, verdictSection, sampleSection];
+    }
+
+    return [measurementSection, verdictSection];
+}
+
+function createProxyChart(measurements) {
+    const values = [
+        ["TCP handshake RTT", measurements.tcp_handshake_rtt_ms, "tcp"],
+        ["TLS handshake", measurements.tls_handshake_ms, "tls"],
+        ["Browser RTT", measurements.application_rtt_ms, "application"],
+    ].filter(function (entry) {
+        return hasNumericValue(entry[1]);
+    });
+    const chart = create("div", "proxy-chart mt-4");
+    if (values.length === 0) {
+        chart.append(create("span", "text-secondary", "No latency measurements"));
+        return chart;
+    }
+
+    const maximum = Math.max(...values.map(function (entry) {
+        return Number(entry[1]);
+    }), 0.001);
+    values.forEach(function (entry) {
+        const row = create("div", "proxy-chart-row");
+        const track = create("div", "proxy-chart-track");
+        const fill = create("div", "proxy-chart-fill proxy-chart-fill-" + entry[2]);
+        fill.style.width = Math.max(1, Number(entry[1]) / maximum * 100) + "%";
+        track.append(fill);
+        row.append(
+            create("span", "text-secondary small", entry[0]),
+            track,
+            create("code", "font-monospace small text-end", formatMilliseconds(entry[1]))
+        );
+        chart.append(row);
+    });
+    return chart;
+}
+
+function runProxyProbe() {
+    if (state.proxyRunning) {
+        return;
+    }
+
+    resetProxyProbe();
+    state.proxyProgress = 2;
+    state.proxyRunning = true;
+    renderProxy();
+
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const socket = new WebSocket(protocol + "//" + window.location.host + LATENCY_PATH);
+    state.proxySocket = socket;
+    state.proxyTimer = window.setTimeout(function () {
+        failProxyProbe(socket, "Measurement timed out");
+    }, 20_000);
+
+    socket.addEventListener("message", function (event) {
+        let message;
+        try {
+            message = JSON.parse(event.data);
+        } catch (_) {
+            failProxyProbe(socket, "Invalid probe response");
+            return;
+        }
+
+        if (message.type === "probe") {
+            const sequence = Number(message.sequence);
+            const total = Number(message.total);
+            if (!Number.isInteger(sequence) ||
+                !Number.isInteger(total) ||
+                sequence < 1 ||
+                total < 1 ||
+                sequence > total) {
+                failProxyProbe(socket, "Invalid probe sequence");
+                return;
+            }
+
+            socket.send(event.data);
+            state.proxySamplesCompleted = sequence;
+            state.proxySamplesTotal = total;
+            state.proxyProgress = Math.min(90, sequence / total * 90);
+            window.requestAnimationFrame(renderProxy);
+            return;
+        }
+
+        if (message.type === "result" && isObject(message.analysis)) {
+            clearProxyTimer();
+            state.proxyAnalysis = message.analysis;
+            state.proxyError = "";
+            state.proxyProgress = 100;
+            state.proxyRunning = false;
+            renderProxy();
+        }
+    });
+    socket.addEventListener("error", function () {
+        failProxyProbe(socket, "Measurement unavailable");
+    });
+    socket.addEventListener("close", function () {
+        clearProxyTimer();
+        if (state.proxySocket === socket) {
+            state.proxySocket = null;
+        }
+        if (state.proxyRunning) {
+            failProxyProbe(socket, "Measurement disconnected");
+        }
+    });
+}
+
+function resetProxyProbe() {
+    const socket = state.proxySocket;
+    clearProxyTimer();
+    state.proxySocket = null;
+    state.proxyAnalysis = null;
+    state.proxyError = "";
+    state.proxyProgress = 0;
+    state.proxyRunning = false;
+    state.proxySamplesCompleted = 0;
+    state.proxySamplesTotal = 0;
+    socket?.close();
+}
+
+function clearProxyTimer() {
+    window.clearTimeout(state.proxyTimer);
+    state.proxyTimer = null;
+}
+
+function failProxyProbe(socket, message) {
+    if (state.proxySocket !== socket || !state.proxyRunning) {
+        return;
+    }
+
+    state.proxyRunning = false;
+    state.proxyProgress = 0;
+    state.proxyError = message;
+    state.proxySocket = null;
+    socket.close();
+    renderProxy();
+}
+
+function proxyTone(classification) {
+    switch (String(classification).toLowerCase()) {
+        case "likely": return "red";
+        case "possible": return "warning";
+        case "unlikely": return "green";
+        default: return "warning";
+    }
+}
+
+function formatMilliseconds(value) {
+    if (!hasNumericValue(value)) {
+        return UNAVAILABLE_LABEL;
+    }
+    const numeric = Number(value);
+    return numeric.toFixed(3) + " ms";
+}
+
+function formatSignedMilliseconds(value) {
+    if (!hasNumericValue(value)) {
+        return UNAVAILABLE_LABEL;
+    }
+    const numeric = Number(value);
+    return (numeric > 0 ? "+" : "") + numeric.toFixed(3) + " ms";
+}
+
+function formatPercentage(value) {
+    if (!hasNumericValue(value)) {
+        return UNAVAILABLE_LABEL;
+    }
+    const numeric = Number(value);
+    return numeric.toFixed(1) + "%";
+}
+
+function hasNumericValue(value) {
+    return value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
 }
 
 function renderPackets(packets) {
@@ -1865,33 +2237,31 @@ function renderPackets(packets) {
             create(
                 "span",
                 "fw-semibold text-break",
-                valueOr(packet.protocol, "TCP") + " packet"
+                summarizeTcpPacket(packet)
             )
         );
 
         const meta = create("span", "ms-auto text-secondary font-monospace small text-end");
         const endpoints =
-            valueOr(packet.src_ip, "?") + ":" + valueOr(packet.src_port, "?") +
+            valueOr(packet.source, "?") +
             " to " +
-            valueOr(packet.dst_ip, "?") + ":" + valueOr(packet.dst_port, "?");
+            valueOr(packet.destination, "?");
         meta.textContent =
             valueOr(packet.direction, "unknown") + " / " +
-            valueOr(packet.packet_size, 0) + " bytes / " +
+            valueOr(packet.wire_length, 0) + " bytes / " +
             endpoints;
         summary.append(meta);
         details.append(summary);
 
         const payload = withoutKeys(packet, [
-            "protocol",
             "direction",
-            "packet_size",
-            "src_ip",
-            "src_port",
-            "dst_ip",
-            "dst_port",
+            "wire_length",
+            "source",
+            "destination",
+            "timestamp_us",
         ]);
-        if (packet.timestamp !== undefined) {
-            payload.timestamp = formatPacketTime(packet.timestamp);
+        if (packet.timestamp_us !== undefined) {
+            payload.timestamp = formatPacketTime(packet.timestamp_us);
         }
 
         const body = create("div", "border-top bg-body-tertiary p-3 protocol-body");
@@ -1903,6 +2273,14 @@ function renderPackets(packets) {
     return list;
 }
 
+function summarizeTcpPacket(packet) {
+    const tcp = isObject(packet.tcp) ? packet.tcp : {};
+    const flags = isObject(tcp.flags) && Array.isArray(tcp.flags.values)
+        ? tcp.flags.values
+        : [];
+    return flags.length > 0 ? flags.join(" + ") : "TCP packet";
+}
+
 function formatPacketTime(timestamp) {
     const numeric = Number(timestamp);
     if (!Number.isFinite(numeric)) {
@@ -1910,7 +2288,7 @@ function formatPacketTime(timestamp) {
     }
 
     try {
-        return new Date(numeric).toISOString();
+        return new Date(numeric / 1_000).toISOString();
     } catch (_) {
         return String(timestamp);
     }
