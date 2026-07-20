@@ -16,7 +16,6 @@ path = "src/app/main.rs"
 required-features = ["server"]
 
 [features]
-# Build the server binary and its runtime integrations.
 server = [
     "dep:axum",
     "dep:axum-extra",
@@ -49,8 +48,6 @@ server = [
     "dep:tracing-subscriber",
     "dep:unitbus",
 ]
-
-# Select an optional global allocator for the server binary.
 jemalloc = ["jemallocator"]
 tcmalloc = ["tcmalloc/bundled"]
 snmalloc = ["snmalloc-rs"]
