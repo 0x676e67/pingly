@@ -6,6 +6,12 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      docker_tag:
+        description: Image tag for a manual Docker publish
+        required: true
+        default: latest
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}-${{ github.event.pull_request.number || github.sha }}
@@ -150,7 +156,7 @@ jobs:
     name: Build and push Docker image
     runs-on: ubuntu-latest
     needs: ["style"]
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     permissions:
       contents: read
       packages: write
@@ -180,7 +186,8 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           flavor: latest=false
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ github.event_name == 'push' && github.ref_name == github.event.repository.default_branch }}
+            type=raw,value=${{ inputs.docker_tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
             type=semver,pattern={{version}}
 
       - name: Build and push Docker image
