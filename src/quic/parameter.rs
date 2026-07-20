@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 
 use super::varint;
@@ -25,6 +27,7 @@ pub struct QuicTransportParameter {
 /// Semantic name of a QUIC transport parameter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum QuicTransportParameterName {
     /// `original_destination_connection_id` (`0x00`).
     OriginalDestinationConnectionId,
@@ -113,6 +116,7 @@ pub enum QuicTransportParameterName {
 /// Value representation used by a QUIC transport parameter.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum QuicTransportParameterValue {
     /// A QUIC variable-length integer.
     Integer(#[serde(with = "varint::serde")] u64),
@@ -150,6 +154,7 @@ pub struct QuicVersion {
 
 /// Semantic name of a QUIC version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum QuicVersionName {
     /// QUIC version 1 (`0x00000001`).
     Version1,
@@ -418,6 +423,7 @@ pub fn parse_transport_parameters(
 ) -> Result<Vec<QuicTransportParameter>, QuicTransportParameterError> {
     let mut offset = 0usize;
     let mut parameters = Vec::new();
+    let mut parameter_ids = HashSet::new();
 
     while offset < input.len() {
         let (id, id_len) = varint::decode(&input[offset..])
@@ -441,10 +447,7 @@ pub fn parse_transport_parameters(
             .ok_or(QuicTransportParameterError::Incomplete { offset })?;
         offset = end;
 
-        if parameters
-            .iter()
-            .any(|parameter: &QuicTransportParameter| parameter.id == id)
-        {
+        if !parameter_ids.insert(id) {
             return Err(QuicTransportParameterError::Duplicate { id });
         }
 
@@ -570,6 +573,30 @@ mod tests {
             parse_transport_parameters(&[0x01, 0x04, 0x01]),
             Err(QuicTransportParameterError::Incomplete { .. })
         ));
+    }
+
+    #[test]
+    fn transport_parameters_scale_to_many_ids_and_reject_a_late_duplicate() {
+        const PARAMETER_COUNT: u64 = 4_096;
+        const FIRST_ID: u64 = 1 << 40;
+
+        let mut bytes = Vec::new();
+        for index in 0..PARAMETER_COUNT {
+            push_parameter(&mut bytes, FIRST_ID + index * 31, &[]);
+        }
+
+        let parameters = parse_transport_parameters(&bytes).unwrap();
+        assert_eq!(parameters.len(), PARAMETER_COUNT as usize);
+        assert!(parameters
+            .iter()
+            .enumerate()
+            .all(|(index, parameter)| parameter.id == FIRST_ID + index as u64 * 31));
+
+        push_parameter(&mut bytes, FIRST_ID, &[]);
+        assert_eq!(
+            parse_transport_parameters(&bytes).unwrap_err(),
+            QuicTransportParameterError::Duplicate { id: FIRST_ID }
+        );
     }
 
     #[test]

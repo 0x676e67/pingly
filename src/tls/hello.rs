@@ -4,7 +4,7 @@
 //! for the ClientHello layout and [Section 4.3](https://www.rfc-editor.org/rfc/rfc9846.html#section-4.3)
 //! for its extension block.
 
-use std::{borrow::Cow, fmt};
+use std::{borrow::Cow, collections::HashSet, fmt};
 
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use tls_parser::{TlsCipherSuite as ParsedTlsCipherSuite, TlsExtensionType, TlsMessageHandshake};
@@ -1335,11 +1335,9 @@ where
     D: Deserializer<'de>,
 {
     let parameters = Vec::<QuicTransportParameter>::deserialize(deserializer)?;
-    for (index, parameter) in parameters.iter().enumerate() {
-        if parameters[..index]
-            .iter()
-            .any(|candidate| candidate.id == parameter.id)
-        {
+    let mut parameter_ids = HashSet::with_capacity(parameters.len());
+    for parameter in &parameters {
+        if !parameter_ids.insert(parameter.id) {
             return Err(de::Error::custom(format_args!(
                 "duplicate QUIC transport parameter {}",
                 parameter.id
@@ -2968,11 +2966,17 @@ mod tests {
         assert_eq!(&restored, extension);
 
         let mut duplicate = json.clone();
-        let parameter = duplicate["quic_transport_parameters"]["data"][0].clone();
-        duplicate["quic_transport_parameters"]["data"]
+        let parameters = duplicate["quic_transport_parameters"]["data"]
             .as_array_mut()
-            .unwrap()
-            .push(parameter);
+            .unwrap();
+        for index in 0..4_096_u64 {
+            parameters.push(serde_json::json!({
+                "id": (1_u64 << 40) + index * 31,
+                "name": "other",
+                "value": ""
+            }));
+        }
+        parameters.push(parameters[0].clone());
         let mut wrong_id = json;
         wrong_id["quic_transport_parameters"]["value"] = serde_json::json!(58);
         let opaque = serde_json::json!({"opaque": {"value": 57, "data": "040120"}});

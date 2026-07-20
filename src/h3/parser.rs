@@ -155,25 +155,84 @@ pub struct Http3Parser {
 impl Http3Parser {
     /// Creates a parser for a client bidirectional request stream.
     pub fn request() -> Self {
-        Self::with_capacity(StreamKind::Request, DEFAULT_BUFFER_CAPACITY)
+        Self::request_with_capacity(DEFAULT_BUFFER_CAPACITY)
     }
 
     /// Creates a request-stream parser with the requested initial allocation.
     pub fn request_with_capacity(capacity: usize) -> Self {
-        Self::with_capacity(StreamKind::Request, capacity)
+        Self::request_with_capacity_and_limits(
+            capacity,
+            DEFAULT_MAX_FRAME_SIZE,
+            DEFAULT_MAX_FIELD_SECTION_SIZE,
+        )
+    }
+
+    /// Creates a request-stream parser with custom frame and field-section limits.
+    pub fn request_with_limits(max_frame_size: usize, max_field_section_size: u64) -> Self {
+        Self::request_with_capacity_and_limits(
+            DEFAULT_BUFFER_CAPACITY.min(max_frame_size),
+            max_frame_size,
+            max_field_section_size,
+        )
+    }
+
+    /// Creates a request-stream parser with explicit allocation and resource limits.
+    pub fn request_with_capacity_and_limits(
+        capacity: usize,
+        max_frame_size: usize,
+        max_field_section_size: u64,
+    ) -> Self {
+        Self::with_capacity_and_limits(
+            StreamKind::Request,
+            capacity,
+            max_frame_size,
+            max_field_section_size,
+        )
     }
 
     /// Creates a parser for a client-initiated unidirectional stream.
     pub fn unidirectional() -> Self {
-        Self::with_capacity(StreamKind::Unidirectional, DEFAULT_BUFFER_CAPACITY)
+        Self::unidirectional_with_capacity(DEFAULT_BUFFER_CAPACITY)
     }
 
     /// Creates a unidirectional-stream parser with the requested initial allocation.
     pub fn unidirectional_with_capacity(capacity: usize) -> Self {
-        Self::with_capacity(StreamKind::Unidirectional, capacity)
+        Self::unidirectional_with_capacity_and_limits(
+            capacity,
+            DEFAULT_MAX_FRAME_SIZE,
+            DEFAULT_MAX_FIELD_SECTION_SIZE,
+        )
     }
 
-    fn with_capacity(kind: StreamKind, capacity: usize) -> Self {
+    /// Creates a unidirectional-stream parser with custom frame and field-section limits.
+    pub fn unidirectional_with_limits(max_frame_size: usize, max_field_section_size: u64) -> Self {
+        Self::unidirectional_with_capacity_and_limits(
+            DEFAULT_BUFFER_CAPACITY.min(max_frame_size),
+            max_frame_size,
+            max_field_section_size,
+        )
+    }
+
+    /// Creates a unidirectional-stream parser with explicit allocation and resource limits.
+    pub fn unidirectional_with_capacity_and_limits(
+        capacity: usize,
+        max_frame_size: usize,
+        max_field_section_size: u64,
+    ) -> Self {
+        Self::with_capacity_and_limits(
+            StreamKind::Unidirectional,
+            capacity,
+            max_frame_size,
+            max_field_section_size,
+        )
+    }
+
+    fn with_capacity_and_limits(
+        kind: StreamKind,
+        capacity: usize,
+        max_frame_size: usize,
+        max_field_section_size: u64,
+    ) -> Self {
         Self {
             buffer: BytesMut::with_capacity(capacity),
             kind,
@@ -181,15 +240,24 @@ impl Http3Parser {
             ignored: false,
             frame_count: 0,
             request_state: RequestState::Initial,
-            max_frame_size: DEFAULT_MAX_FRAME_SIZE,
-            max_field_section_size: DEFAULT_MAX_FIELD_SECTION_SIZE,
+            max_frame_size,
+            max_field_section_size,
         }
     }
 
-    /// Sets maximum encoded frame and decoded field-section sizes.
-    pub fn set_limits(&mut self, max_frame_size: usize, max_field_section_size: u64) {
-        self.max_frame_size = max_frame_size;
-        self.max_field_section_size = max_field_section_size;
+    /// Returns the current allocation capacity.
+    pub fn capacity(&self) -> usize {
+        self.buffer.capacity()
+    }
+
+    /// Returns the configured maximum encoded frame payload size.
+    pub const fn max_frame_size(&self) -> usize {
+        self.max_frame_size
+    }
+
+    /// Returns the configured maximum decoded QPACK field-section size.
+    pub const fn max_field_section_size(&self) -> u64 {
+        self.max_field_section_size
     }
 
     /// Appends a chunk and returns every frame completed by it.
@@ -443,9 +511,49 @@ mod tests {
 
     use super::{parse_request_stream, parse_unidirectional_stream, Http3ParseError, Http3Parser};
     use crate::{
-        h3::{Frame, FrameType, SettingValue},
+        h3::{Frame, FrameType, Http3FrameError, SettingValue},
         quic::varint,
     };
+
+    #[test]
+    fn configured_constructors_apply_limits_before_input() {
+        let mut frame_limited = Http3Parser::request_with_limits(2, 64);
+        assert!(frame_limited.capacity() >= 2);
+        assert_eq!(frame_limited.max_frame_size(), 2);
+        assert_eq!(frame_limited.max_field_section_size(), 64);
+
+        let error = frame_limited.push(&[0x01, 0x03]).unwrap_err();
+        assert_eq!(
+            error.error(),
+            &Http3ParseError::FrameTooLarge {
+                length: 3,
+                limit: 2,
+            }
+        );
+
+        let parser = Http3Parser::unidirectional_with_capacity_and_limits(4096, 32, 16);
+        assert!(parser.capacity() >= 4096);
+        assert_eq!(parser.max_frame_size(), 32);
+        assert_eq!(parser.max_field_section_size(), 16);
+    }
+
+    #[test]
+    fn configured_field_section_limit_reaches_qpack_decoder() {
+        let headers = [0x01, 0x03, 0x00, 0x00, 0xd1];
+        let mut parser = Http3Parser::request_with_limits(64, 1);
+
+        let error = parser.push(&headers).unwrap_err();
+        assert_eq!(
+            error.error(),
+            &Http3ParseError::Frame(Http3FrameError::QpackDecompression)
+        );
+
+        let mut parser = Http3Parser::request_with_limits(64, 64);
+        assert!(matches!(
+            parser.push(&headers).unwrap().as_slice(),
+            [Frame::Headers(_)]
+        ));
+    }
 
     #[test]
     fn control_stream_settings_accept_arbitrary_chunks() {

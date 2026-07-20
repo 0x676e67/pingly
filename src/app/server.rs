@@ -64,12 +64,18 @@ impl HttpServer<RustlsAcceptor> {
     pub(crate) async fn new(
         bind: SocketAddr,
         keep_alive_timeout: u64,
+        concurrent_limit: usize,
         acceptor: RustlsAcceptor,
         router: Router,
     ) -> Result<Self> {
         let rustls = acceptor.default_config();
         let mut server = Self::bind_tcp(bind, router, keep_alive_timeout, acceptor).await?;
-        server.quic_endpoint = Some(quic::bind(server.tcp_listener.local_addr()?, rustls)?);
+        server.quic_endpoint = Some(quic::bind(
+            server.tcp_listener.local_addr()?,
+            rustls,
+            concurrent_limit,
+            server.close_after_first_request,
+        )?);
         Ok(server)
     }
 
@@ -499,13 +505,29 @@ mod quic {
     const CONNECTION_CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
     const SERVER_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 
+    const MAX_REQUEST_STREAMS_PER_CONNECTION: usize = 128;
+    const MAX_UNIDIRECTIONAL_STREAMS_PER_CONNECTION: u32 = 16;
+    const STREAM_RECEIVE_WINDOW: u32 = 64 * 1024;
+    const CONNECTION_RECEIVE_WINDOW: u32 = 1024 * 1024;
+    const CONNECTION_SEND_WINDOW: u64 = 1024 * 1024;
+
     // HTTP/3 application error codes are carried as QUIC variable-length integers.
     // https://www.rfc-editor.org/rfc/rfc9114#section-8.1
     const H3_NO_ERROR: quinn::VarInt = quinn::VarInt::from_u32(0x100);
 
     /// Binds a QUIC endpoint with H3 ALPN and ClientHello capture.
-    pub(super) fn bind(bind: SocketAddr, rustls: Arc<ServerConfig>) -> Result<quinn::Endpoint> {
-        let config = crypto::server_config((*rustls).clone())?;
+    pub(super) fn bind(
+        bind: SocketAddr,
+        rustls: Arc<ServerConfig>,
+        concurrent_limit: usize,
+        close_after_first_request: bool,
+    ) -> Result<quinn::Endpoint> {
+        let mut config = crypto::server_config((*rustls).clone())?;
+        config.transport_config(transport_config(
+            concurrent_limit,
+            close_after_first_request,
+        ));
+
         if bind.is_ipv6() {
             let socket = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
             socket.set_only_v6(!bind.ip().is_unspecified())?;
@@ -522,6 +544,61 @@ mod quic {
         }
 
         Ok(quinn::Endpoint::server(config, bind)?)
+    }
+
+    /// Builds QUIC flow-control and stream limits for incoming HTTP/3 connections.
+    fn transport_config(
+        concurrent_limit: usize,
+        close_after_first_request: bool,
+    ) -> Arc<quinn::TransportConfig> {
+        let mut config = quinn::TransportConfig::default();
+
+        // Each HTTP/3 request uses a client-initiated bidirectional stream. Capping these streams
+        // also bounds request tasks retained by one connection.
+        // https://www.rfc-editor.org/rfc/rfc9114#section-6.1
+        config.max_concurrent_bidi_streams(request_stream_limit(
+            concurrent_limit,
+            close_after_first_request,
+        ));
+
+        // HTTP/3 needs control and QPACK streams, with spare capacity for GREASE and extensions.
+        // https://www.rfc-editor.org/rfc/rfc9114#section-6.2
+        config.max_concurrent_uni_streams(quinn::VarInt::from_u32(
+            MAX_UNIDIRECTIONAL_STREAMS_PER_CONNECTION,
+        ));
+
+        // QUIC flow-control windows bound buffered request data per stream and connection.
+        // https://www.rfc-editor.org/rfc/rfc9000#section-4.1
+        config
+            .stream_receive_window(quinn::VarInt::from_u32(STREAM_RECEIVE_WINDOW))
+            .receive_window(quinn::VarInt::from_u32(CONNECTION_RECEIVE_WINDOW))
+            .send_window(CONNECTION_SEND_WINDOW);
+
+        Arc::new(config)
+    }
+
+    fn request_stream_limit(
+        concurrent_limit: usize,
+        close_after_first_request: bool,
+    ) -> quinn::VarInt {
+        let per_connection_limit = if close_after_first_request {
+            concurrent_limit.min(1)
+        } else {
+            concurrent_limit.min(MAX_REQUEST_STREAMS_PER_CONNECTION)
+        };
+        let per_connection_limit = u32::try_from(per_connection_limit).unwrap_or(u32::MAX);
+        quinn::VarInt::from_u32(per_connection_limit)
+    }
+
+    /// Builds the HTTP/3 SETTINGS and request field-section policy.
+    fn connection_builder() -> h3::server::Builder {
+        let mut builder = h3::server::builder();
+
+        // SETTINGS_MAX_FIELD_SECTION_SIZE advertises and enforces the decoded request header
+        // bound. RFC 9114 counts each field's name, value, and 32 bytes of overhead.
+        // https://www.rfc-editor.org/rfc/rfc9114#section-4.1.1.3
+        builder.max_field_section_size(MAX_HEADER_LIST_SIZE as u64);
+        builder
     }
 
     /// Accepts QUIC connections until graceful shutdown starts.
@@ -618,9 +695,7 @@ mod quic {
         let capture = Http3Capture::new();
         let inspected =
             InspectedConnection::new(h3_quinn::Connection::new(connection), capture.clone());
-        let mut builder = h3::server::builder();
-        builder.max_field_section_size(MAX_HEADER_LIST_SIZE as u64);
-        let connection = match builder.build(inspected).await {
+        let connection = match connection_builder().build(inspected).await {
             Ok(connection) => connection,
             Err(error) => {
                 tracing::debug!(%error, %remote_addr, "failed to initialize HTTP/3 connection");
@@ -1003,5 +1078,190 @@ mod quic {
                 tracing::debug!(%error, %remote_addr, "HTTP/3 request task failed");
             }
         }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{request_stream_limit, MAX_REQUEST_STREAMS_PER_CONNECTION};
+
+        #[test]
+        fn request_stream_limit_follows_connection_policy() {
+            assert_eq!(
+                request_stream_limit(usize::MAX, false),
+                quinn::VarInt::from_u32(MAX_REQUEST_STREAMS_PER_CONNECTION as u32)
+            );
+            assert_eq!(request_stream_limit(32, false), quinn::VarInt::from_u32(32));
+            assert_eq!(request_stream_limit(32, true), quinn::VarInt::from_u32(1));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        future::poll_fn,
+        net::{Ipv4Addr, SocketAddr},
+        sync::Arc,
+        time::Duration,
+    };
+
+    use axum::http::{header::USER_AGENT, Request, StatusCode};
+    use bytes::Buf;
+    use quinn_proto::crypto::rustls::QuicClientConfig;
+    use rcgen::{CertificateParams, KeyPair, SanType};
+    use tokio::time::timeout;
+    use tokio_rustls::rustls::{
+        pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
+        ClientConfig, RootCertStore, ServerConfig,
+    };
+
+    use super::{
+        routes,
+        tls::rustls::{self, RustlsConfig},
+        Handle, HttpServer, RustlsAcceptor,
+    };
+
+    #[tokio::test]
+    async fn http3_server_serves_analysis_and_shuts_down_cleanly() {
+        timeout(Duration::from_secs(10), run_http3_server_test())
+            .await
+            .expect("HTTP/3 integration test timed out");
+    }
+
+    async fn run_http3_server_test() {
+        let (acceptor, certificate) = test_acceptor();
+        let server = HttpServer::new(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            0,
+            1,
+            acceptor,
+            test_router(),
+        )
+        .await
+        .expect("HTTP server should bind");
+        let server_addr = server
+            .tcp_listener
+            .local_addr()
+            .expect("bound server address should be available");
+        let handle = Handle::new();
+        let server_handle = handle.clone();
+        let server_task = tokio::spawn(server.serve(server_handle));
+
+        let mut endpoint = quinn::Endpoint::client(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .expect("QUIC client endpoint should bind");
+        endpoint.set_default_client_config(test_client_config(certificate));
+        let transport = endpoint
+            .connect(server_addr, "localhost")
+            .expect("QUIC connection should start")
+            .await
+            .expect("QUIC handshake should complete");
+        let transport_handle = transport.clone();
+        let (mut driver, mut send_request) = h3::client::new(h3_quinn::Connection::new(transport))
+            .await
+            .expect("HTTP/3 client should initialize");
+        let driver_task = tokio::spawn(async move { poll_fn(|cx| driver.poll_close(cx)).await });
+
+        let request = Request::get(format!(
+            "https://localhost:{}/api/http3",
+            server_addr.port()
+        ))
+        .header(USER_AGENT, "pingly-http3-integration")
+        .body(())
+        .expect("HTTP/3 request should build");
+        let mut stream = send_request
+            .send_request(request)
+            .await
+            .expect("HTTP/3 request should start");
+        stream.finish().await.expect("HTTP/3 request should finish");
+
+        let response = stream
+            .recv_response()
+            .await
+            .expect("HTTP/3 response headers should arrive");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let mut body = Vec::new();
+        while let Some(mut chunk) = stream
+            .recv_data()
+            .await
+            .expect("HTTP/3 response body should be readable")
+        {
+            let remaining = chunk.remaining();
+            body.extend_from_slice(&chunk.copy_to_bytes(remaining));
+        }
+        let analysis: serde_json::Value =
+            serde_json::from_slice(&body).expect("analysis response should be JSON");
+
+        assert_eq!(analysis["http_version"], "HTTP/3.0");
+        assert_eq!(analysis["http3"]["settings"]["frame_type"], "Settings");
+        assert_eq!(analysis["http3"]["headers"]["frame_type"], "Headers");
+        assert!(analysis["http3"]["h3_text"].is_string());
+        assert!(analysis["http3"]["headers"]["headers"]
+            .as_array()
+            .expect("captured headers should be an array")
+            .iter()
+            .any(|field| field["name"] == ":method" && field["value"] == "GET"));
+
+        drop(stream);
+        drop(send_request);
+        handle.request_graceful_shutdown();
+        transport_handle.close(quinn::VarInt::from_u32(0x100), b"test complete");
+
+        timeout(Duration::from_secs(5), driver_task)
+            .await
+            .expect("HTTP/3 client driver should stop")
+            .expect("HTTP/3 client driver task should not panic");
+        timeout(Duration::from_secs(5), server_task)
+            .await
+            .expect("HTTP server should stop")
+            .expect("HTTP server task should not panic")
+            .expect("HTTP server should shut down cleanly");
+
+        endpoint.close(quinn::VarInt::from_u32(0x100), b"test complete");
+        endpoint.wait_idle().await;
+    }
+
+    fn test_acceptor() -> (RustlsAcceptor, CertificateDer<'static>) {
+        let mut params = CertificateParams::default();
+        params.subject_alt_names = vec![SanType::DnsName(
+            "localhost".try_into().expect("valid DNS name"),
+        )];
+        let key_pair = KeyPair::generate().expect("key generation should succeed");
+        let certificate = params
+            .self_signed(&key_pair)
+            .expect("certificate generation should succeed");
+        let certificate_der = certificate.der().clone();
+        let private_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_pair.serialize_der()));
+        let mut config = ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(vec![certificate_der.clone()], private_key)
+            .expect("server certificate should be valid");
+        rustls::set_http_alpn_protocols(&mut config);
+        let config = RustlsConfig::from_config(Arc::new(config));
+
+        (RustlsAcceptor::new(config), certificate_der)
+    }
+
+    fn test_client_config(certificate: CertificateDer<'static>) -> quinn::ClientConfig {
+        let mut roots = RootCertStore::empty();
+        roots
+            .add(certificate)
+            .expect("server certificate should be trusted");
+        let mut config = ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        config.alpn_protocols = vec![b"h3".to_vec()];
+        let config = QuicClientConfig::try_from(config)
+            .expect("rustls client configuration should support QUIC");
+
+        quinn::ClientConfig::new(Arc::new(config))
+    }
+
+    fn test_router() -> axum::Router {
+        #[cfg(target_os = "linux")]
+        return routes::router(None);
+
+        #[cfg(not(target_os = "linux"))]
+        routes::router()
     }
 }
