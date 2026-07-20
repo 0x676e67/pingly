@@ -6,15 +6,15 @@ RUN apk add --no-cache build-base libpcap-dev
 
 WORKDIR /usr/src/pingly
 
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml ./
 COPY src ./src
 
-RUN cargo build --locked --release --no-default-features --features server,mimalloc
+RUN cargo build --release --no-default-features --features server,mimalloc
 
 FROM alpine:3.22 AS runtime
 
 LABEL org.opencontainers.image.source="https://github.com/0x676e67/pingly" \
-      org.opencontainers.image.description="TLS and HTTP/1/2 fingerprint analysis server" \
+      org.opencontainers.image.description="TLS and HTTP/1/2/3 fingerprint analysis server" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 RUN apk add --no-cache ca-certificates libpcap \
@@ -35,7 +35,7 @@ WORKDIR /var/lib/pingly
 USER 10001:10001
 
 VOLUME ["/var/lib/pingly"]
-EXPOSE 8181 8080
+EXPOSE 8181/tcp 8181/udp 8080/tcp
 STOPSIGNAL SIGTERM
 
 ENTRYPOINT ["/usr/local/bin/pingly"]
