@@ -291,10 +291,8 @@
         ]
     },
     "http3": {
-        "h3_text": "1:65536;7:20;727725890:0;16765559:1;51:1;8:1",
-        "h3_text_hash": "34c3279479c69f958141255a9cac2de1",
-        "normalized_h3_text": "1:65536;7:20;8:1;51:1;16765559:1;727725890:0",
-        "normalized_h3_text_hash": "d6f515b95e8d014a761c3df92d3408f6",
+        "h3_text": "1:65536;7:20;8:1;51:1;16765559:1;727725890:0|m,s,a,p",
+        "h3_text_hash": "32b52289d7beca6748608aadb7b91846",
         "settings": {
             "frame_type": "Settings",
             "length": 21,

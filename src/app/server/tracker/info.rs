@@ -279,8 +279,8 @@ impl Http3TrackInfo {
     /// Builds HTTP/3 analysis only after both client frames have been captured.
     fn new(capture: Http3RequestCapture) -> Option<Self> {
         let settings = capture.settings.get()?;
-        capture.headers.get()?;
-        let fingerprint = Http3Fingerprint::from_settings(&settings.settings);
+        let headers = capture.headers.get()?;
+        let fingerprint = Http3Fingerprint::from_frames(settings, headers);
 
         Some(Self {
             fingerprint,
@@ -624,8 +624,8 @@ mod tests {
         let http3 = analysis.http3.unwrap();
         let value = serde_json::to_value(http3).unwrap();
 
-        assert_eq!(value["h3_text"], "1:65536");
-        assert_eq!(value["normalized_h3_text"], "1:65536");
+        assert_eq!(value["h3_text"], "1:65536|m,p");
+        assert_eq!(value["h3_text_hash"], "7b9ae05c41a8dab63ad54ead553ed227");
         assert_eq!(
             value["settings"]["settings"][0]["name"],
             "QpackMaxTableCapacity"
@@ -641,6 +641,8 @@ mod tests {
             .is_some_and(|ja4_r| ja4_r.starts_with('q')));
         assert!(value.get("fingerprint").is_none());
         assert!(value.get("normalized_fingerprint").is_none());
+        assert!(value.get("normalized_h3_text").is_none());
+        assert!(value.get("normalized_h3_text_hash").is_none());
         assert!(value.get("quic_transport_parameters").is_none());
     }
 

@@ -1223,12 +1223,6 @@ function renderHttp3(http3, tls) {
             http3.h3_text_hash,
             http3.h3_text
         ),
-        fingerprintItem(
-            "HTTP/3 normalized",
-            "blue",
-            http3.normalized_h3_text_hash,
-            http3.normalized_h3_text
-        ),
     ]);
 
     const settingsSection = createSection(

@@ -145,7 +145,8 @@ fn assert_http3_browser_sample(sample: &Http3BrowserSample) {
         "{} HTTP/3 QUIC transport parameters",
         sample.name
     );
-    let calculated = Http3Fingerprint::from_settings(&response.http3.settings.settings);
+    let calculated =
+        Http3Fingerprint::from_frames(&response.http3.settings, &response.http3.headers);
 
     assert_eq!(
         calculated, response.http3.fingerprint,
