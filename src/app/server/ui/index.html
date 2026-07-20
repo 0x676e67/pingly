@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" style="scrollbar-gutter: stable">
+<html lang="en">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -152,6 +152,12 @@
         href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='10' fill='%23212830' stroke='%233d444d' stroke-width='2'/%3E%3Ctext x='32' y='43' text-anchor='middle' font-family='Arial,sans-serif' font-size='34' font-weight='700' fill='%23f0f6fc'%3EP%3C/text%3E%3C/svg%3E"
     >
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap"
+    >
     <link
         rel="stylesheet"
         href="https://cdn.jsdelivr.net/npm/@primer/primitives@11.7.1/dist/css/functional/themes/light.css"
@@ -181,6 +187,484 @@
         referrerpolicy="no-referrer"
     >
     <style>
+        :root {
+            --pingly-content-width: 1180px;
+            --pingly-header-height: 64px;
+            --pingly-radius: 6px;
+            --pingly-sidebar-width: 12.5rem;
+            --pingly-font-sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            --pingly-font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+            margin-left: 0;
+            margin-right: 0;
+        }
+
+        *,
+        *::before,
+        *::after {
+            letter-spacing: 0 !important;
+        }
+
+        html,
+        body {
+            min-height: 100%;
+        }
+
+        html {
+            overflow-y: scroll;
+            background: var(--bgColor-inset);
+        }
+
+        body {
+            background: var(--bgColor-inset);
+            color: var(--fgColor-default);
+            font-family: var(--pingly-font-sans);
+        }
+
+        code,
+        pre,
+        .font-monospace {
+            font-family: var(--pingly-font-mono) !important;
+        }
+
+        code {
+            color: var(--fgColor-accent);
+        }
+
+        .pingly-header {
+            min-height: var(--pingly-header-height);
+            background: var(--bgColor-default) !important;
+            border-color: var(--borderColor-muted) !important;
+        }
+
+        .pingly-header-inner {
+            min-height: 63px;
+            padding-inline: clamp(1rem, 2vw, 1.75rem);
+        }
+
+        .pingly-brand-mark {
+            display: inline-grid;
+            width: 2.25rem;
+            height: 2.25rem;
+            place-items: center;
+            border: 1px solid var(--borderColor-emphasis);
+            border-radius: var(--pingly-radius);
+            background: var(--fgColor-default);
+            color: var(--bgColor-default);
+            font-size: 1rem;
+            font-weight: 700;
+        }
+
+        .pingly-brand-copy strong {
+            color: var(--fgColor-default);
+            font-size: 1rem;
+        }
+
+        .pingly-brand-copy small {
+            color: var(--fgColor-muted);
+            font-size: .75rem;
+        }
+
+        .toolbar-button {
+            width: 2.25rem;
+            height: 2.25rem;
+            border-radius: var(--pingly-radius);
+        }
+
+        .pingly-sidebar {
+            width: var(--pingly-sidebar-width);
+            flex: 0 0 var(--pingly-sidebar-width);
+            min-width: 0;
+            height: calc(100vh - var(--pingly-header-height));
+            height: calc(100dvh - var(--pingly-header-height));
+            background: var(--bgColor-default) !important;
+            border-color: var(--borderColor-muted) !important;
+            overflow: hidden;
+        }
+
+        .pingly-sidebar > div,
+        .pingly-nav {
+            min-height: 0;
+        }
+
+        .pingly-nav {
+            margin: 0;
+            padding: .5rem 0 !important;
+        }
+
+        .pingly-nav .list-group-item {
+            width: 100%;
+            min-height: 2.5rem;
+            margin: 0;
+            padding: .5rem .875rem .5rem .75rem;
+            border: 0;
+            border-left: 3px solid transparent;
+            border-radius: 0 !important;
+            background: transparent;
+            color: var(--fgColor-muted);
+            font-weight: 500;
+        }
+
+        .pingly-nav .list-group-item:hover {
+            background: var(--button-default-bgColor-hover);
+            color: var(--fgColor-default);
+        }
+
+        .pingly-nav .list-group-item.active {
+            border-left-color: var(--borderColor-accent-emphasis);
+            background: var(--button-default-bgColor-active);
+            color: var(--fgColor-default);
+        }
+
+        .pingly-nav .list-group-item .icon {
+            width: 1.1rem;
+            height: 1.1rem;
+        }
+
+        #main-content {
+            width: calc(100% - var(--pingly-sidebar-width));
+            flex: 1 1 0;
+            min-width: 0;
+            background: var(--bgColor-inset);
+        }
+
+        .pingly-page-body {
+            min-height: calc(100vh - var(--pingly-header-height));
+            min-height: calc(100dvh - var(--pingly-header-height));
+        }
+
+        .pingly-content {
+            width: min(100%, var(--pingly-content-width));
+            margin-inline: auto;
+            padding: clamp(1.5rem, 3vw, 2.5rem) clamp(1rem, 2.5vw, 2rem) !important;
+        }
+
+        .workspace-header {
+            margin-bottom: 1.5rem !important;
+        }
+
+        .workspace-header .page-title {
+            color: var(--fgColor-default);
+            font-size: 1.75rem;
+            font-weight: 600;
+            line-height: 1.2;
+        }
+
+        .page-pretitle {
+            color: var(--fgColor-accent);
+            font-size: .72rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .capture-time {
+            display: inline-flex;
+            align-items: center;
+            min-height: 2rem;
+            padding: .35rem .65rem;
+            border: 1px solid var(--borderColor-muted);
+            border-radius: var(--pingly-radius);
+            background: var(--bgColor-default);
+        }
+
+        .connection-summary {
+            margin-bottom: 2.5rem;
+            border: 1px solid var(--borderColor-default);
+            border-radius: var(--pingly-radius);
+            background: var(--bgColor-default);
+            overflow: hidden;
+        }
+
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+        }
+
+        .summary-item {
+            min-width: 0;
+            padding: 1rem;
+            border-right: 1px solid var(--borderColor-muted);
+        }
+
+        .summary-item:last-child {
+            border-right: 0;
+        }
+
+        .summary-icon {
+            display: inline-grid;
+            width: 2.25rem;
+            height: 2.25rem;
+            flex: 0 0 2.25rem;
+            place-items: center;
+            border: 1px solid currentColor;
+            border-radius: var(--pingly-radius);
+            background: var(--bgColor-muted);
+        }
+
+        .summary-icon .icon {
+            width: 1.1rem;
+            height: 1.1rem;
+        }
+
+        .analysis-section {
+            margin-bottom: 2.75rem !important;
+        }
+
+        .section-heading {
+            margin-bottom: 1rem !important;
+            padding-bottom: .75rem !important;
+            border-color: var(--borderColor-muted) !important;
+        }
+
+        .section-heading h2 {
+            color: var(--fgColor-default);
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+
+        .fingerprint-card {
+            border-color: var(--borderColor-default);
+            border-radius: var(--pingly-radius);
+            background: var(--bgColor-default);
+            box-shadow: none;
+            overflow: hidden;
+        }
+
+        .fingerprint-card::before {
+            display: block;
+            height: 3px;
+            background: var(--pingly-fingerprint-accent, var(--fgColor-accent));
+            content: "";
+        }
+
+        .fingerprint-card-blue {
+            --pingly-fingerprint-accent: var(--fgColor-accent);
+        }
+
+        .fingerprint-card-green {
+            --pingly-fingerprint-accent: var(--fgColor-success);
+        }
+
+        .fingerprint-card-orange {
+            --pingly-fingerprint-accent: var(--fgColor-severe);
+        }
+
+        .fingerprint-card-purple {
+            --pingly-fingerprint-accent: var(--fgColor-done);
+        }
+
+        .fingerprint-label {
+            border: 1px solid currentColor;
+            border-radius: 999px;
+            font-size: .72rem;
+            font-weight: 600;
+        }
+
+        .fingerprint-value-box {
+            min-height: 2.75rem;
+            border-left-color: var(--pingly-fingerprint-accent) !important;
+            background: var(--bgColor-muted);
+        }
+
+        .fingerprint-source {
+            border-color: var(--borderColor-muted) !important;
+        }
+
+        .fingerprint-source code {
+            display: block;
+            min-width: 0;
+            padding: .65rem .75rem;
+            border: 1px solid var(--borderColor-muted);
+            border-radius: 4px;
+            background: var(--bgColor-muted);
+            color: var(--fgColor-accent);
+            line-height: 1.55;
+        }
+
+        .detail-grid {
+            display: grid !important;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 1px;
+            border-color: var(--borderColor-default) !important;
+            border-radius: var(--pingly-radius) !important;
+            background: var(--borderColor-muted);
+        }
+
+        .detail-item {
+            width: auto;
+            padding: 1rem !important;
+            border: 0 !important;
+            background: var(--bgColor-default);
+        }
+
+        .data-table-wrap {
+            border-color: var(--borderColor-default) !important;
+            border-radius: var(--pingly-radius) !important;
+            background: var(--bgColor-default);
+        }
+
+        .data-table {
+            --tblr-table-hover-bg: var(--bgColor-neutral-muted);
+        }
+
+        .data-table thead {
+            background: var(--bgColor-muted);
+        }
+
+        .data-table thead th {
+            border-bottom-color: var(--borderColor-default);
+            background: transparent;
+            color: var(--fgColor-muted) !important;
+            font-size: .7rem;
+            font-weight: 600;
+        }
+
+        .data-table tbody td {
+            border-color: var(--borderColor-muted);
+        }
+
+        .protocol-list {
+            border: 1px solid var(--borderColor-default);
+            border-radius: var(--pingly-radius);
+            background: var(--bgColor-default);
+            overflow: hidden;
+        }
+
+        .protocol-item {
+            border: 0;
+            border-bottom: 1px solid var(--borderColor-muted);
+            background: var(--bgColor-default);
+        }
+
+        .protocol-item:last-child {
+            border-bottom: 0;
+        }
+
+        .protocol-summary {
+            min-height: 3.25rem;
+        }
+
+        .protocol-summary:hover,
+        .protocol-item[open] > .protocol-summary {
+            background: var(--bgColor-neutral-muted);
+        }
+
+        .protocol-body {
+            border-color: var(--borderColor-muted) !important;
+            background: var(--bgColor-muted) !important;
+        }
+
+        .protocol-token,
+        .route-method {
+            border: 1px solid var(--borderColor-accent-muted);
+            border-radius: 999px;
+            background: var(--bgColor-accent-muted) !important;
+            color: var(--fgColor-accent) !important;
+            font-weight: 500;
+        }
+
+        .json-card {
+            border-color: var(--borderColor-default);
+            border-radius: var(--pingly-radius);
+            box-shadow: none;
+            overflow: hidden;
+        }
+
+        .json-header {
+            border-color: var(--borderColor-muted);
+            background: var(--bgColor-default);
+        }
+
+        .json-route-options {
+            padding: .25rem;
+            border: 1px solid var(--borderColor-muted);
+            border-radius: var(--pingly-radius);
+            background: var(--bgColor-muted);
+        }
+
+        .json-route-options .nav-link {
+            position: relative;
+            border: 1px solid transparent;
+            border-radius: 4px;
+            color: var(--fgColor-muted);
+            font-size: .78rem;
+            font-weight: 500;
+        }
+
+        .json-route-options .nav-link:hover {
+            color: var(--fgColor-default);
+        }
+
+        .json-route-options .nav-link.active {
+            border-color: var(--borderColor-default);
+            background: var(--bgColor-default);
+            color: var(--fgColor-accent);
+        }
+
+        .json-route-options .nav-link:disabled {
+            opacity: 1;
+        }
+
+        .json-route-option-label,
+        .json-route-spinner {
+            transition: opacity 80ms ease;
+        }
+
+        .json-route-spinner {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: .75rem;
+            height: .75rem;
+            margin: -.375rem 0 0 -.375rem;
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .json-route-options .nav-link.is-loading {
+            cursor: wait;
+        }
+
+        .json-route-options .nav-link.is-loading .json-route-option-label {
+            opacity: 0;
+        }
+
+        .json-route-options .nav-link.is-loading .json-route-spinner {
+            opacity: 1;
+        }
+
+        .json-code {
+            max-height: 70vh;
+            border: 0;
+            background: var(--bgColor-muted) !important;
+            color: var(--fgColor-default);
+            font-size: .78rem;
+            line-height: 1.65;
+        }
+
+        .pingly-footer {
+            border-top: 1px solid var(--borderColor-muted);
+        }
+
+        @media (max-width: 1199.98px) {
+            .summary-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .summary-item:nth-child(2) {
+                border-right: 0;
+            }
+
+            .summary-item:nth-child(-n + 2) {
+                border-bottom: 1px solid var(--borderColor-muted);
+            }
+        }
+
+        @media (max-width: 991.98px) {
+            .detail-grid {
+                grid-template-columns: minmax(0, 1fr);
+            }
+        }
+
         @media (max-width: 767.98px) {
             #analysis-sidebar {
                 position: fixed;
@@ -188,7 +672,8 @@
                 bottom: 0;
                 left: 0;
                 z-index: 1025;
-                width: min(20rem, calc(100vw - 3rem));
+                width: min(15rem, calc(100vw - 3rem));
+                flex-basis: auto;
                 height: calc(100vh - var(--pingly-header-height, 0px));
                 height: calc(100dvh - var(--pingly-header-height, 0px));
                 max-width: none;
@@ -217,6 +702,43 @@
             body.mobile-sidebar-open {
                 overflow: hidden;
             }
+
+            #main-content {
+                width: 100%;
+            }
+
+            .pingly-content {
+                padding-top: 1.25rem !important;
+            }
+
+            .workspace-header .page-title {
+                font-size: 1.5rem;
+            }
+
+            .summary-grid {
+                grid-template-columns: minmax(0, 1fr);
+            }
+
+            .summary-item,
+            .summary-item:nth-child(2) {
+                border-right: 0;
+                border-bottom: 1px solid var(--borderColor-muted);
+            }
+
+            .summary-item:last-child {
+                border-bottom: 0;
+            }
+
+            .protocol-summary {
+                align-items: flex-start !important;
+                flex-wrap: wrap;
+            }
+
+            .protocol-summary > .ms-auto {
+                width: 100%;
+                margin-left: 0 !important;
+                text-align: left !important;
+            }
         }
 
         @media (prefers-reduced-motion: reduce) {
@@ -233,7 +755,7 @@
         referrerpolicy="no-referrer"
     ></script>
 </head>
-<body>
+<body class="pingly-app">
     <a
         class="visually-hidden-focusable position-absolute top-0 start-0 z-3 m-2 btn btn-primary"
         href="#main-content"
@@ -243,12 +765,12 @@
 
     <div class="page">
         <header
-            class="navbar navbar-expand-md d-print-none border-bottom bg-body sticky-top"
+            class="navbar navbar-expand-md d-print-none border-bottom bg-body sticky-top pingly-header"
             id="app-header"
         >
-            <div class="container-fluid flex-nowrap">
+            <div class="container-fluid flex-nowrap pingly-header-inner">
                 <button
-                    class="btn btn-icon btn-outline-secondary d-md-none flex-shrink-0 me-2"
+                    class="btn btn-icon btn-outline-secondary d-md-none flex-shrink-0 me-2 toolbar-button"
                     id="sidebar-toggle"
                     type="button"
                     title="Open analysis navigation"
@@ -260,14 +782,14 @@
                 </button>
 
                 <a
-                    class="navbar-brand d-flex align-items-center gap-2 m-0 text-decoration-none"
+                    class="navbar-brand d-flex align-items-center gap-2 m-0 text-decoration-none pingly-brand"
                     href="/"
                     aria-label="Pingly home"
                 >
-                    <span class="avatar avatar-sm bg-body-tertiary text-body border fw-bold" aria-hidden="true">
+                    <span class="pingly-brand-mark" aria-hidden="true">
                         P
                     </span>
-                    <span class="d-flex flex-column lh-sm">
+                    <span class="d-flex flex-column lh-sm pingly-brand-copy">
                         <strong>Pingly</strong>
                         <small class="text-secondary d-none d-lg-block">Protocol Inspector</small>
                     </span>
@@ -289,7 +811,7 @@
                     </span>
 
                     <button
-                        class="btn btn-icon btn-outline-secondary"
+                        class="btn btn-icon btn-outline-secondary toolbar-button"
                         id="theme-button"
                         type="button"
                         title="Toggle color theme"
@@ -299,7 +821,7 @@
                     </button>
 
                     <button
-                        class="btn btn-icon btn-outline-secondary d-none d-sm-inline-flex"
+                        class="btn btn-icon btn-outline-secondary d-none d-sm-inline-flex toolbar-button"
                         id="download-button"
                         type="button"
                         title="Download analysis JSON"
@@ -310,7 +832,7 @@
                     </button>
 
                     <a
-                        class="btn btn-icon btn-outline-secondary"
+                        class="btn btn-icon btn-outline-secondary toolbar-button"
                         href="https://github.com/0x676e67/pingly"
                         target="_blank"
                         rel="noreferrer"
@@ -335,20 +857,20 @@
             <div class="container-fluid p-0">
                 <div class="row g-0 align-items-stretch">
                     <aside
-                        class="col-12 col-md-3 col-lg-2 border-end bg-body align-self-start"
+                        class="border-end align-self-start pingly-sidebar"
                         id="analysis-sidebar"
                         aria-label="Analysis views"
                         aria-hidden="true"
                     >
                         <div class="d-flex flex-column w-100">
                             <nav
-                                class="list-group list-group-transparent flex-column flex-nowrap gap-1 overflow-auto p-2 w-100"
+                                class="list-group flex-column flex-nowrap overflow-auto w-100 pingly-nav"
                                 id="analysis-nav"
                                 role="tablist"
                                 aria-orientation="vertical"
                             >
                                 <button
-                                    class="list-group-item list-group-item-action active d-flex align-items-center gap-2 flex-shrink-0 rounded-2 text-start"
+                                    class="list-group-item list-group-item-action active d-flex align-items-center gap-2 flex-shrink-0 text-start"
                                     type="button"
                                     role="tab"
                                     aria-selected="true"
@@ -359,7 +881,7 @@
                                     <span>Overview</span>
                                 </button>
                                 <button
-                                    class="list-group-item list-group-item-action d-flex align-items-center gap-2 flex-shrink-0 rounded-2 text-start"
+                                    class="list-group-item list-group-item-action d-flex align-items-center gap-2 flex-shrink-0 text-start"
                                     type="button"
                                     role="tab"
                                     aria-selected="false"
@@ -371,7 +893,7 @@
                                     <span class="badge bg-secondary-lt text-secondary ms-auto" id="tls-count">0</span>
                                 </button>
                                 <button
-                                    class="list-group-item list-group-item-action d-flex align-items-center gap-2 flex-shrink-0 rounded-2 text-start"
+                                    class="list-group-item list-group-item-action d-flex align-items-center gap-2 flex-shrink-0 text-start"
                                     type="button"
                                     role="tab"
                                     aria-selected="false"
@@ -383,7 +905,7 @@
                                     <span class="badge bg-secondary-lt text-secondary ms-auto" id="http-count">0</span>
                                 </button>
                                 <button
-                                    class="list-group-item list-group-item-action d-flex align-items-center gap-2 flex-shrink-0 rounded-2 text-start"
+                                    class="list-group-item list-group-item-action d-flex align-items-center gap-2 flex-shrink-0 text-start"
                                     type="button"
                                     role="tab"
                                     aria-selected="false"
@@ -395,7 +917,19 @@
                                     <span class="badge bg-secondary-lt text-secondary ms-auto" id="h2-count">0</span>
                                 </button>
                                 <button
-                                    class="list-group-item list-group-item-action d-flex align-items-center gap-2 flex-shrink-0 rounded-2 text-start"
+                                    class="list-group-item list-group-item-action d-flex align-items-center gap-2 flex-shrink-0 text-start"
+                                    type="button"
+                                    role="tab"
+                                    aria-selected="false"
+                                    aria-controls="panel-h3"
+                                    data-view="h3"
+                                >
+                                    <i class="icon" data-lucide="radio-tower" aria-hidden="true"></i>
+                                    <span>HTTP/3</span>
+                                    <span class="badge bg-secondary-lt text-secondary ms-auto" id="h3-count">0</span>
+                                </button>
+                                <button
+                                    class="list-group-item list-group-item-action d-flex align-items-center gap-2 flex-shrink-0 text-start"
                                     type="button"
                                     role="tab"
                                     aria-selected="false"
@@ -407,7 +941,7 @@
                                     <span class="badge bg-secondary-lt text-secondary ms-auto" id="tcp-count">0</span>
                                 </button>
                                 <button
-                                    class="list-group-item list-group-item-action d-flex align-items-center gap-2 flex-shrink-0 rounded-2 text-start"
+                                    class="list-group-item list-group-item-action d-flex align-items-center gap-2 flex-shrink-0 text-start"
                                     type="button"
                                     role="tab"
                                     aria-selected="false"
@@ -421,9 +955,9 @@
                         </div>
                     </aside>
 
-                    <main id="main-content" class="col-12 col-md-9 col-lg-10" tabindex="-1">
-                        <div class="page-body m-0">
-                            <div class="container-xl py-4">
+                    <main id="main-content" tabindex="-1">
+                        <div class="page-body m-0 pingly-page-body">
+                            <div class="container-xl py-4 pingly-content">
                                 <section class="placeholder-glow" id="loading-state" aria-live="polite">
                                     <div class="d-flex justify-content-between align-items-center mb-4">
                                         <span class="placeholder col-4"></span>
@@ -465,75 +999,61 @@
                                 </section>
 
                                 <div id="analysis-workspace" hidden>
-                                    <div class="page-header d-print-none mb-4">
+                                    <div class="page-header d-print-none mb-4 workspace-header">
                                         <div class="row align-items-start g-2">
                                             <div class="col-12 col-sm">
                                                 <div class="page-pretitle" id="view-eyebrow">Current request</div>
                                                 <h1 class="page-title" id="view-title">Connection analysis</h1>
                                             </div>
                                             <div class="col-12 col-sm-auto ms-sm-auto">
-                                                <time class="text-secondary font-monospace small" id="captured-at"></time>
+                                                <time class="text-secondary font-monospace small capture-time" id="captured-at"></time>
                                             </div>
                                         </div>
                                     </div>
 
-                                    <section class="row row-cards mb-4" aria-label="Connection summary">
-                                        <div class="col-sm-6 col-xl-3">
-                                            <article class="card card-sm h-100">
-                                                <div class="card-body">
-                                                    <div class="d-flex align-items-start gap-3">
-                                                        <span class="avatar avatar-sm bg-blue-lt text-blue flex-shrink-0" aria-hidden="true">
-                                                            <i class="icon" data-lucide="map-pin"></i>
-                                                        </span>
-                                                        <div class="flex-fill overflow-hidden">
-                                                            <div class="text-secondary small fw-medium mb-1">Remote address</div>
-                                                            <strong class="font-monospace text-break" id="summary-address">Unavailable</strong>
-                                                        </div>
+                                    <section class="connection-summary" aria-label="Connection summary">
+                                        <div class="summary-grid">
+                                            <article class="summary-item">
+                                                <div class="d-flex align-items-start gap-3">
+                                                    <span class="summary-icon text-blue" aria-hidden="true">
+                                                        <i class="icon" data-lucide="map-pin"></i>
+                                                    </span>
+                                                    <div class="flex-fill overflow-hidden">
+                                                        <div class="text-secondary small fw-medium mb-1">Remote address</div>
+                                                        <strong class="font-monospace text-break" id="summary-address">Unavailable</strong>
                                                     </div>
                                                 </div>
                                             </article>
-                                        </div>
-                                        <div class="col-sm-6 col-xl-3">
-                                            <article class="card card-sm h-100">
-                                                <div class="card-body">
-                                                    <div class="d-flex align-items-start gap-3">
-                                                        <span class="avatar avatar-sm bg-orange-lt text-orange flex-shrink-0" aria-hidden="true">
-                                                            <i class="icon" data-lucide="arrow-up-right"></i>
-                                                        </span>
-                                                        <div class="flex-fill overflow-hidden">
-                                                            <div class="text-secondary small fw-medium mb-1">Request</div>
-                                                            <strong class="font-monospace text-break" id="summary-http">Unavailable</strong>
-                                                        </div>
+                                            <article class="summary-item">
+                                                <div class="d-flex align-items-start gap-3">
+                                                    <span class="summary-icon text-orange" aria-hidden="true">
+                                                        <i class="icon" data-lucide="arrow-up-right"></i>
+                                                    </span>
+                                                    <div class="flex-fill overflow-hidden">
+                                                        <div class="text-secondary small fw-medium mb-1">Request</div>
+                                                        <strong class="font-monospace text-break" id="summary-http">Unavailable</strong>
                                                     </div>
                                                 </div>
                                             </article>
-                                        </div>
-                                        <div class="col-sm-6 col-xl-3">
-                                            <article class="card card-sm h-100">
-                                                <div class="card-body">
-                                                    <div class="d-flex align-items-start gap-3">
-                                                        <span class="avatar avatar-sm bg-green-lt text-green flex-shrink-0" aria-hidden="true">
-                                                            <i class="icon" data-lucide="shield-check"></i>
-                                                        </span>
-                                                        <div class="flex-fill overflow-hidden">
-                                                            <div class="text-secondary small fw-medium mb-1">Negotiated TLS</div>
-                                                            <strong class="font-monospace text-break" id="summary-tls">Unavailable</strong>
-                                                        </div>
+                                            <article class="summary-item">
+                                                <div class="d-flex align-items-start gap-3">
+                                                    <span class="summary-icon text-green" aria-hidden="true">
+                                                        <i class="icon" data-lucide="shield-check"></i>
+                                                    </span>
+                                                    <div class="flex-fill overflow-hidden">
+                                                        <div class="text-secondary small fw-medium mb-1">Negotiated TLS</div>
+                                                        <strong class="font-monospace text-break" id="summary-tls">Unavailable</strong>
                                                     </div>
                                                 </div>
                                             </article>
-                                        </div>
-                                        <div class="col-sm-6 col-xl-3">
-                                            <article class="card card-sm h-100">
-                                                <div class="card-body">
-                                                    <div class="d-flex align-items-start gap-3">
-                                                        <span class="avatar avatar-sm bg-purple-lt text-purple flex-shrink-0" aria-hidden="true">
-                                                            <i class="icon" data-lucide="network"></i>
-                                                        </span>
-                                                        <div class="flex-fill overflow-hidden">
-                                                            <div class="text-secondary small fw-medium mb-1">HTTP/2 frames</div>
-                                                            <strong class="font-monospace text-break" id="summary-frames">0</strong>
-                                                        </div>
+                                            <article class="summary-item">
+                                                <div class="d-flex align-items-start gap-3">
+                                                    <span class="summary-icon text-purple" aria-hidden="true">
+                                                        <i class="icon" data-lucide="network"></i>
+                                                    </span>
+                                                    <div class="flex-fill overflow-hidden">
+                                                        <div class="text-secondary small fw-medium mb-1">Protocol frames</div>
+                                                        <strong class="font-monospace text-break" id="summary-frames">0</strong>
                                                     </div>
                                                 </div>
                                             </article>
@@ -552,12 +1072,15 @@
                                     <section id="panel-h2" role="tabpanel" data-panel="h2" hidden>
                                         <div id="h2-content"></div>
                                     </section>
+                                    <section id="panel-h3" role="tabpanel" data-panel="h3" hidden>
+                                        <div id="h3-content"></div>
+                                    </section>
                                     <section id="panel-tcp" role="tabpanel" data-panel="tcp" hidden>
                                         <div id="tcp-content"></div>
                                     </section>
                                     <section id="panel-json" role="tabpanel" data-panel="json" hidden>
-                                        <div class="card">
-                                            <div class="card-header flex-column align-items-stretch gap-3">
+                                        <div class="card json-card">
+                                            <div class="card-header flex-column align-items-stretch gap-3 json-header">
                                                 <div class="d-flex align-items-center">
                                                     <div>
                                                         <div class="page-pretitle">Serialized response</div>
@@ -587,21 +1110,29 @@
                                                     </div>
                                                 </div>
                                                 <div
-                                                    class="nav nav-pills flex-nowrap gap-1 overflow-x-auto"
+                                                    class="nav nav-pills flex-nowrap gap-1 overflow-x-auto json-route-options"
                                                     id="json-route-options"
                                                     role="group"
                                                     aria-label="JSON response route"
                                                 ></div>
                                             </div>
                                             <pre
-                                                class="card-body bg-body-tertiary font-monospace overflow-auto m-0"
+                                                class="card-body bg-body-tertiary font-monospace overflow-auto m-0 json-code"
                                                 id="json-content"
                                                 tabindex="0"
                                             ></pre>
                                         </div>
                                     </section>
 
-                                    <p class="alert alert-secondary mt-4 mb-0" id="support-note"></p>
+                                    <footer class="py-4 text-center text-secondary small pingly-footer">
+                                        Powered by
+                                        <a
+                                            class="fw-semibold"
+                                            href="https://github.com/0x676e67/pingly"
+                                            target="_blank"
+                                            rel="noreferrer"
+                                        >Pingly</a>
+                                    </footer>
                                 </div>
                             </div>
                         </div>

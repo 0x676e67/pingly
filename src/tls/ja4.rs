@@ -35,6 +35,7 @@ impl Ja4Fingerprint {
         let mut alpn = (None, None);
         let mut extension_count = 0usize;
         let mut has_server_name = false;
+        let mut has_quic_transport_parameters = false;
 
         for extension in &client_hello.extensions {
             if extension.is_grease() {
@@ -60,6 +61,9 @@ impl Ja4Fingerprint {
                     if let Some(protocol) = data.first() {
                         alpn = first_last(protocol);
                     }
+                }
+                TlsExtension::QuicTransportParameters { .. } => {
+                    has_quic_transport_parameters = true;
                 }
                 _ => {}
             }
@@ -91,7 +95,11 @@ impl Ja4Fingerprint {
 
         let first_chunk = format!(
             "{transport}{version}{sni}{cipher_count:02}{extension_count:02}{alpn_first}{alpn_last}",
-            transport = 't',
+            transport = if has_quic_transport_parameters {
+                'q'
+            } else {
+                't'
+            },
             version = TlsVersion::ja4_code_from_client_hello(
                 client_hello.tls_version,
                 supported_versions
@@ -281,6 +289,22 @@ mod tests {
             .first()
             .is_some_and(TlsExtension::is_grease));
         assert_eq!(fingerprint.raw.as_ref(), "t12d0103h2_1301_000d");
+    }
+
+    #[test]
+    fn quic_ja4_uses_the_transport_marker_and_extension_id() {
+        let mut client_hello = client_hello_for_ja4(&[0x1301], &[0x0010], &[], &[]);
+        client_hello
+            .extensions
+            .push(TlsExtension::QuicTransportParameters {
+                value: crate::quic::TRANSPORT_PARAMETERS_EXTENSION_ID,
+                data: Vec::new(),
+            });
+
+        let fingerprint = Ja4Fingerprint::from_client_hello(&client_hello);
+
+        assert!(fingerprint.fingerprint.starts_with('q'));
+        assert_eq!(fingerprint.raw.as_ref(), "q12i0102h2_1301_0039");
     }
 
     #[test]

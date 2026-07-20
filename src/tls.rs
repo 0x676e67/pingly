@@ -22,9 +22,10 @@ pub use enums::{
 };
 pub use group::NamedGroup;
 pub use hello::{
-    ClientHello, ClientHelloBuffer, ClientHelloParseError, ClientHelloParseStage, ECHClientHello,
-    ECHClientHelloOuter, HexBytes, HpkeSymmetricCipherSuite, KeyShare, OidFilter, ProtocolName,
-    ProtocolNameError, PskKeyExchangeModes, StatusRequest, TlsCipherSuite, TlsExtension,
+    ClientHello, ClientHelloBuffer, ClientHelloHandshakeBuffer, ClientHelloParseError,
+    ClientHelloParseStage, ECHClientHello, ECHClientHelloOuter, HexBytes, HpkeSymmetricCipherSuite,
+    KeyShare, OidFilter, ProtocolName, ProtocolNameError, PskKeyExchangeModes, StatusRequest,
+    TlsCipherSuite, TlsExtension,
 };
 pub use ja3::Ja3Fingerprint;
 pub use ja4::Ja4Fingerprint;

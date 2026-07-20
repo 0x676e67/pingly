@@ -26,6 +26,7 @@ const ALL_PATH: &str = "/api/all";
 const TLS_PATH: &str = "/api/tls";
 const HTTP1_PATH: &str = "/api/http1";
 const HTTP2_PATH: &str = "/api/http2";
+const HTTP3_PATH: &str = "/api/http3";
 const TCP_PATH: &str = "/api/tcp";
 
 const UI_TEMPLATE: &str = include_str!("ui/index.html");
@@ -81,6 +82,12 @@ const PUBLIC_ROUTES: &[PublicRoute] = &[
     },
     PublicRoute {
         method: "ANY",
+        path: HTTP3_PATH,
+        purpose: "HTTP/3 and QUIC analysis",
+        availability: "Always",
+    },
+    PublicRoute {
+        method: "ANY",
         path: TCP_PATH,
         purpose: "TCP packet capture",
         availability: "Linux + capture",
@@ -109,7 +116,8 @@ pub(crate) fn router(#[cfg(target_os = "linux")] tcp_capture: Option<&TcpCapture
         .route(ALL_PATH, any(track))
         .route(TLS_PATH, any(tls_track))
         .route(HTTP1_PATH, any(http1_track))
-        .route(HTTP2_PATH, any(http2_track));
+        .route(HTTP2_PATH, any(http2_track))
+        .route(HTTP3_PATH, any(http3_track));
 
     #[cfg(target_os = "linux")]
     let router = if let Some(capture) = tcp_capture {
@@ -286,6 +294,18 @@ pub(crate) async fn http2_track(
     req: Request<Body>,
 ) -> Result<ErasedJson> {
     spawn_blocking_analysis(move || TrackInfo::new(Track::HTTP2, addr, req, track))
+        .await
+        .map(ErasedJson::pretty)
+        .map_err(Error::from)
+}
+
+#[inline]
+pub(crate) async fn http3_track(
+    Extension(ConnectInfo(addr)): Extension<ConnectInfo<SocketAddr>>,
+    Extension(track): Extension<ConnectionTrack>,
+    req: Request<Body>,
+) -> Result<ErasedJson> {
+    spawn_blocking_analysis(move || TrackInfo::new(Track::HTTP3, addr, req, track))
         .await
         .map(ErasedJson::pretty)
         .map_err(Error::from)

@@ -8,7 +8,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[clap(
     author,
     version,
-    about = "TLS and HTTP/1/2 fingerprint analysis server",
+    about = "TLS and HTTP/1/2/3 fingerprint analysis server",
     arg_required_else_help = true
 )]
 #[command(args_conflicts_with_subcommands = true)]
