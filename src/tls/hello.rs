@@ -4,7 +4,7 @@
 //! for the ClientHello layout and [Section 4.3](https://www.rfc-editor.org/rfc/rfc9846.html#section-4.3)
 //! for its extension block.
 
-use std::{borrow::Cow, fmt};
+use std::{borrow::Cow, collections::HashSet, fmt};
 
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use tls_parser::{TlsCipherSuite as ParsedTlsCipherSuite, TlsExtensionType, TlsMessageHandshake};
@@ -20,6 +20,9 @@ use super::{
     ja4::Ja4Fingerprint,
     parser,
     version::SupportedVersions,
+};
+use crate::quic::{
+    parse_transport_parameters, QuicTransportParameter, TRANSPORT_PARAMETERS_EXTENSION_ID,
 };
 
 const DEFAULT_CLIENT_HELLO_CAPACITY: usize = 2048;
@@ -46,6 +49,26 @@ pub struct ClientHelloBuffer {
 
     /// Incremental framing state used to avoid rescanning retained records on every read.
     capture: ClientHelloCaptureState,
+}
+
+/// Buffers a ClientHello carried directly by a TLS handshake byte stream.
+///
+/// QUIC carries TLS handshake messages in CRYPTO frames without the TLS record layer used by TCP.
+/// This buffer retains only the first complete ClientHello for delayed parsing. See
+/// [RFC 9001, Section 4](https://www.rfc-editor.org/rfc/rfc9001#section-4).
+#[derive(Debug)]
+pub struct ClientHelloHandshakeBuffer {
+    /// Handshake bytes retained through the complete ClientHello.
+    buf: Vec<u8>,
+
+    /// Maximum bytes retained for an incomplete or malformed capture.
+    capture_limit: usize,
+
+    /// Declared ClientHello length including its four-byte handshake header.
+    handshake_len: Option<usize>,
+
+    /// Framing error found while inspecting the handshake header.
+    error: Option<ClientHelloParseStage>,
 }
 
 /// Minimal state needed to locate the end of a fragmented ClientHello.
@@ -288,6 +311,146 @@ impl ClientHelloBuffer {
     }
 }
 
+impl ClientHelloHandshakeBuffer {
+    /// Creates an empty buffer with capacity for a typical browser ClientHello.
+    pub fn new() -> Self {
+        Self::with_capacity_and_limit(
+            DEFAULT_CLIENT_HELLO_CAPACITY,
+            DEFAULT_CLIENT_HELLO_CAPTURE_LIMIT,
+        )
+    }
+
+    /// Creates an empty buffer with at least the requested initial capacity.
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self::with_capacity_and_limit(capacity, DEFAULT_CLIENT_HELLO_CAPTURE_LIMIT.max(capacity))
+    }
+
+    /// Creates an empty buffer with a custom maximum capture size.
+    pub fn with_capture_limit(capture_limit: usize) -> Self {
+        Self::with_capacity_and_limit(
+            DEFAULT_CLIENT_HELLO_CAPACITY.min(capture_limit),
+            capture_limit,
+        )
+    }
+
+    /// Creates an empty buffer with explicit allocation and capture limits.
+    pub fn with_capacity_and_limit(capacity: usize, capture_limit: usize) -> Self {
+        Self {
+            buf: Vec::with_capacity(capacity),
+            capture_limit: capture_limit.max(capacity),
+            handshake_len: None,
+            error: None,
+        }
+    }
+
+    /// Creates a buffer from raw TLS handshake bytes.
+    ///
+    /// Bytes after the first complete ClientHello are discarded.
+    pub fn from_bytes(bytes: impl Into<Vec<u8>>) -> Self {
+        let buf = bytes.into();
+        let capture_limit = DEFAULT_CLIENT_HELLO_CAPTURE_LIMIT.max(buf.len());
+        let mut buffer = Self {
+            buf,
+            capture_limit,
+            handshake_len: None,
+            error: None,
+        };
+        buffer.inspect_header();
+        buffer.truncate_complete();
+        buffer
+    }
+
+    /// Parses a complete ClientHello directly from TLS handshake bytes.
+    pub fn parse(&self) -> Result<ClientHello, ClientHelloParseError> {
+        let length = self
+            .handshake_len
+            .filter(|length| self.buf.len() >= *length)
+            .ok_or(ClientHelloParseError::new(
+                self.error.unwrap_or(ClientHelloParseStage::ClientHello),
+            ))?;
+        ClientHello::parse_handshake(&self.buf[..length])
+    }
+
+    /// Parses the ClientHello when enough handshake bytes have arrived.
+    pub fn try_parse(&self) -> Result<Option<ClientHello>, ClientHelloParseError> {
+        if let Some(stage) = self.error {
+            return Err(ClientHelloParseError::new(stage));
+        }
+        if !self.is_complete() {
+            return Ok(None);
+        }
+        self.parse().map(Some)
+    }
+
+    /// Appends handshake bytes until the ClientHello completes or the limit is reached.
+    pub fn extend(&mut self, data: &[u8]) -> usize {
+        if self.is_complete() || self.is_invalid() || self.is_full() {
+            return 0;
+        }
+
+        let initial_len = self.buf.len();
+        let accepted = data
+            .len()
+            .min(self.capture_limit.saturating_sub(initial_len));
+        self.buf.extend_from_slice(&data[..accepted]);
+        self.inspect_header();
+        self.truncate_complete();
+        self.buf.len().saturating_sub(initial_len)
+    }
+
+    /// Returns the retained TLS handshake bytes.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.buf
+    }
+
+    /// Returns the number of retained bytes.
+    pub fn len(&self) -> usize {
+        self.buf.len()
+    }
+
+    /// Returns whether no bytes have been retained.
+    pub fn is_empty(&self) -> bool {
+        self.buf.is_empty()
+    }
+
+    /// Returns whether the retained bytes contain a complete ClientHello.
+    pub fn is_complete(&self) -> bool {
+        self.handshake_len
+            .is_some_and(|length| self.buf.len() >= length)
+    }
+
+    /// Returns whether the handshake header was malformed.
+    pub const fn is_invalid(&self) -> bool {
+        self.error.is_some()
+    }
+
+    /// Returns the maximum number of bytes retained for this capture.
+    pub const fn capture_limit(&self) -> usize {
+        self.capture_limit
+    }
+
+    /// Returns whether the configured capture limit has been reached.
+    pub fn is_full(&self) -> bool {
+        self.buf.len() >= self.capture_limit
+    }
+
+    fn inspect_header(&mut self) {
+        if self.handshake_len.is_some() || self.error.is_some() {
+            return;
+        }
+        match client_hello_handshake_len(&self.buf) {
+            Ok(length) => self.handshake_len = length,
+            Err(error) => self.error = Some(error.stage),
+        }
+    }
+
+    fn truncate_complete(&mut self) {
+        if let Some(length) = self.handshake_len {
+            self.buf.truncate(length);
+        }
+    }
+}
+
 /// A complete ClientHello handshake reassembled from its TLS records.
 struct CapturedClientHello<'a> {
     /// Reassembled handshake bytes, including the four-byte handshake header.
@@ -370,6 +533,24 @@ fn client_hello_handshake_len(data: &[u8]) -> Result<Option<usize>, ClientHelloP
         .ok_or(ClientHelloParseError::new(
             ClientHelloParseStage::ClientHello,
         ))
+}
+
+impl Default for ClientHelloHandshakeBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl From<Vec<u8>> for ClientHelloHandshakeBuffer {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self::from_bytes(bytes)
+    }
+}
+
+impl From<&[u8]> for ClientHelloHandshakeBuffer {
+    fn from(bytes: &[u8]) -> Self {
+        Self::from_bytes(bytes)
+    }
 }
 
 impl Default for ClientHelloBuffer {
@@ -1076,6 +1257,20 @@ pub enum TlsExtension {
         data: HexBytes,
     },
 
+    /// QUIC transport parameters authenticated through the TLS handshake.
+    ///
+    /// The payload is defined by the negotiated QUIC version rather than TLS itself. See
+    /// [RFC 9001, Section 8.2](https://www.rfc-editor.org/rfc/rfc9001#section-8.2).
+    QuicTransportParameters {
+        /// Numeric extension type as observed on the wire.
+        #[serde(deserialize_with = "extension_id::quic_transport_parameters")]
+        value: u16,
+
+        /// Decoded transport parameters retained in their original wire order.
+        #[serde(deserialize_with = "deserialize_quic_transport_parameters")]
+        data: Vec<QuicTransportParameter>,
+    },
+
     /// A legacy experimental Encrypted Server Name Indication (ESNI) offer.
     ///
     /// ESNI was replaced by ECH; see
@@ -1133,11 +1328,30 @@ pub enum TlsExtension {
     },
 }
 
+fn deserialize_quic_transport_parameters<'de, D>(
+    deserializer: D,
+) -> Result<Vec<QuicTransportParameter>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let parameters = Vec::<QuicTransportParameter>::deserialize(deserializer)?;
+    let mut parameter_ids = HashSet::with_capacity(parameters.len());
+    for parameter in &parameters {
+        if !parameter_ids.insert(parameter.id) {
+            return Err(de::Error::custom(format_args!(
+                "duplicate QUIC transport parameter {}",
+                parameter.id
+            )));
+        }
+    }
+    Ok(parameters)
+}
+
 mod extension_id {
     use serde::{de, Deserialize, Deserializer};
     use tls_parser::TlsExtensionType;
 
-    use super::is_grease_value;
+    use super::{is_grease_value, TRANSPORT_PARAMETERS_EXTENSION_ID};
 
     const CERTIFICATE_COMPRESSION: u16 = 27;
     const DELEGATED_CREDENTIALS: u16 = 34;
@@ -1160,6 +1374,7 @@ mod extension_id {
         DELEGATED_CREDENTIALS,
         TlsExtensionType::SessionTicketTLS.0,
         TlsExtensionType::PreSharedKey.0,
+        TRANSPORT_PARAMETERS_EXTENSION_ID,
         TlsExtensionType::SupportedVersions.0,
         TlsExtensionType::PskExchangeModes.0,
         TlsExtensionType::OidFilters.0,
@@ -1208,6 +1423,7 @@ mod extension_id {
     exact_id!(delegated_credentials, DELEGATED_CREDENTIALS);
     exact_id!(session_ticket, TlsExtensionType::SessionTicketTLS.0);
     exact_id!(pre_shared_key, TlsExtensionType::PreSharedKey.0);
+    exact_id!(quic_transport_parameters, TRANSPORT_PARAMETERS_EXTENSION_ID);
     exact_id!(supported_versions, TlsExtensionType::SupportedVersions.0);
     exact_id!(psk_key_exchange_modes, TlsExtensionType::PskExchangeModes.0);
     exact_id!(oid_filters, TlsExtensionType::OidFilters.0);
@@ -1286,6 +1502,7 @@ impl TlsExtension {
             | TlsExtension::KeyShare { value, .. }
             | TlsExtension::PskKeyExchangeModes { value, .. }
             | TlsExtension::PreSharedKey { value, .. }
+            | TlsExtension::QuicTransportParameters { value, .. }
             | TlsExtension::EncryptedServerName { value, .. }
             | TlsExtension::OidFilters { value, .. }
             | TlsExtension::Grease { value }
@@ -1643,6 +1860,11 @@ pub enum ClientHelloParseStage {
 
     /// The key-share vector is malformed.
     KeyShare,
+
+    /// The QUIC transport-parameters payload is malformed.
+    ///
+    /// See [RFC 9001, Section 8.2](https://www.rfc-editor.org/rfc/rfc9001#section-8.2).
+    QuicTransportParameters,
 }
 
 /// A structured TLS ClientHello parsing failure.
@@ -1723,12 +1945,26 @@ impl ClientHello {
         Self::parse_handshake(captured.handshake.as_ref())
     }
 
-    fn parse_handshake(handshake: &[u8]) -> Result<Self, ClientHelloParseError> {
-        let body = handshake
-            .get(TLS_HANDSHAKE_HEADER_LEN..)
-            .ok_or(ClientHelloParseError::new(
+    /// Parses exactly one complete ClientHello from raw TLS handshake bytes.
+    ///
+    /// The input includes the four-byte handshake header and its declared body, with no trailing
+    /// bytes, as defined by
+    /// [RFC 9846, Section 4](https://www.rfc-editor.org/rfc/rfc9846#section-4). It has no TLS record
+    /// header, matching the bytes carried by QUIC CRYPTO frames. See
+    /// [RFC 9001, Section 4.1.3](https://www.rfc-editor.org/rfc/rfc9001#section-4.1.3).
+    pub fn parse_handshake(handshake: &[u8]) -> Result<Self, ClientHelloParseError> {
+        let Some(expected_len) = client_hello_handshake_len(handshake)? else {
+            return Err(ClientHelloParseError::new(
                 ClientHelloParseStage::RecordMessages,
-            ))?;
+            ));
+        };
+        if handshake.len() != expected_len {
+            return Err(ClientHelloParseError::new(
+                ClientHelloParseStage::RecordMessages,
+            ));
+        }
+
+        let body = &handshake[TLS_HANDSHAKE_HEADER_LEN..];
         let (remaining, message) = tls_parser::parse_tls_handshake_msg_client_hello(body)
             .map_err(|_| ClientHelloParseError::new(ClientHelloParseStage::RecordMessages))?;
         if !remaining.is_empty() {
@@ -1982,6 +2218,23 @@ impl ClientHello {
                         data: HexBytes::from(data),
                     });
                 }
+                tls_parser::TlsExtension::Unknown(extension_type, data)
+                    if extension_type.0 == TRANSPORT_PARAMETERS_EXTENSION_ID =>
+                {
+                    let parameters = parse_transport_parameters(data).map_err(|_| {
+                        ClientHelloParseError::extension(
+                            ClientHelloParseStage::QuicTransportParameters,
+                            extension_id,
+                            data.len(),
+                        )
+                    })?;
+                    client_hello
+                        .extensions
+                        .push(TlsExtension::QuicTransportParameters {
+                            value: extension_id,
+                            data: parameters,
+                        });
+                }
                 tls_parser::TlsExtension::Unknown(TlsExtensionType(17513), protocols) => {
                     let (_, protocols) = parser::parse_alps_packet(protocols).map_err(|_| {
                         ClientHelloParseError::extension(
@@ -2126,6 +2379,19 @@ impl ClientHello {
         Ok(client_hello)
     }
 
+    /// Returns the QUIC transport parameters carried by this ClientHello, when present.
+    ///
+    /// Parameters retain their original wire order. See
+    /// [RFC 9001, Section 8.2](https://www.rfc-editor.org/rfc/rfc9001#section-8.2).
+    pub fn quic_transport_parameters(&self) -> Option<&[QuicTransportParameter]> {
+        self.extensions
+            .iter()
+            .find_map(|extension| match extension {
+                TlsExtension::QuicTransportParameters { data, .. } => Some(data.as_slice()),
+                _ => None,
+            })
+    }
+
     /// Calculates the JA4 fingerprint and its unhashed source form.
     pub fn ja4(&self) -> Ja4Fingerprint {
         Ja4Fingerprint::from(self)
@@ -2140,8 +2406,9 @@ impl ClientHello {
 #[cfg(test)]
 mod tests {
     use super::{
-        ClientHello, ClientHelloBuffer, ClientHelloParseStage, ECHClientHelloOuter, HexBytes,
-        KeyShare, ProtocolName, StatusRequest, TlsCipherSuite, TlsExtension,
+        ClientHello, ClientHelloBuffer, ClientHelloHandshakeBuffer, ClientHelloParseStage,
+        ECHClientHelloOuter, HexBytes, KeyShare, ProtocolName, StatusRequest, TlsCipherSuite,
+        TlsExtension,
     };
     use crate::tls::{CompressionAlgorithm, NamedGroup, SupportedVersions, TlsVersion};
 
@@ -2410,6 +2677,71 @@ mod tests {
     }
 
     #[test]
+    fn handshake_buffer_reassembles_quic_crypto_bytes_and_discards_tail() {
+        let handshake = client_hello_handshake(None);
+        let mut buffer = ClientHelloHandshakeBuffer::with_capacity(32);
+
+        for chunk in handshake.chunks(3) {
+            buffer.extend(chunk);
+        }
+        buffer.extend(&[0x14, 0, 0, 0]);
+
+        assert!(buffer.is_complete());
+        assert!(!buffer.is_invalid());
+        assert_eq!(buffer.as_bytes(), handshake);
+        assert_eq!(buffer.extend(&[0]), 0);
+
+        let client_hello = buffer.try_parse().unwrap().unwrap();
+        assert_eq!(client_hello.cipher_suites[0].id, 0x1301);
+
+        let malformed = ClientHelloHandshakeBuffer::from(&[2, 0, 0, 0][..]);
+        assert!(malformed.is_invalid());
+        assert!(malformed.parse().is_err());
+    }
+
+    #[test]
+    fn parse_handshake_rejects_an_incomplete_header() {
+        let error = ClientHello::parse_handshake(&[1, 0, 0]).unwrap_err();
+
+        assert_eq!(error.stage, ClientHelloParseStage::RecordMessages);
+    }
+
+    #[test]
+    fn parse_handshake_rejects_a_non_client_hello_message() {
+        let mut handshake = client_hello_handshake(None);
+        handshake[0] = 2;
+
+        let error = ClientHello::parse_handshake(&handshake).unwrap_err();
+
+        assert_eq!(error.stage, ClientHelloParseStage::ClientHello);
+    }
+
+    #[test]
+    fn parse_handshake_rejects_declared_length_mismatches() {
+        let handshake = client_hello_handshake(None);
+        let payload_len = handshake.len() - 4;
+
+        for declared_len in [payload_len - 1, payload_len + 1] {
+            let mut malformed = handshake.clone();
+            let encoded = u32::try_from(declared_len).unwrap().to_be_bytes();
+            malformed[1..4].copy_from_slice(&encoded[1..]);
+
+            let error = ClientHello::parse_handshake(&malformed).unwrap_err();
+            assert_eq!(error.stage, ClientHelloParseStage::RecordMessages);
+        }
+    }
+
+    #[test]
+    fn parse_handshake_rejects_trailing_bytes() {
+        let mut handshake = client_hello_handshake(None);
+        handshake.push(0);
+
+        let error = ClientHello::parse_handshake(&handshake).unwrap_err();
+
+        assert_eq!(error.stage, ClientHelloParseStage::RecordMessages);
+    }
+
+    #[test]
     fn client_hello_buffer_tracks_fragmented_records_incrementally() {
         let handshake = client_hello_handshake(None);
         let records = handshake.chunks(1).flat_map(tls_record).collect::<Vec<_>>();
@@ -2470,6 +2802,12 @@ mod tests {
                 ClientHelloParseStage::ApplicationSettings,
                 17_613,
                 2,
+            ),
+            (
+                &[0x00, 0x39, 0x00, 0x03, 0x04, 0x02, 0x20][..],
+                ClientHelloParseStage::QuicTransportParameters,
+                57,
+                3,
             ),
         ];
 
@@ -2598,6 +2936,54 @@ mod tests {
             serde_json::to_value(restored).expect("restored ClientHello serializes"),
             json
         );
+    }
+
+    #[test]
+    fn quic_transport_parameters_are_decoded_in_client_hello() {
+        let handshake = client_hello_handshake(Some(&[0x00, 0x39, 0x00, 0x03, 0x04, 0x01, 0x20]));
+        let client_hello = ClientHello::parse_handshake(&handshake).expect("ClientHello parses");
+        let parameters = client_hello
+            .quic_transport_parameters()
+            .expect("parameters exist");
+        assert_eq!(parameters[0].id, 4);
+        let extension = client_hello
+            .extensions
+            .first()
+            .expect("extension is present");
+
+        let json = serde_json::to_value(extension).expect("QUIC extension serializes");
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "quic_transport_parameters": {
+                    "value": 57,
+                    "data": [{"id": 4, "name": "initial_max_data", "value": 32}]
+                }
+            })
+        );
+        let restored = serde_json::from_value::<TlsExtension>(json.clone())
+            .expect("QUIC extension deserializes");
+        assert_eq!(&restored, extension);
+
+        let mut duplicate = json.clone();
+        let parameters = duplicate["quic_transport_parameters"]["data"]
+            .as_array_mut()
+            .unwrap();
+        for index in 0..4_096_u64 {
+            parameters.push(serde_json::json!({
+                "id": (1_u64 << 40) + index * 31,
+                "name": "other",
+                "value": ""
+            }));
+        }
+        parameters.push(parameters[0].clone());
+        let mut wrong_id = json;
+        wrong_id["quic_transport_parameters"]["value"] = serde_json::json!(58);
+        let opaque = serde_json::json!({"opaque": {"value": 57, "data": "040120"}});
+
+        assert!(serde_json::from_value::<TlsExtension>(duplicate).is_err());
+        assert!(serde_json::from_value::<TlsExtension>(wrong_id).is_err());
+        assert!(serde_json::from_value::<TlsExtension>(opaque).is_err());
     }
 
     #[test]

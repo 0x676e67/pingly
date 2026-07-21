@@ -1,0 +1,399 @@
+{
+    "donate": "Please consider supporting Pingly to keep this API running. Visit https://github.com/0x676e67/pingly",
+    "address": "180.142.178.158:52292",
+    "http_version": "HTTP/3.0",
+    "method": "GET",
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0",
+    "tls": {
+        "ja3": "771,4865-4867-4866,65281-43-16-23-28-13-51-10-27-34-0-45-5-57-65037,4588-29-23-24-25,",
+        "ja3_hash": "a234502112bab5e95f38577db151569d",
+        "ja4": "q13d0315h3_55b375c5d22e_dc5437974b47",
+        "ja4_r": "q13d0315h3_1301,1302,1303_0005,000a,000d,0017,001b,001c,0022,002b,002d,0033,0039,fe0d,ff01_0403,0503,0603,0203,0804,0805,0806,0401,0501,0601,0201",
+        "tls_version": "TLSv1_2",
+        "tls_version_negotiated": "TLSv1_3",
+        "client_random": "27c6dd9400e5c9876e802bc198c09d9de89ea31bcd758c63c28d63d1fc4ddec6",
+        "session_id": null,
+        "compression_algorithms": [
+            "Null"
+        ],
+        "cipher_suites": [
+            {
+                "id": 4865,
+                "name": "TLS_AES_128_GCM_SHA256"
+            },
+            {
+                "id": 4867,
+                "name": "TLS_CHACHA20_POLY1305_SHA256"
+            },
+            {
+                "id": 4866,
+                "name": "TLS_AES_256_GCM_SHA384"
+            }
+        ],
+        "extensions": [
+            {
+                "renegotiation_info": {
+                    "value": 65281
+                }
+            },
+            {
+                "supported_versions": {
+                    "value": 43,
+                    "data": {
+                        "versions": [
+                            {
+                                "id": 772,
+                                "name": "TLSv1_3"
+                            }
+                        ]
+                    }
+                }
+            },
+            {
+                "application_layer_protocol_negotiation": {
+                    "value": 16,
+                    "data": [
+                        "h3"
+                    ]
+                }
+            },
+            {
+                "extended_master_secret": {
+                    "value": 23
+                }
+            },
+            {
+                "record_size_limit": {
+                    "value": 28,
+                    "data": 16385
+                }
+            },
+            {
+                "signature_algorithms": {
+                    "value": 13,
+                    "data": [
+                        "ecdsa_secp256r1_sha256",
+                        "ecdsa_secp384r1_sha384",
+                        "ecdsa_secp521r1_sha512",
+                        "ecdsa_sha1",
+                        "rsa_pss_rsae_sha256",
+                        "rsa_pss_rsae_sha384",
+                        "rsa_pss_rsae_sha512",
+                        "rsa_pkcs1_sha256",
+                        "rsa_pkcs1_sha384",
+                        "rsa_pkcs1_sha512",
+                        "rsa_pkcs1_sha1"
+                    ]
+                }
+            },
+            {
+                "key_share": {
+                    "value": 51,
+                    "data": [
+                        {
+                            "id": 4588,
+                            "name": "X25519MLKEM768",
+                            "value": "3877b7da81acb82545cbba4b01e3725f645600973773159984884eaa7bcd5bd17c0adcafcd9929c2466299701ac33a91f8d5b6f759c0a1c1045d566737053ee4214ea80670217a1a598b7486f6a40af40b3267897d81c9e995bad81792ad1479a8428f610a4f9d160be86171268a26b12044ece144615848027883e222be24e9c7e6cacea8935f33e1b3aab50cb0406e23002543e582b4b90869f0b148237bd383394293bc92190ae300cf54d1b7c9f8ca0dba397931b2e0926e43109995211d499563c7f60314e349db188377f682193782f3f78ab02abebdd7007f13aebc411767b5b887b7067ad4b460149a22e83dd44791d95068e04b2fe4ac4f50027369b11ff722014b9c9844fab9ceb53d4a136c5f7a4359772ec59271b6319e665a12cc97530493a281620990773fdfe53b3e162710395bac294ad7a8890f2c51af045857c04ab4692cdb048791d24580f7c303d47d4db76729ac3f08bb4580691794c735a7a6122a165b36f341cfe3bf6a3787d81c549542a38c855846a528b21ab672b959acd5500562486503402546bdf8377c6ad9bf45a9b87632862924cba01618148050aa8460a1587427fb17d520c2b25c81b4da54b915b847906f6bfa50669b12d346094af99fe9c2b896dc6c6a8267e2e482b1f06cb3b79af48b111586b26d2c508e1818479660c875c41fbb3aa00aa84bd8ceb43ca83ce45fa5e0bb0cf84952b83b2288962e1c712816bfc899498a98971acb120c72ba6ab81beb209a6cf265c1018e0bf58f5f6b0b45dba730c59e2bc5c0b470b4190bb539679174a4092477159b503366bc2ad111273ea6bc5d310bc5695d2b3c5ac78b575fd197eb25a1ff16156ac772c478b17e966f1fc0c16a2835a8b52f24c70fbb304a16e43449f54697ac7f3b354065a66ee12acaf5419a2ad0c451a7847d0909e12bb63bc3514b599b0c547905e0b36e34ce36c236e26496d06a33c848ac1470218e53088dc24d2f3779ad2385cf150af5f4b6a2d342fb0437d1f736eaab9ce6b65a33a9325a0b2d8814bf8354182c38133ef9c9264402d22cbdaf7c746fe2a10144b9dac1ca2135ade1076e28d0a2230b5b9f012de03b0737619b4540cb31bcc202590f8f1233942126a80376f1c6c622625a71dbcc143119c752c2ea808b0135a1718353f7f0c20274158db2c6bd289895d043875667bd6917014b46122b5219d8c10c149bac075145146d501b6deac37c4ab745e7f947e2785e18b6c70a878b3a1a4778a7c71509017e111f2574caed7074cb246a7526964847c789b7a9018b639be4294531bf57b137e5a9871e703073283f81cb412605add940a379409ba66c3efc647edfc688aad2bf144cb0fe358ba43737be358782772fd328b2a3dc6f7bb643be214ff7a4b6be923b20d0948929c88e771c63ba378afa2d30149d7ff20c20750361392532f4650db51f75f2ae8d8946ff15cc414809dc187b5cd3c502fc955a2b933817559b145a2e0cb8a638b9b286844e51ac168740f5e919fc6b63adcb226b8285b640bdf9da1e92999534712c2af607f546005c219035a564897849e4715b83c03b7443a09f1818cf050145a8179fd0a5fd744021753b0c0146595b37b05480377b089fb0bf1632344a9f84959954e5f1c252c2d5121b43c77727a7f7f433369737b3f7e40b65206c96b494c04a1dab77717bd9e2c087ba2a1a74370537d86a"
+                        },
+                        {
+                            "id": 29,
+                            "name": "x25519",
+                            "value": "9737b3f7e40b65206c96b494c04a1dab77717bd9e2c087ba2a1a74370537d86a"
+                        },
+                        {
+                            "id": 23,
+                            "name": "secp256r1",
+                            "value": "04007f268de3e237fe86e45cf75579027839b0d5f91bf99bea7162143b4065a5a66a2a5472085ea00286e97347a7bd956e6fd49d8e53750b37f50d063eb20ec989"
+                        }
+                    ]
+                }
+            },
+            {
+                "supported_groups": {
+                    "value": 10,
+                    "data": [
+                        {
+                            "id": 4588,
+                            "name": "X25519MLKEM768"
+                        },
+                        {
+                            "id": 29,
+                            "name": "x25519"
+                        },
+                        {
+                            "id": 23,
+                            "name": "secp256r1"
+                        },
+                        {
+                            "id": 24,
+                            "name": "secp384r1"
+                        },
+                        {
+                            "id": 25,
+                            "name": "secp521r1"
+                        }
+                    ]
+                }
+            },
+            {
+                "certificate_compression": {
+                    "value": 27,
+                    "data": [
+                        "Zlib",
+                        "Zstd",
+                        "Brotli"
+                    ]
+                }
+            },
+            {
+                "delegated_credentials": {
+                    "value": 34,
+                    "data": [
+                        "ecdsa_secp256r1_sha256",
+                        "ecdsa_secp384r1_sha384",
+                        "ecdsa_secp521r1_sha512",
+                        "ecdsa_sha1"
+                    ]
+                }
+            },
+            {
+                "server_name": {
+                    "value": 0,
+                    "data": [
+                        "pingly.us.kg"
+                    ]
+                }
+            },
+            {
+                "psk_key_exchange_modes": {
+                    "value": 45,
+                    "data": {
+                        "ke_modes": [
+                            "psk_dhe_ke"
+                        ]
+                    }
+                }
+            },
+            {
+                "status_request": {
+                    "value": 5,
+                    "data": {
+                        "certificate_status_type": "OCSP",
+                        "responder_id_list": 0,
+                        "request_extensions": 0
+                    }
+                }
+            },
+            {
+                "quic_transport_parameters": {
+                    "value": 57,
+                    "data": [
+                        {
+                            "id": 1,
+                            "name": "max_idle_timeout",
+                            "value": 30000
+                        },
+                        {
+                            "id": 4,
+                            "name": "initial_max_data",
+                            "value": 25165824
+                        },
+                        {
+                            "id": 5,
+                            "name": "initial_max_stream_data_bidi_local",
+                            "value": 12582912
+                        },
+                        {
+                            "id": 6,
+                            "name": "initial_max_stream_data_bidi_remote",
+                            "value": 1048576
+                        },
+                        {
+                            "id": 7,
+                            "name": "initial_max_stream_data_uni",
+                            "value": 1048576
+                        },
+                        {
+                            "id": 8,
+                            "name": "initial_max_streams_bidi",
+                            "value": 100
+                        },
+                        {
+                            "id": 9,
+                            "name": "initial_max_streams_uni",
+                            "value": 100
+                        },
+                        {
+                            "id": 11,
+                            "name": "max_ack_delay",
+                            "value": 20
+                        },
+                        {
+                            "id": 14,
+                            "name": "active_connection_id_limit",
+                            "value": 8
+                        },
+                        {
+                            "id": 15,
+                            "name": "initial_source_connection_id",
+                            "value": "66b760"
+                        },
+                        {
+                            "id": 17,
+                            "name": "version_information",
+                            "value": {
+                                "chosen_version": {
+                                    "id": 1,
+                                    "name": "Version1"
+                                },
+                                "available_versions": [
+                                    {
+                                        "id": 4209703466,
+                                        "name": "Grease"
+                                    },
+                                    {
+                                        "id": 1,
+                                        "name": "Version1"
+                                    }
+                                ]
+                            }
+                        },
+                        {
+                            "id": 4278378010,
+                            "name": "grease",
+                            "value": "43e8"
+                        },
+                        {
+                            "id": 32,
+                            "name": "max_datagram_frame_size",
+                            "value": 65535
+                        }
+                    ]
+                }
+            },
+            {
+                "encrypted_client_hello": {
+                    "value": 65037,
+                    "data": {
+                        "Outer": {
+                            "cipher_suite": {
+                                "kdf_id": "HKDF_SHA256",
+                                "aead_id": "ChaCha20Poly1305"
+                            },
+                            "config_id": 187,
+                            "enc": "9fc6c673dfeb396919f50da3c7cc701392f906de52d7ce432abfd3ad5a05fe6f",
+                            "payload": "98aceda738b462105e89380c39bba41b97ef7e074390d2ecb00e74c03e741ca2fa6f68a328634b1111d3f8287e969875f9051e909b777104f2e19b3a3db233ae125177c091a066a9de791211d19e0941ef01d5b8f72e0b9e6e1858ae08311e8b5ea7d2024d47e1d9979cdcfbd6dc49d2a8515fc19b8219466cb7db9655a8264e3e73e3f9a4fe3d4bd579d727969cb97db595ee01816a1fe45512e601e85cd4741f56af9aa769e8436d3eb24b7271ee4a336cb665901bad6ddcc4d78e08de19b3c0dbbb1a056b8647be967e398ccf56e72931b150e4d8e3016102d7e7470abddc7abbec64a90b3d8fe72d00472e34e4",
+                            "payload_length": 239
+                        }
+                    }
+                }
+            }
+        ]
+    },
+    "http3": {
+        "h3_text": "1:65536;7:20;8:1;51:1;16765559:1;727725890:0|m,s,a,p",
+        "h3_text_hash": "32b52289d7beca6748608aadb7b91846",
+        "settings": {
+            "frame_type": "Settings",
+            "length": 21,
+            "settings": [
+                {
+                    "id": 1,
+                    "name": "QpackMaxTableCapacity",
+                    "value": 65536
+                },
+                {
+                    "id": 7,
+                    "name": "QpackBlockedStreams",
+                    "value": 20
+                },
+                {
+                    "id": 727725890,
+                    "name": "EnableWebTransportDraft",
+                    "value": 0
+                },
+                {
+                    "id": 16765559,
+                    "name": "H3DatagramDraft",
+                    "value": true
+                },
+                {
+                    "id": 51,
+                    "name": "H3Datagram",
+                    "value": true
+                },
+                {
+                    "id": 8,
+                    "name": "EnableConnectProtocol",
+                    "value": true
+                }
+            ]
+        },
+        "headers": {
+            "frame_type": "Headers",
+            "length": 268,
+            "headers": [
+                {
+                    "name": ":method",
+                    "value": "GET"
+                },
+                {
+                    "name": ":scheme",
+                    "value": "https"
+                },
+                {
+                    "name": ":authority",
+                    "value": "pingly.us.kg"
+                },
+                {
+                    "name": ":path",
+                    "value": "/api/all"
+                },
+                {
+                    "name": "user-agent",
+                    "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0"
+                },
+                {
+                    "name": "accept",
+                    "value": "application/json"
+                },
+                {
+                    "name": "accept-language",
+                    "value": "zh-CN,zh;q=0.9,zh-TW;q=0.8,zh-HK;q=0.7,en-US;q=0.6,en;q=0.5"
+                },
+                {
+                    "name": "accept-encoding",
+                    "value": "gzip, deflate, br, zstd"
+                },
+                {
+                    "name": "alt-used",
+                    "value": "pingly.us.kg"
+                },
+                {
+                    "name": "sec-fetch-dest",
+                    "value": "empty"
+                },
+                {
+                    "name": "sec-fetch-mode",
+                    "value": "cors"
+                },
+                {
+                    "name": "sec-fetch-site",
+                    "value": "same-origin"
+                },
+                {
+                    "name": "priority",
+                    "value": "u=4"
+                },
+                {
+                    "name": "pragma",
+                    "value": "no-cache"
+                },
+                {
+                    "name": "cache-control",
+                    "value": "no-cache"
+                }
+            ]
+        }
+    }
+}

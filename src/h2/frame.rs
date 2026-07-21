@@ -317,13 +317,13 @@ pub enum FrameType {
 
     /// HEADERS (`0x01`).
     Headers,
-    
+
     /// CONTINUATION (`0x09`).
     Continuation,
-    
+
     /// PRIORITY (`0x02`).
     Priority,
-    
+
     /// A frame retained without type-specific decoding.
     Unknown,
 }
