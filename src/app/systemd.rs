@@ -21,7 +21,7 @@ use unitbus::{
 
 use crate::{args::ServerArgs, Result};
 
-const SERVICE_NAME: &str = "pingly.service";
+const SERVICE_NAME: &str = concat!(env!("CARGO_PKG_NAME"), ".service");
 const JOB_TIMEOUT: Duration = Duration::from_secs(30);
 const RECENT_LOG_LIMIT: usize = 100;
 
