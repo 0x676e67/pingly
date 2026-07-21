@@ -438,9 +438,6 @@ async function fetchAnalysis() {
     try {
         const response = await fetch("/api/all", {
             cache: "no-store",
-            headers: {
-                Accept: "application/json",
-            },
             signal: controller.signal,
         });
 
@@ -617,9 +614,6 @@ async function selectJsonRoute(path) {
 
         const response = await fetch(path, {
             cache: "no-store",
-            headers: {
-                Accept: "application/json",
-            },
             signal: controller.signal,
         });
 
@@ -1585,9 +1579,6 @@ async function captureFetchPriorityProbe(path, priority) {
         const response = await fetch(path, {
             cache: "no-store",
             credentials: "same-origin",
-            headers: {
-                Accept: "application/json",
-            },
             priority: priority,
             signal: controller.signal,
         });
