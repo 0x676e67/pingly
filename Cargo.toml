@@ -117,7 +117,7 @@ tower-http = { version = "0.7.0", default-features = false, optional = true, fea
 ] }
 
 ## TLS certificates and ACME.
-rcgen = { version = "0.13", default-features = false, features = [
+rcgen = { version = "0.14", default-features = false, features = [
     "aws_lc_rs",
     "pem",
 ], optional = true }
