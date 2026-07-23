@@ -1,4 +1,4 @@
-//! TCP three-way-handshake timing derived from the state transitions in RFC 9293.
+//! TCP three-way handshake timing based on the RFC 9293 state transitions.
 //!
 //! See <https://www.rfc-editor.org/rfc/rfc9293.html#section-3.10.7.3>.
 

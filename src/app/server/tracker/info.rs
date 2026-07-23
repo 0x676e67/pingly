@@ -167,7 +167,7 @@ pub struct TrackInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     http3: Option<Http3TrackInfo>,
 
-    /// Captured TCP packets and passive fingerprint included by the Linux `/api/all` endpoint.
+    /// Captured TCP packets and passive fingerprint for Linux `/api/all` responses.
     #[cfg(target_os = "linux")]
     #[serde(skip_serializing_if = "Option::is_none")]
     tcp: Option<TcpAnalysis>,

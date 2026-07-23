@@ -63,7 +63,7 @@ pub struct TcpCapture {
 }
 
 impl TcpCapture {
-    /// Opens a capture device and starts a bounded background capture worker.
+    /// Opens a capture device and starts a background worker with bounded storage.
     pub fn start(
         max_connections: usize,
         server_port: u16,
@@ -119,12 +119,12 @@ impl TcpCapture {
         })
     }
 
-    /// Copies captured packets belonging to one remote socket in wire order.
+    /// Returns a copy of one remote socket's packets in wire order.
     pub fn connection_packets(&self, remote: SocketAddr) -> Vec<CapturedPacket> {
         lock(&self.inner.packets).connection_packets(remote)
     }
 
-    /// Signals the worker to stop and waits for its capture loop to exit.
+    /// Stops the worker and waits for its capture loop to exit.
     pub fn shutdown(&self) {
         self.inner.shutdown.store(true, Ordering::Release);
         if let Some(worker) = lock(&self.inner.worker).take() {

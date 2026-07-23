@@ -21,7 +21,7 @@ pub struct TcpAnalysis {
 }
 
 impl TcpAnalysis {
-    /// Builds analysis from packets already associated with one remote socket.
+    /// Builds an analysis from packets captured for one remote socket.
     pub fn from_packets(packets: Vec<CapturedPacket>) -> Self {
         let fingerprint = packets
             .iter()
@@ -37,7 +37,7 @@ impl TcpAnalysis {
         }
     }
 
-    /// Returns whether no packets were associated with the connection.
+    /// Returns `true` when the connection has no captured packets.
     pub fn is_empty(&self) -> bool {
         self.packets.is_empty()
     }

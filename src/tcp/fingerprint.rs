@@ -96,7 +96,7 @@ pub enum LinkKind {
     #[serde(rename = "Jumbo frame or loopback")]
     JumboFrameOrLoopback,
 
-    /// No known link family matched the estimated MTU.
+    /// Estimated MTU that does not match a known link family.
     Unknown,
 }
 
@@ -118,7 +118,7 @@ pub struct TcpFingerprint {
 }
 
 impl TcpFingerprint {
-    /// Calculates a passive fingerprint when `packet` is an initial client SYN.
+    /// Returns a passive fingerprint for an initial client SYN.
     pub fn from_initial_syn(packet: &TcpPacket) -> Option<Self> {
         if !packet.is_initial_syn() {
             return None;

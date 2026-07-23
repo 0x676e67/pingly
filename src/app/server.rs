@@ -258,8 +258,8 @@ mod tcp {
         builder
             .http1()
             .timer(TokioTimer::new())
-            // Normal requests are closed by the connection policy below. Keeping Hyper's
-            // protocol switch enabled lets WebSocket and other upgrades own the stream.
+            // The connection policy closes ordinary requests. Hyper must keep protocol
+            // switching enabled so WebSocket and other upgrades can take over the stream.
             .keep_alive(true)
             .max_buf_size(MAX_HEADER_LIST_SIZE);
 

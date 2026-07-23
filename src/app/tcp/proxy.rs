@@ -1,4 +1,4 @@
-//! Cross-layer proxy latency analysis inspired by CalcuLatency.
+//! Compares TCP and application latency using the approach described by CalcuLatency.
 //!
 //! See <https://www.usenix.org/conference/usenixsecurity24/presentation/ramesh>.
 
@@ -15,7 +15,7 @@ const POSSIBLE_GAP_PERCENT: f64 = 25.0;
 const LIKELY_GAP_MS: f64 = 20.0;
 const LIKELY_GAP_PERCENT: f64 = 50.0;
 
-/// Cross-layer latency measurements collected for one browser connection.
+/// TCP, TLS, and WebSocket timing for one browser connection.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ProxyMeasurements {
     /// SYN-ACK-to-ACK RTT observed by libpcap.
@@ -37,51 +37,51 @@ pub struct ProxyMeasurements {
     rtt_gap_percent: Option<f64>,
 }
 
-/// Conservative proxy-likelihood classification from cross-layer latency.
+/// Proxy-likelihood classification derived from TCP and WebSocket latency.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ProxyClassification {
-    /// Required measurements were not available.
+    /// One or both RTT measurements are missing.
     Unknown,
 
-    /// Measurements do not show a meaningful cross-layer latency gap.
+    /// The latency gap stays below the proxy thresholds.
     Unlikely,
 
-    /// Measurements show a gap that can be caused by a proxy or network variance.
+    /// The latency gap meets the possible-proxy thresholds.
     Possible,
 
-    /// Measurements show a large absolute and relative latency gap.
+    /// The latency gap meets the stronger likely-proxy thresholds.
     Likely,
 }
 
-/// Confidence assigned to a proxy-likelihood classification.
+/// Confidence in a proxy-likelihood classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ProxyConfidence {
-    /// No confidence can be assigned without both RTT measurements.
+    /// One or both RTT measurements are missing.
     Unavailable,
 
-    /// The signal is weak or affected by sub-millisecond local timing.
+    /// Local-scale timing makes the relative gap unreliable.
     Low,
 
-    /// The signal passes one conservative threshold.
+    /// The measurements are usable but do not meet the stronger thresholds.
     Medium,
 
-    /// Both absolute and relative gaps pass the stronger thresholds.
+    /// The absolute and relative gaps meet the stronger thresholds.
     High,
 }
 
-/// Result of comparing transport-layer and browser application-layer latency.
+/// Comparison of TCP and browser-level latency.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ProxyAnalysis {
     /// Remote socket associated with the measured WebSocket connection.
     client_address: SocketAddr,
 
-    /// Raw timing values used by the classifier.
+    /// Timing values used by the classifier.
     measurements: ProxyMeasurements,
 
-    /// Conservative proxy-likelihood result.
+    /// Proxy-likelihood classification.
     classification: ProxyClassification,
 
-    /// Strength of the observed signal.
+    /// Confidence in the classification.
     confidence: ProxyConfidence,
 
     /// Human-readable explanation of the classification.
@@ -89,7 +89,7 @@ pub struct ProxyAnalysis {
 }
 
 impl ProxyAnalysis {
-    /// Builds a proxy-latency analysis from packet capture and WebSocket RTT samples.
+    /// Compares captured TCP timing with browser WebSocket RTT samples.
     pub fn from_connection(
         client_address: SocketAddr,
         packets: &[CapturedPacket],

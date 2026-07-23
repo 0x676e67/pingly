@@ -46,19 +46,19 @@ pub struct TcpPacket {
 }
 
 impl TcpPacket {
-    /// Returns whether this packet starts a client-side TCP connection.
+    /// Returns `true` if this packet starts a client-side TCP connection.
     #[inline]
     pub fn is_initial_syn(&self) -> bool {
         self.tcp.flags.syn() && !self.tcp.flags.ack()
     }
 
-    /// Returns whether this packet is a SYN-ACK response.
+    /// Returns `true` if this packet is a SYN-ACK response.
     #[inline]
     pub fn is_syn_ack(&self) -> bool {
         self.tcp.flags.syn() && self.tcp.flags.ack()
     }
 
-    /// Returns whether this packet can complete the three-way handshake.
+    /// Returns `true` if this packet can complete the three-way handshake.
     #[inline]
     pub fn is_handshake_ack(&self) -> bool {
         self.tcp.flags.ack()
@@ -135,7 +135,7 @@ pub struct Ipv4Flags {
 }
 
 #[derive(Deserialize)]
-/// Saved IPv4 flag representation validated before constructing [`Ipv4Flags`].
+/// Deserialization representation validated before constructing [`Ipv4Flags`].
 struct Ipv4FlagsRepr {
     /// Original three-bit flags field.
     raw: u8,
@@ -175,19 +175,19 @@ impl Ipv4Flags {
         &self.values
     }
 
-    /// Returns whether the reserved IPv4 flag is set.
+    /// Returns `true` if the reserved IPv4 flag is set.
     #[inline]
     pub fn reserved(&self) -> bool {
         self.raw & Self::RESERVED_MASK != 0
     }
 
-    /// Returns whether the sender requested that the packet not be fragmented.
+    /// Returns `true` if the sender requested that the packet not be fragmented.
     #[inline]
     pub fn dont_fragment(&self) -> bool {
         self.raw & Self::DONT_FRAGMENT_MASK != 0
     }
 
-    /// Returns whether more fragments follow this IPv4 packet.
+    /// Returns `true` if more fragments follow this IPv4 packet.
     #[inline]
     pub fn more_fragments(&self) -> bool {
         self.raw & Self::MORE_FRAGMENTS_MASK != 0
@@ -273,7 +273,7 @@ pub struct TcpFlags {
 }
 
 #[derive(Deserialize)]
-/// Saved TCP flag representation validated before constructing [`TcpFlags`].
+/// Deserialization representation validated before constructing [`TcpFlags`].
 struct TcpFlagsRepr {
     /// Original nine-bit flags field.
     raw: u16,
@@ -325,55 +325,55 @@ impl TcpFlags {
         &self.values
     }
 
-    /// Returns whether the NS flag is set.
+    /// Returns `true` if the NS flag is set.
     #[inline]
     pub fn ns(&self) -> bool {
         self.raw & Self::NS_MASK != 0
     }
 
-    /// Returns whether the FIN flag is set.
+    /// Returns `true` if the FIN flag is set.
     #[inline]
     pub fn fin(&self) -> bool {
         self.raw & Self::FIN_MASK != 0
     }
 
-    /// Returns whether the SYN flag is set.
+    /// Returns `true` if the SYN flag is set.
     #[inline]
     pub fn syn(&self) -> bool {
         self.raw & Self::SYN_MASK != 0
     }
 
-    /// Returns whether the RST flag is set.
+    /// Returns `true` if the RST flag is set.
     #[inline]
     pub fn rst(&self) -> bool {
         self.raw & Self::RST_MASK != 0
     }
 
-    /// Returns whether the PSH flag is set.
+    /// Returns `true` if the PSH flag is set.
     #[inline]
     pub fn psh(&self) -> bool {
         self.raw & Self::PSH_MASK != 0
     }
 
-    /// Returns whether the ACK flag is set.
+    /// Returns `true` if the ACK flag is set.
     #[inline]
     pub fn ack(&self) -> bool {
         self.raw & Self::ACK_MASK != 0
     }
 
-    /// Returns whether the URG flag is set.
+    /// Returns `true` if the URG flag is set.
     #[inline]
     pub fn urg(&self) -> bool {
         self.raw & Self::URG_MASK != 0
     }
 
-    /// Returns whether the ECE flag is set.
+    /// Returns `true` if the ECE flag is set.
     #[inline]
     pub fn ece(&self) -> bool {
         self.raw & Self::ECE_MASK != 0
     }
 
-    /// Returns whether the CWR flag is set.
+    /// Returns `true` if the CWR flag is set.
     #[inline]
     pub fn cwr(&self) -> bool {
         self.raw & Self::CWR_MASK != 0
@@ -489,7 +489,7 @@ pub enum TcpOption {
 
 #[derive(Deserialize)]
 #[serde(tag = "name")]
-/// Saved TCP option representation whose IDs are validated during conversion.
+/// Deserialization representation whose IDs are validated during conversion.
 enum TcpOptionRepr {
     EndOfOptions { id: u8 },
     NoOperation { id: u8 },
