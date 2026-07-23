@@ -53,7 +53,11 @@ impl Ja4Fingerprint {
                         .extend(data.versions.iter().map(|version| version.tls_version()));
                 }
                 TlsExtension::SignatureAlgorithms { data, .. } => {
-                    signature_algorithms.extend(data.iter().map(|algorithm| algorithm.value()));
+                    signature_algorithms.extend(
+                        data.iter()
+                            .filter(|algorithm| !algorithm.is_grease())
+                            .map(|algorithm| algorithm.value()),
+                    );
                 }
                 TlsExtension::ApplicationLayerProtocolNegotiation { data, .. }
                     if alpn.0.is_none() =>
