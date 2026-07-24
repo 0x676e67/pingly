@@ -1,6 +1,7 @@
 use std::{
     net::SocketAddr,
     sync::{Arc, OnceLock},
+    time::Duration,
 };
 
 use axum::{
@@ -19,7 +20,7 @@ use tokio_rustls::rustls::ProtocolVersion;
 use super::inspector::{ClientHello, ClientHelloBuffer, Http1RequestCapture, Http2Frame};
 use crate::server::quic::inspect::{HeadersCapture, SettingsCapture};
 #[cfg(target_os = "linux")]
-use crate::tcp::CapturedPacket;
+use crate::tcp::{CapturedPacket, TcpAnalysis};
 
 /// TLS handshake tracking information, which includes the client hello payload.
 #[derive(Serialize)]
@@ -112,6 +113,9 @@ pub struct ConnectionTrack {
     /// The TLS protocol version that was negotiated for this connection, if any.
     tls_version_negotiated: Option<ProtocolVersion>,
 
+    /// Wall-clock time spent completing the TLS handshake after TCP accept.
+    tls_handshake_duration: Option<Duration>,
+
     /// Raw TLS records retained until the ClientHello can be analyzed.
     client_hello: Option<ClientHelloCapture>,
 
@@ -163,10 +167,10 @@ pub struct TrackInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     http3: Option<Http3TrackInfo>,
 
-    /// Captured TCP packets included by the Linux `/api/all` endpoint.
+    /// Captured TCP packets and passive fingerprint for Linux `/api/all` responses.
     #[cfg(target_os = "linux")]
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    tcp: Vec<CapturedPacket>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tcp: Option<TcpAnalysis>,
 }
 
 /// Track enum to specify which tracking information to collect.
@@ -326,6 +330,19 @@ impl ConnectionTrack {
         self.tls_version_negotiated = version;
     }
 
+    /// Records the server-observed duration of the TLS handshake.
+    #[inline]
+    pub fn set_tls_handshake_duration(&mut self, duration: Duration) {
+        self.tls_handshake_duration = Some(duration);
+    }
+
+    /// Returns the server-observed TLS handshake duration.
+    #[inline]
+    #[cfg(target_os = "linux")]
+    pub fn tls_handshake_duration(&self) -> Option<Duration> {
+        self.tls_handshake_duration
+    }
+
     /// Sets a ClientHello captured with TLS record framing.
     #[inline]
     pub fn set_client_hello(&mut self, client_hello: Option<ClientHelloBuffer>) {
@@ -367,6 +384,7 @@ impl ConnectionTrack {
 fn protocol_track_info(track: Track, connection_track: ConnectionTrack) -> ProtocolTrackInfo {
     let ConnectionTrack {
         tls_version_negotiated,
+        tls_handshake_duration: _,
         client_hello,
         http1_capture,
         http2_frames,
@@ -509,11 +527,9 @@ impl TrackInfo {
             http2,
             http3,
             #[cfg(target_os = "linux")]
-            tcp: if matches!(track, Track::All) {
-                tcp_packets
-            } else {
-                Vec::new()
-            },
+            tcp: matches!(track, Track::All)
+                .then(|| TcpAnalysis::from_packets(tcp_packets))
+                .filter(|analysis| !analysis.is_empty()),
         }
     }
 }

@@ -216,10 +216,14 @@ mod tcp {
     use std::{convert::Infallible, io, net::SocketAddr, time::Duration};
 
     use axum::{
-        body::Body, extract::ConnectInfo, http::Request, middleware::AddExtension,
-        response::Response, Router,
+        body::Body,
+        extract::ConnectInfo,
+        http::{header, Method, Request, StatusCode},
+        middleware::AddExtension,
+        response::Response,
+        Router,
     };
-    use hyper::body::Incoming;
+    use hyper::{body::Incoming, ext::Protocol};
     use hyper_util::{
         rt::{TokioExecutor, TokioIo, TokioTimer},
         server::conn::auto::Builder,
@@ -254,7 +258,9 @@ mod tcp {
         builder
             .http1()
             .timer(TokioTimer::new())
-            .keep_alive(!close_after_first_request)
+            // The connection policy closes ordinary requests. Hyper must keep protocol
+            // switching enabled so WebSocket and other upgrades can take over the stream.
+            .keep_alive(true)
             .max_buf_size(MAX_HEADER_LIST_SIZE);
 
         let mut http2 = builder.http2();
@@ -391,17 +397,28 @@ mod tcp {
         S: Service<Request<Body>, Response = Response, Error = Infallible> + Clone + Send + 'static,
         S::Future: Send + 'static,
     {
-        let (first_request_tx, mut first_request_rx) = if close_after_first_request {
+        let (close_tx, mut close_rx) = if close_after_first_request {
             let (sender, receiver) = watch::channel(false);
             (Some(sender), Some(receiver))
         } else {
             (None, None)
         };
-        let service = service.map_request(move |request: Request<Incoming>| {
-            if let Some(sender) = first_request_tx.as_ref() {
-                sender.send_replace(true);
+        let service = tower::service_fn(move |request: Request<Incoming>| {
+            let service = service.clone();
+            let close_tx = close_tx.clone();
+            async move {
+                let protocol_switch = ProtocolSwitch::from_request(&request);
+                let response = service.oneshot(request.map(Body::new)).await?;
+
+                if let Some(sender) = close_tx
+                    .as_ref()
+                    .filter(|_| !protocol_switch.succeeded(&response))
+                {
+                    sender.send_replace(true);
+                }
+
+                Ok::<_, Infallible>(response)
             }
-            request.map(Body::new)
         });
         let service = TowerToHyperService::new(service);
         let connection = builder.serve_connection_with_upgrades(TokioIo::new(stream), service);
@@ -417,7 +434,7 @@ mod tcp {
                     shutting_down = true;
                     connection.as_mut().graceful_shutdown();
                 }
-                _ = wait_for_first_request(&mut first_request_rx),
+                _ = wait_for_close_signal(&mut close_rx),
                     if close_after_first_request && !shutting_down =>
                 {
                     shutting_down = true;
@@ -427,15 +444,54 @@ mod tcp {
         }
     }
 
-    async fn wait_for_first_request(receiver: &mut Option<watch::Receiver<bool>>) {
+    async fn wait_for_close_signal(receiver: &mut Option<watch::Receiver<bool>>) {
         let Some(receiver) = receiver.as_mut() else {
             std::future::pending::<()>().await;
             return;
         };
 
-        let first_request_seen = *receiver.borrow_and_update();
-        if !first_request_seen {
+        let close_requested = *receiver.borrow_and_update();
+        if !close_requested {
             let _ = receiver.changed().await;
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum ProtocolSwitch {
+        None,
+        Http1Upgrade,
+        ExtendedConnect,
+    }
+
+    impl ProtocolSwitch {
+        fn from_request<B>(request: &Request<B>) -> Self {
+            if request.method() == Method::CONNECT
+                && request.extensions().get::<Protocol>().is_some()
+            {
+                return Self::ExtendedConnect;
+            }
+
+            let connection_upgrade = request
+                .headers()
+                .get_all(header::CONNECTION)
+                .iter()
+                .filter_map(|value| value.to_str().ok())
+                .flat_map(|value| value.split(','))
+                .any(|token| token.trim().eq_ignore_ascii_case("upgrade"));
+
+            if connection_upgrade && request.headers().contains_key(header::UPGRADE) {
+                Self::Http1Upgrade
+            } else {
+                Self::None
+            }
+        }
+
+        fn succeeded(self, response: &Response) -> bool {
+            match self {
+                Self::Http1Upgrade => response.status() == StatusCode::SWITCHING_PROTOCOLS,
+                Self::ExtendedConnect => response.status().is_success(),
+                Self::None => false,
+            }
         }
     }
 
@@ -450,6 +506,104 @@ mod tcp {
             if !error.is_cancelled() {
                 tracing::debug!(%error, "HTTP/1 or HTTP/2 connection task failed");
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use axum::{
+            body::Body,
+            http::{header, Method, Request, StatusCode},
+            response::Response,
+        };
+        use hyper::ext::Protocol;
+
+        use super::ProtocolSwitch;
+
+        const LATENCY_PATH: &str = "/api/latency";
+        const WEBSOCKET_PROTOCOL: &str = "websocket";
+
+        #[test]
+        fn ordinary_requests_close_when_keep_alive_is_disabled() {
+            let request = Request::get("/").body(()).unwrap();
+            let response = Response::new(Body::empty());
+
+            assert!(!ProtocolSwitch::from_request(&request).succeeded(&response));
+        }
+
+        #[test]
+        fn successful_protocol_upgrades_remain_open() {
+            let request = Request::get(LATENCY_PATH)
+                .header(header::CONNECTION, "keep-alive, Upgrade")
+                .header(header::UPGRADE, WEBSOCKET_PROTOCOL)
+                .body(())
+                .unwrap();
+            let response = Response::builder()
+                .status(StatusCode::SWITCHING_PROTOCOLS)
+                .body(Body::empty())
+                .unwrap();
+
+            assert!(ProtocolSwitch::from_request(&request).succeeded(&response));
+        }
+
+        #[test]
+        fn rejected_protocol_upgrades_close() {
+            let request = Request::get("/not-found")
+                .header(header::CONNECTION, "Upgrade")
+                .header(header::UPGRADE, "nonsense")
+                .body(())
+                .unwrap();
+            let response = Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::empty())
+                .unwrap();
+
+            assert!(!ProtocolSwitch::from_request(&request).succeeded(&response));
+        }
+
+        #[test]
+        fn extended_connect_streams_remain_open() {
+            let mut request = Request::builder()
+                .method(Method::CONNECT)
+                .uri(LATENCY_PATH)
+                .body(())
+                .unwrap();
+            request
+                .extensions_mut()
+                .insert(Protocol::from_static(WEBSOCKET_PROTOCOL));
+            let response = Response::new(Body::empty());
+
+            assert!(ProtocolSwitch::from_request(&request).succeeded(&response));
+        }
+
+        #[test]
+        fn rejected_extended_connect_streams_close() {
+            let mut request = Request::builder()
+                .method(Method::CONNECT)
+                .uri(LATENCY_PATH)
+                .body(())
+                .unwrap();
+            request
+                .extensions_mut()
+                .insert(Protocol::from_static(WEBSOCKET_PROTOCOL));
+            let response = Response::builder()
+                .status(StatusCode::FORBIDDEN)
+                .body(Body::empty())
+                .unwrap();
+
+            assert!(!ProtocolSwitch::from_request(&request).succeeded(&response));
+        }
+
+        #[test]
+        fn ordinary_connect_requests_still_close() {
+            let request = Request::builder()
+                .method(Method::CONNECT)
+                .uri(LATENCY_PATH)
+                .body(())
+                .unwrap();
+            let response = Response::new(Body::empty());
+
+            assert!(!ProtocolSwitch::from_request(&request).succeeded(&response));
         }
     }
 }

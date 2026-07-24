@@ -1,4 +1,4 @@
-use std::io;
+use std::{io, time::Instant};
 
 use axum::{middleware::AddExtension, Extension};
 use futures_util::future::BoxFuture;
@@ -40,12 +40,14 @@ where
     fn accept(&self, stream: I, service: S) -> Self::Future {
         let acceptor = self.0.clone();
         Box::pin(async move {
+            let handshake_started = Instant::now();
             let (mut stream, service) =
                 match acceptor.accept(TlsInspector::new(stream), service).await? {
                     AcceptOutcome::Serve { stream, service } => (stream, service),
                     AcceptOutcome::Handled => return Ok(AcceptOutcome::Handled),
                 };
             let mut connect_track = ConnectionTrack::default();
+            connect_track.set_tls_handshake_duration(handshake_started.elapsed());
             connect_track.set_client_hello(stream.get_mut().0.client_hello());
             connect_track.set_tls_version_negotiated(stream.get_ref().1.protocol_version());
 

@@ -31,8 +31,6 @@ server = [
     "dep:pcap",
     "dep:pin-project-lite",
     "dep:pingora-runtime",
-    "dep:pktparse",
-    "dep:pnet",
     "dep:quinn",
     "dep:quinn-proto",
     "dep:rcgen",
@@ -91,7 +89,7 @@ tokio = { version = "1", optional = true, features = [
 tracing-subscriber = { version = "0.3.0", features = ["env-filter"], optional = true }
 
 ## HTTP routing and connection serving.
-axum = { version = "0.8.1", features = ["http2"], optional = true }
+axum = { version = "0.8.1", features = ["http2", "ws"], optional = true }
 axum-extra = { version = "0.12.1", default-features = false, optional = true, features = [
     "erased-json",
 ] }
@@ -146,8 +144,6 @@ mimalloc = { version = "0.1.39", default-features = false, optional = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 # Optional packet capture.
 pcap = { version = "2.0", optional = true }
-pktparse = { version = "0.7.1", features = ["serde"], optional = true }
-pnet = { version = "0.35", optional = true }
 
 # Optional systemd integration.
 sdjournal = { version = "=0.1.21", optional = true }

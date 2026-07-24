@@ -562,6 +562,81 @@
             font-weight: 500;
         }
 
+        .proxy-probe-control {
+            border: 1px solid var(--borderColor-default);
+            border-radius: var(--pingly-radius);
+            background: var(--bgColor-default);
+        }
+
+        .proxy-progress {
+            height: .35rem;
+            border-radius: 999px;
+            background: var(--bgColor-neutral-muted);
+            overflow: hidden;
+        }
+
+        .proxy-progress-bar {
+            width: 0;
+            height: 100%;
+            border-radius: inherit;
+            background: var(--bgColor-accent-emphasis);
+            transition: width 120ms ease;
+        }
+
+        .proxy-verdict {
+            border: 1px solid var(--borderColor-default);
+            border-left: 3px solid var(--borderColor-muted);
+            border-radius: var(--pingly-radius);
+            background: var(--bgColor-default);
+        }
+
+        .proxy-verdict-likely {
+            border-left-color: var(--borderColor-danger-emphasis);
+        }
+
+        .proxy-verdict-possible,
+        .proxy-verdict-unknown {
+            border-left-color: var(--borderColor-attention-emphasis);
+        }
+
+        .proxy-verdict-unlikely {
+            border-left-color: var(--borderColor-success-emphasis);
+        }
+
+        .proxy-chart {
+            display: grid;
+            gap: .8rem;
+        }
+
+        .proxy-chart-row {
+            display: grid;
+            grid-template-columns: 8.5rem minmax(5rem, 1fr) 5rem;
+            align-items: center;
+            gap: .75rem;
+        }
+
+        .proxy-chart-track {
+            height: .65rem;
+            border-radius: 999px;
+            background: var(--bgColor-neutral-muted);
+            overflow: hidden;
+        }
+
+        .proxy-chart-fill {
+            min-width: 2px;
+            height: 100%;
+            border-radius: inherit;
+            background: var(--bgColor-accent-emphasis);
+        }
+
+        .proxy-chart-fill-tls {
+            background: var(--bgColor-attention-emphasis);
+        }
+
+        .proxy-chart-fill-application {
+            background: var(--bgColor-success-emphasis);
+        }
+
         .json-card {
             border-color: var(--borderColor-default);
             border-radius: var(--pingly-radius);
@@ -739,11 +814,35 @@
                 margin-left: 0 !important;
                 text-align: left !important;
             }
+
+            .proxy-chart-row {
+                grid-template-columns: minmax(0, 1fr) auto;
+            }
+
+            .proxy-chart-row > :first-child {
+                grid-row: 1;
+                grid-column: 1;
+            }
+
+            .proxy-chart-row > :last-child {
+                grid-row: 1;
+                grid-column: 2;
+            }
+
+            .proxy-chart-track {
+                grid-row: 2;
+                grid-column: 1 / -1;
+            }
         }
 
         @media (prefers-reduced-motion: reduce) {
-            #analysis-sidebar {
+            #analysis-sidebar,
+            .proxy-progress-bar {
                 transition: none;
+            }
+
+            .status-dot-animated {
+                animation: none !important;
             }
         }
     </style>
@@ -945,6 +1044,17 @@
                                     type="button"
                                     role="tab"
                                     aria-selected="false"
+                                    aria-controls="panel-proxy"
+                                    data-view="proxy"
+                                >
+                                    <i class="icon" data-lucide="scan-search" aria-hidden="true"></i>
+                                    <span>Latency</span>
+                                </button>
+                                <button
+                                    class="list-group-item list-group-item-action d-flex align-items-center gap-2 flex-shrink-0 text-start"
+                                    type="button"
+                                    role="tab"
+                                    aria-selected="false"
                                     aria-controls="panel-json"
                                     data-view="json"
                                 >
@@ -1077,6 +1187,9 @@
                                     </section>
                                     <section id="panel-tcp" role="tabpanel" data-panel="tcp" hidden>
                                         <div id="tcp-content"></div>
+                                    </section>
+                                    <section id="panel-proxy" role="tabpanel" data-panel="proxy" hidden>
+                                        <div id="proxy-content"></div>
                                     </section>
                                     <section id="panel-json" role="tabpanel" data-panel="json" hidden>
                                         <div class="card json-card">
