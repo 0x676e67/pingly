@@ -121,7 +121,10 @@ const state = {
     jsonRoute: DEFAULT_JSON_ROUTE,
     jsonLoadingRoute: null,
 
-    priorityProbes: new Map(),
+    priorityProbes: {
+        http2: new Map(),
+        http3: new Map(),
+    },
     priorityProbeRunning: new Set(),
     proxyAnalysis: null,
     proxyError: "",
@@ -477,7 +480,7 @@ function loadAnalysis(data) {
     }
 
     resetProxyProbe();
-    recordCurrentPriorityProbe(data);
+    recordCurrentPriorityProbes(data);
     state.data = data;
     refs.loading.hidden = true;
     refs.error.hidden = true;
@@ -1255,7 +1258,7 @@ function renderHttp2(http2) {
 
     root.replaceChildren(
         fingerprint,
-        renderPriorityProbeSection(),
+        renderPriorityProbeSection("http2"),
         renderChromiumResourcePrioritySection(),
         frameSection
     );
@@ -1321,6 +1324,7 @@ function renderHttp3(http3, tls) {
 
     root.replaceChildren(
         fingerprint,
+        renderPriorityProbeSection("http3"),
         settingsSection,
         headersSection,
         transportSection
@@ -1378,11 +1382,12 @@ function http3FrameMeta(frame, entryCount) {
     return parts.join(" / ");
 }
 
-function renderPriorityProbeSection() {
+function renderPriorityProbeSection(protocol) {
+    const isHttp3 = protocol === "http3";
     const section = createSection(
         "Request scenarios",
-        "HEADERS priority",
-        "effective 1-256 / wire 0-255"
+        isHttp3 ? "Request priority" : "HEADERS priority",
+        isHttp3 ? "RFC 9218 field value" : "effective 1-256 / wire 0-255"
     );
     const toolbar = create(
         "div",
@@ -1390,16 +1395,20 @@ function renderPriorityProbeSection() {
     );
     const actions = create("div", "d-flex flex-wrap gap-2");
     actions.setAttribute("role", "group");
-    actions.setAttribute("aria-label", "HTTP/2 priority probes");
+    actions.setAttribute(
+        "aria-label",
+        isHttp3 ? "HTTP/3 priority probes" : "HTTP/2 priority probes"
+    );
 
     const probeRunning = state.priorityProbeRunning.size > 0;
     PRIORITY_PROBES.forEach(function (scenario) {
+        const probeId = protocol + ":" + scenario.id;
         const button = create("button", "btn btn-outline-secondary btn-sm");
         button.type = "button";
         button.title = "Capture " + scenario.label.toLowerCase() + " priority";
         button.setAttribute("aria-label", button.title);
 
-        const running = state.priorityProbeRunning.has(scenario.id);
+        const running = state.priorityProbeRunning.has(probeId);
         button.disabled = probeRunning;
         if (running) {
             button.setAttribute("aria-busy", "true");
@@ -1414,36 +1423,41 @@ function renderPriorityProbeSection() {
 
         button.append(create("span", "", scenario.label));
         button.addEventListener("click", function () {
-            runPriorityProbe(scenario);
+            runPriorityProbe(protocol, scenario);
         });
         actions.append(button);
     });
 
     toolbar.append(
         actions,
-        create("span", "text-secondary small", "Observed HEADERS payload")
+        create(
+            "span",
+            "text-secondary small",
+            isHttp3 ? "Observed QPACK field section" : "Observed HEADERS payload"
+        )
     );
     section.append(toolbar);
 
-    const records = orderedPriorityProbeRecords();
+    const records = orderedPriorityProbeRecords(protocol);
     if (records.length === 0) {
         section.append(create("p", "text-secondary mb-3", "No priority samples"));
     } else {
-        section.append(renderPriorityProbeTable(records));
+        section.append(renderPriorityProbeTable(protocol, records));
     }
 
     return section;
 }
 
-function orderedPriorityProbeRecords() {
+function orderedPriorityProbeRecords(protocol) {
+    const probes = state.priorityProbes[protocol];
     const records = [];
-    const current = state.priorityProbes.get("current");
+    const current = probes.get("current");
     if (current) {
         records.push(current);
     }
 
     PRIORITY_PROBES.forEach(function (scenario) {
-        const record = state.priorityProbes.get(scenario.id);
+        const record = probes.get(scenario.id);
         if (record) {
             records.push(record);
         }
@@ -1452,7 +1466,21 @@ function orderedPriorityProbeRecords() {
     return records;
 }
 
-function renderPriorityProbeTable(records) {
+function renderPriorityProbeTable(protocol, records) {
+    const isHttp3 = protocol === "http3";
+    const headers = isHttp3
+        ? ["Scenario", "Request context", "RFC 9218 priority"]
+        : [
+            "Scenario",
+            "Request context",
+            "RFC 9218 priority",
+            "Blink / net",
+            "Weight",
+            "Wire",
+            "Depends",
+            "Exclusive",
+            "Stream",
+        ];
     const rows = records.map(function (record) {
         if (record.status !== "ok") {
             const statusClass = record.status === "running"
@@ -1463,22 +1491,26 @@ function renderPriorityProbeTable(records) {
                 statusClass,
                 record.status === "running" ? "Capturing" : record.error
             );
+            const cells = [record.label, record.context, status];
+            while (cells.length < headers.length) {
+                cells.push("-");
+            }
             return {
-                cells: [
-                    record.label,
-                    record.context,
-                    status,
-                    "-",
-                    "-",
-                    "-",
-                    "-",
-                    "-",
-                    "-",
-                ],
+                cells: cells,
             };
         }
 
         const observation = record.observation;
+        if (isHttp3) {
+            return {
+                cells: [
+                    create("span", "fw-semibold", record.label),
+                    monoPriorityValue(observation.requestContext),
+                    monoPriorityValue(observation.priorityHeader || "-"),
+                ],
+            };
+        }
+
         return {
             cells: [
                 create("span", "fw-semibold", record.label),
@@ -1494,21 +1526,9 @@ function renderPriorityProbeTable(records) {
         };
     });
 
-    return createTable(
-        [
-            "Scenario",
-            "Request context",
-            "RFC 9218 priority",
-            "Blink / net",
-            "Weight",
-            "Wire",
-            "Depends",
-            "Exclusive",
-            "Stream",
-        ],
-        rows,
-        ["", "", "", "", "", "", "", "", ""]
-    );
+    return createTable(headers, rows, headers.map(function () {
+        return "";
+    }));
 }
 
 function renderChromiumResourcePrioritySection() {
@@ -1542,33 +1562,35 @@ function monoPriorityValue(value) {
     return create("code", "font-monospace small text-break", text);
 }
 
-async function runPriorityProbe(scenario) {
+async function runPriorityProbe(protocol, scenario) {
     if (state.priorityProbeRunning.size > 0) {
         return;
     }
 
-    const path = createPriorityProbePath(scenario.id);
-    state.priorityProbeRunning.add(scenario.id);
-    state.priorityProbes.set(scenario.id, {
+    const probes = state.priorityProbes[protocol];
+    const probeId = protocol + ":" + scenario.id;
+    const path = createPriorityProbePath(protocol, scenario.id);
+    state.priorityProbeRunning.add(probeId);
+    probes.set(scenario.id, {
         label: scenario.label,
         context: scenario.context,
         status: "running",
     });
-    refreshPriorityProbeView();
+    refreshPriorityProbeViews();
 
     try {
         const data = scenario.kind === "navigation"
             ? await captureNavigationPriorityProbe(path)
             : await captureFetchPriorityProbe(path, scenario.priority);
-        state.priorityProbes.set(scenario.id, {
+        probes.set(scenario.id, {
             label: scenario.label,
             context: scenario.context,
             status: "ok",
-            observation: extractPriorityObservation(data, path),
+            observation: extractPriorityObservation(protocol, data, path),
         });
     } catch (error) {
         const message = error instanceof Error ? error.message : "Priority probe failed";
-        state.priorityProbes.set(scenario.id, {
+        probes.set(scenario.id, {
             label: scenario.label,
             context: scenario.context,
             status: "error",
@@ -1576,20 +1598,21 @@ async function runPriorityProbe(scenario) {
         });
         showToast(message);
     } finally {
-        state.priorityProbeRunning.delete(scenario.id);
-        refreshPriorityProbeView();
+        state.priorityProbeRunning.delete(probeId);
+        refreshPriorityProbeViews();
     }
 }
 
-function createPriorityProbePath(id) {
+function createPriorityProbePath(protocol, id) {
     const query = new URLSearchParams();
+    query.set("priority_protocol", protocol);
     query.set("priority_probe", id);
     query.set("nonce", Date.now().toString(36));
     return "/api/all?" + query.toString();
 }
 
 async function captureFetchPriorityProbe(path, priority) {
-    // Let the previous single-request HTTP/2 connection leave the browser pool.
+    // Give the previous probe time to finish before the browser schedules another request.
     await new Promise((resolve) => window.setTimeout(resolve, PRIORITY_PROBE_SETTLE_MS));
 
     const controller = new AbortController();
@@ -1693,20 +1716,32 @@ function parsePriorityProbeDocument(documentNode) {
     return JSON.parse(text.slice(start, end + 1));
 }
 
-function recordCurrentPriorityProbe(data) {
+function recordCurrentPriorityProbes(data) {
+    recordCurrentPriorityProbe("http2", data);
+    recordCurrentPriorityProbe("http3", data);
+}
+
+function recordCurrentPriorityProbe(protocol, data) {
+    const probes = state.priorityProbes[protocol];
     try {
-        state.priorityProbes.set("current", {
+        probes.set("current", {
             label: "Current fetch",
             context: "fetch(auto)",
             status: "ok",
-            observation: extractPriorityObservation(data, "/api/all"),
+            observation: extractPriorityObservation(protocol, data, "/api/all"),
         });
     } catch (_) {
-        state.priorityProbes.delete("current");
+        probes.delete("current");
     }
 }
 
-function extractPriorityObservation(data, path) {
+function extractPriorityObservation(protocol, data, path) {
+    return protocol === "http3"
+        ? extractHttp3PriorityObservation(data, path)
+        : extractHttp2PriorityObservation(data, path);
+}
+
+function extractHttp2PriorityObservation(data, path) {
     const frames = getFrames(data.http2);
     let matchedFrame;
     let matchedHeaders;
@@ -1741,12 +1776,8 @@ function extractPriorityObservation(data, path) {
     // RFC 7540 section 5.3.2 stores effective weight minus one on the wire.
     // https://www.rfc-editor.org/rfc/rfc7540.html#section-5.3.2
     const wireWeight = weight === null ? null : weight - 1;
-    const fetchMode = priorityHeaderValue(matchedHeaders, "sec-fetch-mode") || "-";
-    const fetchDestination =
-        priorityHeaderValue(matchedHeaders, "sec-fetch-dest") || "empty";
-
     return {
-        requestContext: fetchMode + " / " + fetchDestination,
+        requestContext: priorityRequestContext(matchedHeaders),
         priorityHeader: priorityHeaderValue(matchedHeaders, "priority"),
         chromiumPriority: weight === null
             ? "Not sent"
@@ -1759,6 +1790,28 @@ function extractPriorityObservation(data, path) {
     };
 }
 
+function extractHttp3PriorityObservation(data, path) {
+    const headers = normalizeHeaders(getHttp3Headers(data.http3));
+    if (priorityHeaderValue(headers, ":path") !== path) {
+        throw new Error("The matching HTTP/3 HEADERS frame was not captured.");
+    }
+
+    // HTTP/3 carries the initial priority signal in the protocol-independent
+    // Priority field defined by RFC 9218.
+    // https://www.rfc-editor.org/rfc/rfc9218.html#section-5
+    return {
+        requestContext: priorityRequestContext(headers),
+        priorityHeader: priorityHeaderValue(headers, "priority"),
+    };
+}
+
+function priorityRequestContext(headers) {
+    const fetchMode = priorityHeaderValue(headers, "sec-fetch-mode") || "-";
+    const fetchDestination =
+        priorityHeaderValue(headers, "sec-fetch-dest") || "empty";
+    return fetchMode + " / " + fetchDestination;
+}
+
 function priorityHeaderValue(headers, name) {
     const normalizedName = name.toLowerCase();
     const header = headers.find(function (candidate) {
@@ -1767,12 +1820,13 @@ function priorityHeaderValue(headers, name) {
     return header ? String(header.value) : "";
 }
 
-function refreshPriorityProbeView() {
+function refreshPriorityProbeViews() {
     if (!state.data) {
         return;
     }
 
     renderHttp2(state.data.http2);
+    renderHttp3(state.data.http3, state.data.tls);
     paintIcons();
 }
 
