@@ -1,3 +1,5 @@
+//! HTTP/2 SETTINGS frame models and value validation.
+
 use serde::{Deserialize, Serialize};
 
 use super::{FrameError, FrameType};
@@ -198,8 +200,6 @@ pub struct SettingsFrame {
     pub settings: Vec<Setting>,
 }
 
-// ==== impl Setting ====
-
 impl TryFrom<SettingRepr> for Setting {
     type Error = String;
 
@@ -313,8 +313,6 @@ impl From<(u16, u32)> for Setting {
     }
 }
 
-// ==== impl SettingValue ====
-
 impl SettingValue {
     // These three HTTP/2 settings use 0 and 1 as boolean values:
     // <https://www.rfc-editor.org/rfc/rfc9113#section-6.5.2>,
@@ -357,8 +355,6 @@ impl Setting {
         }
     }
 }
-
-// ==== impl SettingsFrame ====
 
 impl SettingsFrame {
     /// Returns whether this SETTINGS frame carries the ACK flag.
@@ -413,8 +409,9 @@ impl TryFrom<(u8, u32, &[u8])> for SettingsFrame {
             return Err(FrameError::InvalidStreamId);
         }
 
-        // SETTINGS defines only ACK (0x01); unknown flag bits are ignored.
-        // See: <https://www.rfc-editor.org/rfc/rfc9113#section-6.5>
+        // SETTINGS defines only ACK (0x01); unknown flag bits are ignored. See RFC 9113,
+        // Section 6.5:
+        // <https://www.rfc-editor.org/rfc/rfc9113#section-6.5>
         let is_ack = flags & 0x01 != 0;
         if is_ack && !payload.is_empty() {
             tracing::debug!("Invalid SETTINGS frame size: {}", payload.len());

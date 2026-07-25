@@ -1,3 +1,5 @@
+//! Protocol errors returned by HTTP/2 frame decoders.
+
 /// Errors that can occur during parsing an HTTP/2 frame.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]

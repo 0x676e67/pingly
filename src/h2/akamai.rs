@@ -1,3 +1,5 @@
+//! Akamai HTTP/2 fingerprints derived from the client's initial frame sequence.
+
 use std::fmt::Write;
 
 use hex::encode as hex_encode;

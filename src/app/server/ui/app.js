@@ -88,8 +88,8 @@ const PRIORITY_PROBES = [
     },
 ];
 
-// Blink assigns a baseline from the resource type before applying loading hints.
-// https://chromium.googlesource.com/chromium/src/+/HEAD/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.cc
+// Blink assigns a baseline from the resource type before applying loading hints. Source:
+// <https://chromium.googlesource.com/chromium/src/+/HEAD/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.cc>
 const CHROMIUM_RESOURCE_DEFAULTS = [
     { resource: "CSS / font", blink: "VeryHigh", net: "HIGHEST", weight: 256 },
     { resource: "fetch() / XSL / script", blink: "High", net: "MEDIUM", weight: 220 },
@@ -103,9 +103,9 @@ const CHROMIUM_RESOURCE_DEFAULTS = [
     },
 ];
 
-// Chromium maps Blink priorities to net priorities, then through the legacy SPDY scale.
-// https://chromium.googlesource.com/chromium/src/+/HEAD/third_party/blink/renderer/platform/exported/web_url_request.cc
-// https://chromium.googlesource.com/chromium/src/+/HEAD/net/spdy/spdy_http_utils.cc
+// Chromium maps Blink priorities to net priorities, then through the legacy SPDY scale. Sources:
+// <https://chromium.googlesource.com/chromium/src/+/HEAD/third_party/blink/renderer/platform/exported/web_url_request.cc>
+// <https://chromium.googlesource.com/chromium/src/+/HEAD/net/spdy/spdy_http_utils.cc>
 const CHROMIUM_PRIORITY_BY_WEIGHT = new Map([
     [256, "VeryHigh / HIGHEST"],
     [220, "High / MEDIUM"],
@@ -1773,8 +1773,8 @@ function extractHttp2PriorityObservation(data, path) {
         }
     }
 
-    // RFC 7540 section 5.3.2 stores effective weight minus one on the wire.
-    // https://www.rfc-editor.org/rfc/rfc7540.html#section-5.3.2
+    // RFC 7540, Section 5.3.2 stores effective weight minus one on the wire:
+    // <https://www.rfc-editor.org/rfc/rfc7540.html#section-5.3.2>
     const wireWeight = weight === null ? null : weight - 1;
     return {
         requestContext: priorityRequestContext(matchedHeaders),
@@ -1796,9 +1796,9 @@ function extractHttp3PriorityObservation(data, path) {
         throw new Error("The matching HTTP/3 HEADERS frame was not captured.");
     }
 
-    // HTTP/3 carries the initial priority signal in the protocol-independent
-    // Priority field defined by RFC 9218.
-    // https://www.rfc-editor.org/rfc/rfc9218.html#section-5
+    // HTTP/3 carries the initial priority signal in the protocol-independent Priority field
+    // defined by RFC 9218, Section 5:
+    // <https://www.rfc-editor.org/rfc/rfc9218.html#section-5>
     return {
         requestContext: priorityRequestContext(headers),
         priorityHeader: priorityHeaderValue(headers, "priority"),

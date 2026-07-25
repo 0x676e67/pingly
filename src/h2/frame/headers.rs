@@ -1,3 +1,5 @@
+//! HTTP/2 HEADERS and CONTINUATION models, flags, and field-block assembly.
+
 use httlib_hpack::Decoder;
 use serde::{Deserialize, Serialize};
 
@@ -240,8 +242,6 @@ pub enum HeadersFlagName {
     Priority = 0x20,
 }
 
-// ==== impl HeadersFlags ====
-
 impl HeadersFlags {
     /// Returns the original HEADERS flag byte.
     #[inline]
@@ -338,8 +338,6 @@ impl From<u8> for HeadersFlagName {
         }
     }
 }
-
-// ==== impl ContinuationFlags ====
 
 impl ContinuationFlags {
     /// Returns the original CONTINUATION flag byte.
@@ -491,8 +489,6 @@ impl TryFrom<HeadersFrameRepr> for HeadersFrame {
     }
 }
 
-// ==== impl PendingHeaders ====
-
 impl PendingHeaders {
     pub(super) fn is_complete(&self) -> bool {
         self.flags.has_end_headers()
@@ -603,8 +599,6 @@ impl TryFrom<(u8, u32, &[u8])> for PendingHeaders {
         })
     }
 }
-
-// ==== impl HeadersFrame ====
 
 impl TryFrom<(u8, u32, &[u8])> for HeadersFrame {
     type Error = FrameError;

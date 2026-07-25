@@ -1,3 +1,8 @@
+//! H3 stream adapters that capture client SETTINGS and request HEADERS.
+//!
+//! Captured bytes still flow to the H3 server unchanged. Parsing stops after the fields needed for
+//! response analysis are available.
+
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex, MutexGuard, OnceLock},
@@ -28,6 +33,7 @@ struct SettingsCaptureInner {
 }
 
 impl SettingsCapture {
+    /// Creates an empty capture shared by the connection and request handlers.
     pub(in crate::server) fn new() -> Self {
         Self {
             inner: Arc::new(SettingsCaptureInner {
@@ -37,16 +43,19 @@ impl SettingsCapture {
         }
     }
 
+    /// Returns the first client SETTINGS frame, if the control stream has supplied it.
     pub(in crate::server) fn get(&self) -> Option<&SettingsFrame> {
         self.inner.value.get()
     }
 
+    /// Stores the first client SETTINGS frame and wakes pending request analysis.
     pub(in crate::server) fn set(&self, frame: SettingsFrame) {
         if self.inner.value.set(frame).is_ok() {
             self.inner.ready.notify_waiters();
         }
     }
 
+    /// Waits until the client SETTINGS frame has been captured.
     pub(super) async fn wait(&self) {
         loop {
             if self.get().is_some() {
@@ -67,6 +76,7 @@ pub(in crate::server) type HeadersCapture = Arc<OnceLock<HeadersFrame>>;
 
 const HTTP3_CAPTURE_MAX_REQUESTS: usize = 128;
 
+/// Active request captures indexed by QUIC stream ID.
 type RequestCaptures = Arc<Mutex<HashMap<StreamId, HeadersCapture>>>;
 
 /// Shared connection-level capture state used by inspected QUIC streams.
@@ -98,6 +108,7 @@ impl Drop for RequestCaptureGuard {
 }
 
 impl Http3Capture {
+    /// Creates empty connection-level SETTINGS and request-stream captures.
     pub(super) fn new() -> Self {
         Self {
             settings: SettingsCapture::new(),
@@ -105,10 +116,12 @@ impl Http3Capture {
         }
     }
 
+    /// Returns a handle to the connection's client SETTINGS capture.
     pub(super) fn settings(&self) -> SettingsCapture {
         self.settings.clone()
     }
 
+    /// Removes and returns the HEADERS capture for `stream_id`.
     pub(super) fn take_headers(&self, stream_id: StreamId) -> Option<HeadersCapture> {
         self.requests().remove(&stream_id)
     }
@@ -140,15 +153,27 @@ impl Http3Capture {
     }
 }
 
+/// Incremental parser assigned according to the incoming QUIC stream type.
 enum CaptureParser {
+    /// Parses the peer control stream until the first SETTINGS frame is found.
     Control {
+        /// HTTP/3 frame parser for one unidirectional stream.
         parser: Http3Parser,
+
+        /// Destination for the captured SETTINGS frame.
         settings: SettingsCapture,
     },
+
+    /// Parses a request stream until the first HEADERS frame is found.
     Request {
+        /// HTTP/3 frame parser for one request stream.
         parser: Http3Parser,
+
+        /// Destination for the captured HEADERS frame.
         headers: HeadersCapture,
     },
+
+    /// Forwards bytes without inspection once capture is complete or unavailable.
     Disabled,
 }
 
@@ -235,6 +260,7 @@ pub(super) struct InspectedConnection {
 }
 
 impl InspectedConnection {
+    /// Wraps a Quinn-backed H3 connection with shared capture state.
     pub(super) fn new(inner: h3_quinn::Connection, capture: Http3Capture) -> Self {
         Self { inner, capture }
     }

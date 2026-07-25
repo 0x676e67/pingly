@@ -1,3 +1,5 @@
+//! Supported-version identifiers and their serialized representation.
+
 use std::fmt;
 
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};

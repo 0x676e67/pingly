@@ -1,3 +1,5 @@
+//! Incremental parsing for decrypted HTTP/3 request and unidirectional streams.
+
 use bytes::{Buf, BytesMut};
 
 use super::frame::{
@@ -261,6 +263,11 @@ impl Http3Parser {
     }
 
     /// Appends a chunk and returns every frame completed by it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Http3PushError`] when a complete stream type or frame violates HTTP/3 rules.
+    /// Frames completed earlier in the same chunk remain available on the error.
     pub fn push(&mut self, data: &[u8]) -> Result<Vec<Frame>, Http3PushError> {
         let mut frames = Vec::new();
         if let Err(error) = self.push_into(data, &mut frames) {
@@ -273,6 +280,11 @@ impl Http3Parser {
     }
 
     /// Appends a chunk and writes completed frames into `output`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a stream type or frame is invalid, a frame exceeds the configured
+    /// limit, or a decoded length cannot be represented safely.
     pub fn push_into(
         &mut self,
         data: &[u8],
@@ -365,6 +377,11 @@ impl Http3Parser {
     }
 
     /// Verifies that finite input has a complete and valid stream prefix.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when input remains incomplete, a request has no initial HEADERS frame, a
+    /// control stream has no initial SETTINGS frame, or the client opened a server-only stream.
     pub fn finish(&self) -> Result<(), Http3ParseError> {
         if !self.is_idle() {
             return Err(Http3ParseError::IncompleteInput {
@@ -422,8 +439,8 @@ impl Http3Parser {
                 if type_id == 0x04 && self.frame_count > 0 {
                     return Err(Http3ParseError::DuplicateSettingsFrame);
                 }
-                // DATA, HEADERS, and PUSH_PROMISE are forbidden on a control stream.
-                // https://www.rfc-editor.org/rfc/rfc9114#section-7.2
+                // RFC 9114, Section 7.2 forbids DATA, HEADERS, and PUSH_PROMISE on a control
+                // stream: <https://www.rfc-editor.org/rfc/rfc9114#section-7.2>
                 if matches!(type_id, 0x00 | 0x01 | 0x05) {
                     return Err(Http3ParseError::UnexpectedFrame { type_id });
                 }
@@ -431,10 +448,10 @@ impl Http3Parser {
             StreamKind::Request => {
                 // Connection-level frames are forbidden on request streams. PUSH_PROMISE is
                 // server-originated, while this parser models a client request stream. ORIGIN
-                // and PRIORITY_UPDATE are also control-stream extensions.
-                // https://www.rfc-editor.org/rfc/rfc9114#section-7.2
-                // https://www.rfc-editor.org/rfc/rfc9412#section-2
-                // https://www.rfc-editor.org/rfc/rfc9218#section-7.1
+                // and PRIORITY_UPDATE are also control-stream extensions:
+                // <https://www.rfc-editor.org/rfc/rfc9114#section-7.2>
+                // <https://www.rfc-editor.org/rfc/rfc9412#section-2>
+                // <https://www.rfc-editor.org/rfc/rfc9218#section-7.1>
                 if matches!(
                     type_id,
                     0x03 | 0x04 | 0x05 | 0x07 | 0x0c | 0x0d | 0x0f_0700 | 0x0f_0701
@@ -487,6 +504,11 @@ impl Default for Http3Parser {
 /// Parses a complete decrypted HTTP/3 request stream.
 ///
 /// The stream must contain its initial HEADERS frame as required by [RFC 9114, Section 4.1](https://www.rfc-editor.org/rfc/rfc9114#section-4.1).
+///
+/// # Errors
+///
+/// Returns an error when the stream is incomplete, violates frame ordering or placement rules,
+/// exceeds default limits, or contains a malformed frame or QPACK field section.
 pub fn parse_request_stream(data: &[u8]) -> Result<Vec<Frame>, Http3ParseError> {
     parse_complete(Http3Parser::request(), data)
 }
@@ -495,6 +517,11 @@ pub fn parse_request_stream(data: &[u8]) -> Result<Vec<Frame>, Http3ParseError> 
 ///
 /// Control streams must start with SETTINGS, and the server-only Push stream type is rejected.
 /// See [RFC 9114, Section 6.2](https://www.rfc-editor.org/rfc/rfc9114#section-6.2).
+///
+/// # Errors
+///
+/// Returns an error when the stream type or frame sequence is invalid, input is incomplete,
+/// default limits are exceeded, or a frame payload is malformed.
 pub fn parse_unidirectional_stream(data: &[u8]) -> Result<Vec<Frame>, Http3ParseError> {
     parse_complete(Http3Parser::unidirectional(), data)
 }

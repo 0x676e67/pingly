@@ -20,23 +20,39 @@ pub(crate) struct RustlsAcceptor {
     handshake_timeout: Duration,
 }
 
+/// Certificate-selection mode used during the TLS handshake.
 #[derive(Clone)]
 enum RustlsMode {
+    /// One configuration serves every ClientHello.
     Fixed(Arc<ServerConfig>),
+
+    /// ACME may select a temporary TLS-ALPN-01 challenge certificate.
     Acme {
+        /// Certificate configuration used for regular HTTPS connections.
         default_config: Arc<ServerConfig>,
 
+        /// Dynamic configuration that resolves ACME challenge certificates.
         challenge_config: Arc<ServerConfig>,
     },
 }
 
 impl RustlsAcceptor {
     /// Creates an acceptor with Pingly's reusable self-signed certificate.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the state directory, certificate generation, PEM decoding, or rustls
+    /// configuration fails.
     pub(crate) fn self_signed() -> crate::Result<Self> {
         Ok(Self::new(crate::server::certificate::config_self_signed()?))
     }
 
     /// Creates an acceptor from a PEM certificate chain and private key.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when either file cannot be read or the certificate chain, private key, or
+    /// rustls configuration is invalid.
     pub(crate) fn from_pem_files(cert: &Path, key: &Path) -> crate::Result<Self> {
         Ok(Self::new(
             crate::server::certificate::config_from_pem_chain_file(cert, key)?,
@@ -104,7 +120,7 @@ where
 /// Sets the application protocols accepted by Pingly HTTP connections.
 ///
 /// ALPN allows the client and server to select HTTP/2 or HTTP/1 during the TLS handshake.
-/// https://www.rfc-editor.org/rfc/rfc7301
+/// See [RFC 7301](https://www.rfc-editor.org/rfc/rfc7301).
 pub(in crate::server) fn set_http_alpn_protocols(config: &mut ServerConfig) {
     config.alpn_protocols = vec![
         b"h2".to_vec(),

@@ -1,3 +1,5 @@
+//! Passive TCP fingerprints and network-path estimates derived from initial SYN packets.
+
 use std::fmt::Write;
 
 use serde::{Deserialize, Serialize};

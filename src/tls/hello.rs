@@ -187,6 +187,11 @@ impl ClientHelloBuffer {
     ///
     /// The buffer remains available after either success or failure, which is
     /// useful when inspecting malformed captures.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientHelloParseError`] when the buffered TLS records are incomplete or malformed,
+    /// or do not contain a valid ClientHello.
     pub fn parse(&self) -> Result<ClientHello, ClientHelloParseError> {
         ClientHello::parse(&self.buf)
     }
@@ -197,6 +202,11 @@ impl ClientHelloBuffer {
     /// but malformed capture returns a [`ClientHelloParseError`]. TLS record fragmentation is
     /// defined by
     /// [RFC 9846, Section 5.1](https://www.rfc-editor.org/rfc/rfc9846#section-5.1).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientHelloParseError`] after the capture reaches a malformed record, handshake,
+    /// or ClientHello field.
     pub fn try_parse(&self) -> Result<Option<ClientHello>, ClientHelloParseError> {
         if let Some(stage) = self.capture.error {
             return Err(ClientHelloParseError::new(stage));
@@ -361,6 +371,11 @@ impl ClientHelloHandshakeBuffer {
     }
 
     /// Parses a complete ClientHello directly from TLS handshake bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientHelloParseError`] when the handshake header is incomplete or invalid, the
+    /// declared message has not completed, or the ClientHello payload is malformed.
     pub fn parse(&self) -> Result<ClientHello, ClientHelloParseError> {
         let length = self
             .handshake_len
@@ -372,6 +387,11 @@ impl ClientHelloHandshakeBuffer {
     }
 
     /// Parses the ClientHello when enough handshake bytes have arrived.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientHelloParseError`] after the capture reaches an invalid handshake header or
+    /// malformed ClientHello payload.
     pub fn try_parse(&self) -> Result<Option<ClientHello>, ClientHelloParseError> {
         if let Some(stage) = self.error {
             return Err(ClientHelloParseError::new(stage));
@@ -697,6 +717,10 @@ pub struct ProtocolName(Box<[u8]>);
 
 impl ProtocolName {
     /// Creates a protocol name from one to 255 bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolNameError`] when the supplied name is empty or longer than 255 bytes.
     pub fn from_bytes(bytes: impl Into<Box<[u8]>>) -> Result<Self, ProtocolNameError> {
         let bytes = bytes.into();
         if bytes.is_empty() || bytes.len() > usize::from(u8::MAX) {
@@ -1913,7 +1937,13 @@ impl ClientHello {
 
     /// Parses the first ClientHello from one or more complete TLS records.
     ///
-    /// Unknown cipher-suite identifiers and GREASE values are preserved in the cipher_suites list.
+    /// Unknown cipher-suite identifiers and GREASE values are preserved in the `cipher_suites`
+    /// list.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientHelloParseError`] when record framing is incomplete or invalid, no
+    /// ClientHello is present, or a ClientHello field or extension is malformed.
     pub fn parse(buf: &[u8]) -> Result<Self, ClientHelloParseError> {
         match Self::parse_inner(buf) {
             Ok(client_hello) => {
@@ -1952,6 +1982,11 @@ impl ClientHello {
     /// [RFC 9846, Section 4](https://www.rfc-editor.org/rfc/rfc9846#section-4). It has no TLS record
     /// header, matching the bytes carried by QUIC CRYPTO frames. See
     /// [RFC 9001, Section 4.1.3](https://www.rfc-editor.org/rfc/rfc9001#section-4.1.3).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientHelloParseError`] when the handshake type or declared length is wrong,
+    /// trailing bytes remain, or a ClientHello field or extension is malformed.
     pub fn parse_handshake(handshake: &[u8]) -> Result<Self, ClientHelloParseError> {
         let Some(expected_len) = client_hello_handshake_len(handshake)? else {
             return Err(ClientHelloParseError::new(

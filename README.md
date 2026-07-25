@@ -4,15 +4,18 @@
 [![Crates.io License](https://img.shields.io/crates/l/pingly)](./LICENSE)
 [![crates.io](https://img.shields.io/crates/v/pingly.svg?logo=rust)](https://crates.io/crates/pingly)
 
-> 🚀 Help me work seamlessly with open source sharing by [sponsoring me on GitHub](https://github.com/0x676e67/0x676e67/blob/main/SPONSOR.md)
+> [Sponsor the project on GitHub](https://github.com/0x676e67/0x676e67/blob/main/SPONSOR.md) to support its maintenance.
 
-**Pingly** is a Rust server and library for inspecting TLS and HTTP traffic.
+**Pingly** parses captured TLS, HTTP, QUIC, and TCP wire data. Run it as a server with JSON
+endpoints and a Web UI, or use its Rust parsers with saved captures.
 
 ## Features
 
-- JA3, JA4, Akamai HTTP/2, and HTTP/3 fingerprints
-- HTTP/1 headers, HTTP/2 frames, and HTTP/3/QUIC wire details
-- Incremental parsing and serialization
+- JA3, JA4, Akamai HTTP/2, HTTP/3, and passive TCP fingerprints
+- Ordered HTTP/1 fields, HTTP/2 frames, QPACK fields, and QUIC transport parameters
+- Incremental parsers and Serde round trips for saved captures
+- Linux packet capture with TCP and request latency analysis
+- Browser-based protocol inspection
 - Automatic ACME certificates with TLS-ALPN-01 or HTTP-01
 
 ## Manual
@@ -97,10 +100,10 @@ docker run -d --name pingly --restart unless-stopped \
   --acme-production
 ```
 
-HTTP-01 additionally needs `-p 80:8080`, `--acme-challenge http-01`, and
+For HTTP-01, also pass `-p 80:8080`, `--acme-challenge http-01`, and
 `--acme-http-bind 0.0.0.0:8080`.
 
-## Example
+## Library
 
 Add Pingly to your project:
 
@@ -109,13 +112,13 @@ Add Pingly to your project:
 pingly = "0.1"
 ```
 
-And then parse a captured TLS ClientHello:
+The parsers work with captured protocol bytes. For example, a TLS ClientHello can span several TLS
+records:
 
 ```rust
 use pingly::tls::ClientHello;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // The capture may contain a ClientHello split across several TLS records.
     let bytes = std::fs::read("client-hello.bin")?;
     let hello = ClientHello::parse(&bytes)?;
 
@@ -125,7 +128,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-See [examples](./examples) for incremental parsing, protocol fingerprints, and saved JSON.
+HTTP/3 parsing expects decrypted QUIC stream bytes; the library does not decrypt UDP packets. See
+the [examples](./examples) for incremental parsing, protocol fingerprints, and saved JSON.
 
 ## License
 

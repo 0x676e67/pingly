@@ -1,3 +1,5 @@
+//! QUIC variable-length integer decoding and lossless JSON representation.
+
 const MAX_VALUE: u64 = (1 << 62) - 1;
 
 /// Decodes one QUIC variable-length integer and returns its value and encoded width.

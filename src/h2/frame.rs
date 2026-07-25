@@ -1,3 +1,5 @@
+//! Stateful HTTP/2 frame and HPACK field-block decoding.
+
 mod error;
 mod headers;
 mod priority;
@@ -28,7 +30,7 @@ const FRAME_HEADER_LEN: usize = 9;
 pub struct FrameParser {
     pending_headers: Option<PendingHeaders>,
 
-    // HPACK's dynamic table is a connection-level decoding context. See RFC 7541 Section 2.2:
+    // HPACK's dynamic table is a connection-level decoding context. See RFC 7541, Section 2.2:
     // <https://www.rfc-editor.org/rfc/rfc7541#section-2.2>
     hpack_decoder: Decoder<'static>,
 }
@@ -95,6 +97,11 @@ impl FrameParser {
     ///
     /// HPACK decoding errors reset the connection-level compression state before
     /// the error is returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FrameParseError`] when a complete frame violates its type-specific rules, a
+    /// CONTINUATION sequence is invalid, or HPACK decoding fails.
     pub fn parse(&mut self, data: &[u8]) -> Result<FrameParseOutcome, FrameParseError> {
         if data.len() < FRAME_HEADER_LEN {
             return Ok(FrameParseOutcome::Incomplete);
@@ -124,8 +131,8 @@ impl FrameParser {
             Err(source) => {
                 self.pending_headers = None;
                 // httlib-hpack updates its dynamic table one field at a time. A later decoding
-                // failure can therefore leave partial state, but RFC 9113 requires the connection
-                // to terminate after COMPRESSION_ERROR:
+                // failure can therefore leave partial state, but RFC 9113, Section 4.3 requires
+                // the connection to terminate after COMPRESSION_ERROR:
                 // <https://www.rfc-editor.org/rfc/rfc9113#section-4.3>
                 if matches!(&source, FrameError::CompressionError) {
                     self.hpack_decoder = Decoder::default();
@@ -159,9 +166,9 @@ impl FrameParser {
         stream_id: u32,
         payload: &[u8],
     ) -> Result<Option<Frame>, FrameError> {
-        // RFC 9113 requires CONTINUATION frames to be consecutive and on the
-        // same stream until END_HEADERS is received.
-        // See: <https://www.rfc-editor.org/rfc/rfc9113#section-6.10>
+        // RFC 9113, Section 6.10 requires CONTINUATION frames to be consecutive and on the same
+        // stream until END_HEADERS is received:
+        // <https://www.rfc-editor.org/rfc/rfc9113#section-6.10>
         if let Some(pending) = self.pending_headers.as_mut() {
             if ty != 0x9 {
                 return Err(FrameError::ExpectedContinuation);

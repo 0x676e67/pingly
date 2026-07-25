@@ -15,6 +15,11 @@ pub(crate) fn directory() -> PathBuf {
 }
 
 /// Creates a directory for private certificate and account material.
+///
+/// # Errors
+///
+/// Returns an error when the directory cannot be created or its Unix permissions cannot be set to
+/// owner-only access.
 pub(crate) fn prepare_private_directory(path: &Path) -> io::Result<()> {
     std::fs::create_dir_all(path)?;
 

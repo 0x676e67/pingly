@@ -1,3 +1,5 @@
+//! QUIC transport-parameter models, validation, and wire decoding.
+
 use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
@@ -418,6 +420,11 @@ impl QuicVersionName {
 ///
 /// Parameters are returned in their original wire order. Duplicate identifiers are rejected as
 /// required by [RFC 9000, Section 7.4](https://www.rfc-editor.org/rfc/rfc9000#section-7.4).
+///
+/// # Errors
+///
+/// Returns an error when a tuple is truncated, a length overflows the platform, an identifier is
+/// duplicated, or a known integer or version-information payload is malformed.
 pub fn parse_transport_parameters(
     input: &[u8],
 ) -> Result<Vec<QuicTransportParameter>, QuicTransportParameterError> {

@@ -55,12 +55,20 @@ pub(crate) struct HttpServer<A = RustlsAcceptor> {
 }
 
 enum ListenerExit {
+    /// The TCP accept loop ended.
     Tcp(std::result::Result<(), JoinError>),
+
+    /// The QUIC accept loop ended.
     Quic(std::result::Result<Result<()>, JoinError>),
 }
 
 impl HttpServer<RustlsAcceptor> {
-    /// Construct a new [`HttpServer<RustlsAcceptor>`].
+    /// Binds matching HTTPS and HTTP/3 listeners with one rustls configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the TCP or QUIC listener cannot bind or the QUIC TLS configuration is
+    /// invalid.
     pub(crate) async fn new(
         bind: SocketAddr,
         keep_alive_timeout: u64,
@@ -79,7 +87,11 @@ impl HttpServer<RustlsAcceptor> {
         Ok(server)
     }
 
-    /// Construct a new [`HttpServer<DefaultAcceptor>`].
+    /// Binds a plain HTTP/1 and HTTP/2 listener without TLS or HTTP/3.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the TCP listener cannot bind.
     pub(crate) async fn new_plain(
         bind: SocketAddr,
         router: Router,
@@ -90,6 +102,7 @@ impl HttpServer<RustlsAcceptor> {
 }
 
 impl<A> HttpServer<A> {
+    /// Binds the TCP listener and prepares shared Hyper connection settings.
     async fn bind_tcp(
         bind: SocketAddr,
         router: Router,
@@ -108,6 +121,7 @@ impl<A> HttpServer<A> {
         })
     }
 
+    /// Replaces the connection acceptor while retaining listeners and protocol settings.
     pub(crate) fn map_acceptor<B>(self, map: impl FnOnce(A) -> B) -> HttpServer<B> {
         HttpServer {
             tcp_listener: self.tcp_listener,
@@ -130,7 +144,7 @@ async fn bind_tcp_listener(bind: SocketAddr) -> Result<TcpListener> {
 
 /// The IPv6 wildcard opts into IPv4-mapped connections; concrete addresses do not.
 ///
-/// https://www.rfc-editor.org/rfc/rfc3493#section-5.3
+/// See [RFC 3493, Section 5.3](https://www.rfc-editor.org/rfc/rfc3493#section-5.3).
 fn bind_ipv6_tcp(bind: SocketAddr) -> io::Result<TcpListener> {
     let socket = Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP))?;
     socket.set_only_v6(!bind.ip().is_unspecified())?;
@@ -151,6 +165,12 @@ where
     <A::Service as Service<Request<Body>>>::Future: Send + 'static,
     A::Future: Send,
 {
+    /// Serves configured listeners until graceful shutdown or a listener failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a spawned listener task cannot be joined or the QUIC listener exits
+    /// with a server error.
     pub(crate) async fn serve(self, handle: Handle) -> Result<()> {
         let Self {
             tcp_listener,
@@ -290,8 +310,9 @@ mod tcp {
             match listener.accept().await {
                 Ok(stream) => return stream,
                 Err(error) => {
-                    // axum-server retries transient listener accept errors after a short backoff.
-                    // https://docs.rs/axum-server/0.8.0/src/axum_server/server.rs.html#370-376
+                    // Retry transient accept errors after the same short backoff used by
+                    // axum-server:
+                    // <https://docs.rs/axum-server/0.8.0/src/axum_server/server.rs.html#370-376>
                     tracing::warn!(%error, "failed to accept TCP connection");
                     tokio::time::sleep(ACCEPT_ERROR_BACKOFF).await;
                 }
@@ -338,9 +359,9 @@ mod tcp {
                     let router = router.clone();
                     let connection_handle = handle.clone();
 
-                    // Pingora strategy: inside a no-steal runtime, `current_handle()` randomly
-                    // selects a worker from the runtime pool.
-                    // https://docs.rs/pingora-runtime/0.8.1/src/pingora_runtime/lib.rs.html#88-102
+                    // Inside a no-steal runtime, Pingora's `current_handle()` selects a worker
+                    // from the runtime pool:
+                    // <https://docs.rs/pingora-runtime/0.8.1/src/pingora_runtime/lib.rs.html#88-102>
                     connections.spawn_on(async move {
                         let service = router
                             .into_make_service_with_connect_info::<SocketAddr>()
@@ -665,8 +686,9 @@ mod quic {
     const CONNECTION_RECEIVE_WINDOW: u32 = 1024 * 1024;
     const CONNECTION_SEND_WINDOW: u64 = 1024 * 1024;
 
-    // HTTP/3 application error codes are carried as QUIC variable-length integers.
-    // https://www.rfc-editor.org/rfc/rfc9114#section-8.1
+    // HTTP/3 application error codes use QUIC variable-length integers. See RFC 9114,
+    // Section 8.1:
+    // <https://www.rfc-editor.org/rfc/rfc9114#section-8.1>
     const H3_NO_ERROR: quinn::VarInt = quinn::VarInt::from_u32(0x100);
 
     /// Binds a QUIC endpoint with H3 ALPN and ClientHello capture.
@@ -708,21 +730,23 @@ mod quic {
         let mut config = quinn::TransportConfig::default();
 
         // Each HTTP/3 request uses a client-initiated bidirectional stream. Capping these streams
-        // also bounds request tasks retained by one connection.
-        // https://www.rfc-editor.org/rfc/rfc9114#section-6.1
+        // also bounds request tasks retained by one connection. See RFC 9114, Section 6.1:
+        // <https://www.rfc-editor.org/rfc/rfc9114#section-6.1>
         config.max_concurrent_bidi_streams(request_stream_limit(
             concurrent_limit,
             close_after_first_request,
         ));
 
         // HTTP/3 needs control and QPACK streams, with spare capacity for GREASE and extensions.
-        // https://www.rfc-editor.org/rfc/rfc9114#section-6.2
+        // See RFC 9114, Section 6.2:
+        // <https://www.rfc-editor.org/rfc/rfc9114#section-6.2>
         config.max_concurrent_uni_streams(quinn::VarInt::from_u32(
             MAX_UNIDIRECTIONAL_STREAMS_PER_CONNECTION,
         ));
 
-        // QUIC flow-control windows bound buffered request data per stream and connection.
-        // https://www.rfc-editor.org/rfc/rfc9000#section-4.1
+        // QUIC flow-control windows bound buffered request data per stream and connection. See
+        // RFC 9000, Section 4.1:
+        // <https://www.rfc-editor.org/rfc/rfc9000#section-4.1>
         config
             .stream_receive_window(quinn::VarInt::from_u32(STREAM_RECEIVE_WINDOW))
             .receive_window(quinn::VarInt::from_u32(CONNECTION_RECEIVE_WINDOW))
@@ -749,8 +773,9 @@ mod quic {
         let mut builder = h3::server::builder();
 
         // SETTINGS_MAX_FIELD_SECTION_SIZE advertises and enforces the decoded request header
-        // bound. RFC 9114 counts each field's name, value, and 32 bytes of overhead.
-        // https://www.rfc-editor.org/rfc/rfc9114#section-4.1.1.3
+        // bound. RFC 9114, Section 4.1.1.3 counts each field's name, value, and 32 bytes of
+        // overhead:
+        // <https://www.rfc-editor.org/rfc/rfc9114#section-4.1.1.3>
         builder.max_field_section_size(MAX_HEADER_LIST_SIZE as u64);
         builder
     }
@@ -920,8 +945,9 @@ mod quic {
         };
 
         // GOAWAY identifies the first request stream that will not be processed. A zero grace count
-        // keeps the accepted stream valid while rejecting every later request stream.
-        // https://www.rfc-editor.org/rfc/rfc9114#section-5.2
+        // keeps the accepted stream valid while rejecting every later request stream. See
+        // RFC 9114, Section 5.2:
+        // <https://www.rfc-editor.org/rfc/rfc9114#section-5.2>
         begin_connection_shutdown(&mut connection, remote_addr).await;
 
         let request = serve_request(resolver, remote_addr, service, capture, client_hello);
@@ -1033,8 +1059,9 @@ mod quic {
 
     async fn begin_connection_shutdown(connection: &mut Http3Connection, remote_addr: SocketAddr) {
         // h3 adds this request count to the last accepted stream ID. Advancing once identifies the
-        // first request stream that was not accepted, so the current response remains valid.
-        // https://www.rfc-editor.org/rfc/rfc9114#section-5.2
+        // first request stream that was not accepted, so the current response remains valid. See
+        // RFC 9114, Section 5.2:
+        // <https://www.rfc-editor.org/rfc/rfc9114#section-5.2>
         if let Err(error) = connection.shutdown(1).await {
             tracing::debug!(%error, %remote_addr, "failed to send HTTP/3 GOAWAY");
         }
@@ -1078,8 +1105,9 @@ mod quic {
         remote_addr: SocketAddr,
     ) {
         // Once accepted responses are complete, the endpoint can close with H3_NO_ERROR. The
-        // timeout prevents a peer that keeps QUIC alive after GOAWAY from retaining this
-        // connection forever. https://www.rfc-editor.org/rfc/rfc9114#section-5.2
+        // timeout stops a peer from retaining the connection indefinitely after GOAWAY. See
+        // RFC 9114, Section 5.2:
+        // <https://www.rfc-editor.org/rfc/rfc9114#section-5.2>
         let closed = timeout(CONNECTION_CLOSE_TIMEOUT, async {
             loop {
                 tokio::select! {
@@ -1153,8 +1181,8 @@ mod quic {
             let settings = capture.settings();
 
             // Control and request streams can arrive independently. Wait briefly for the mandatory
-            // peer SETTINGS before response analysis rather than dropping HTTP/3 data due to
-            // ordering. https://www.rfc-editor.org/rfc/rfc9114#section-7.2.4.2
+            // peer SETTINGS before response analysis. See RFC 9114, Section 7.2.4.2:
+            // <https://www.rfc-editor.org/rfc/rfc9114#section-7.2.4.2>
             if timeout(SETTINGS_CAPTURE_TIMEOUT, settings.wait())
                 .await
                 .is_ok()

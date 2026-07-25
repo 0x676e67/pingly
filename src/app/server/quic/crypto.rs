@@ -1,3 +1,8 @@
+//! Quinn crypto adapters that retain the ClientHello carried by QUIC CRYPTO frames.
+//!
+//! QUIC carries TLS handshake bytes without TLS record framing. See
+//! [RFC 9001, Section 4](https://www.rfc-editor.org/rfc/rfc9001#section-4).
+
 use std::{
     any::Any,
     io,

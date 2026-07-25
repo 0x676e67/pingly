@@ -1,3 +1,5 @@
+//! JA3 fingerprint construction from parsed ClientHello fields.
+
 use std::fmt::Write;
 
 use hex::encode as hex_encode;

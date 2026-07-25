@@ -1,3 +1,5 @@
+//! Certificate loading and reusable self-signed certificate generation.
+
 use std::{io, path::Path, sync::Arc};
 
 use rcgen::{
@@ -120,8 +122,9 @@ fn generate_self_signed() -> crate::Result<(Vec<u8>, Vec<u8>)> {
     params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
     params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
 
-    // A TLS server certificate is an end-entity certificate, not a CA certificate.
-    // https://www.rfc-editor.org/rfc/rfc5280#section-4.2.1.9
+    // A TLS server certificate is an end-entity certificate, not a CA certificate. See RFC 5280,
+    // Section 4.2.1.9:
+    // <https://www.rfc-editor.org/rfc/rfc5280#section-4.2.1.9>
     params.is_ca = IsCa::NoCa;
     params.subject_alt_names = vec![SanType::DnsName("localhost".try_into()?)];
 

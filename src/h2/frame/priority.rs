@@ -1,3 +1,5 @@
+//! HTTP/2 priority fields and stream-dependency validation.
+
 use serde::{Deserialize, Serialize};
 
 use super::{FrameError, FrameType};
@@ -66,8 +68,6 @@ struct StreamDependencyRepr {
     /// Numeric exclusive bit.
     exclusive: u8,
 }
-
-// ==== impl PriorityFrame ====
 
 impl TryFrom<PriorityFrameRepr> for PriorityFrame {
     type Error = &'static str;
@@ -139,8 +139,6 @@ impl TryFrom<(u32, &[u8])> for PriorityFrame {
         })
     }
 }
-
-// ==== impl StreamDependency ====
 
 impl TryFrom<&[u8]> for StreamDependency {
     type Error = FrameError;

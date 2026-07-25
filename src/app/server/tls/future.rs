@@ -136,8 +136,8 @@ where
                         Poll::Pending => return Poll::Pending,
                     };
 
-                    // RFC 8737 requires acme-tls/1 to be the only offered ALPN value.
-                    // https://www.rfc-editor.org/rfc/rfc8737#section-3
+                    // RFC 8737, Section 3 requires acme-tls/1 to be the only offered ALPN value:
+                    // <https://www.rfc-editor.org/rfc/rfc8737#section-3>
                     let challenge = is_tls_alpn_challenge(&start.client_hello());
                     let config = if challenge {
                         challenge_config.clone()
@@ -185,8 +185,8 @@ where
                         }
 
                         // The validation connection carries no application data and ends after
-                        // the handshake.
-                        // https://www.rfc-editor.org/rfc/rfc8737#section-3
+                        // the handshake, as specified by RFC 8737, Section 3:
+                        // <https://www.rfc-editor.org/rfc/rfc8737#section-3>
                         this.state.set(RustlsAcceptState::Closing { stream });
                         continue;
                     }

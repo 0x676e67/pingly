@@ -25,12 +25,17 @@ const SERVICE_NAME: &str = concat!(env!("CARGO_PKG_NAME"), ".service");
 const JOB_TIMEOUT: Duration = Duration::from_secs(30);
 const RECENT_LOG_LIMIT: usize = 100;
 
+/// User and group that should own the installed service process.
 #[derive(Clone, Copy)]
 struct ServiceIdentity {
+    /// Numeric user identifier.
     uid: u32,
+
+    /// Numeric primary group identifier.
     gid: u32,
 }
 
+/// Server invocation stored in the generated systemd unit.
 struct ServiceCommand {
     /// Arguments passed after the server executable.
     arguments: Vec<String>,
@@ -233,8 +238,9 @@ fn service_unit(
     }
 
     let mut extra_service = Vec::with_capacity(12);
-    // unitbus 0.1.7 quotes this directive, but systemd treats those quotes as path bytes.
-    // https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#WorkingDirectory=
+    // unitbus 0.1.7 quotes this directive, but systemd treats those quotes as path bytes. See the
+    // `WorkingDirectory=` rules:
+    // <https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#WorkingDirectory=>
     extra_service.push(format!("WorkingDirectory={working_directory}"));
 
     let mut capabilities = Vec::with_capacity(3);
@@ -251,8 +257,8 @@ fn service_unit(
     }
 
     // StateDirectory provides writable storage for generated certificates and ACME state outside
-    // ProtectSystem=strict, and exports its path through STATE_DIRECTORY.
-    // https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#StateDirectory=
+    // ProtectSystem=strict, and exports its path through STATE_DIRECTORY:
+    // <https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#StateDirectory=>
     extra_service.extend([
         "StateDirectory=pingly".to_owned(),
         "StateDirectoryMode=0700".to_owned(),
@@ -327,14 +333,16 @@ fn string_arg(value: OsString, description: &'static str) -> Result<String> {
 ///
 /// systemd expands percent specifiers and dollar environment references even though no shell is
 /// involved. Doubling them preserves the literal argument supplied through the CLI.
-/// https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html#Command%20Lines
+/// See
+/// [systemd.service](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html#Command%20Lines).
 fn escape_systemd_expansions(argument: &mut String) {
     escape_markers(argument, |character| matches!(character, '%' | '$'));
 }
 
 /// Escapes percent specifiers in directives such as `WorkingDirectory`.
 ///
-/// https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html#Specifiers
+/// See
+/// [systemd.unit](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html#Specifiers).
 fn escape_systemd_specifiers(value: &mut String) {
     escape_markers(value, |character| character == '%');
 }

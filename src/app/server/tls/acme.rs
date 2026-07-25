@@ -30,6 +30,11 @@ pub(crate) struct AcmeRuntime {
 
 impl AcmeRuntime {
     /// Builds certificate state for TLS-ALPN-01 or HTTP-01 validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the ACME state directory cannot be prepared, rustls configuration is
+    /// already shared, or HTTP-01 has no listener address.
     pub(crate) fn new(options: AcmeOptions) -> crate::Result<Self> {
         let AcmeOptions {
             domains,
@@ -106,8 +111,8 @@ impl AcmeRuntime {
 
 /// Plain HTTP listener used only for HTTP-01 challenge responses.
 ///
-/// The token and key authorization exchange follows RFC 8555 section 8.3.
-/// https://www.rfc-editor.org/rfc/rfc8555#section-8.3
+/// The token and key authorization exchange follows
+/// [RFC 8555, Section 8.3](https://www.rfc-editor.org/rfc/rfc8555#section-8.3).
 pub(crate) struct Http01Challenge {
     /// Address of the dedicated plain HTTP listener.
     bind: SocketAddr,
