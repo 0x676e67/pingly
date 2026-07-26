@@ -24,9 +24,7 @@ const HTTP2_CAPTURE_MAX_FRAMES: usize = 128;
 #[derive(Default)]
 struct Http2CaptureBudget {
     bytes: usize,
-
     frames: usize,
-
     stopped: bool,
 }
 
