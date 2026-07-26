@@ -50,42 +50,19 @@ Options:
   -h, --help  Print help
 ```
 
-## ACME
+## Deployment
 
-TLS-ALPN-01 validates on public TCP port 443 and is the default:
-
-```bash
-pingly run --bind 0.0.0.0:443 \
-  --acme-domain pingly.us.kg \
-  --acme-email admin@gmail.com
-```
-
-HTTP-01 serves its challenge on `0.0.0.0:80` by default:
+The Alpine image is published to `ghcr.io/0x676e67/pingly`. Run it locally with:
 
 ```bash
-pingly run --bind 0.0.0.0:443 \
-  --acme-domain pingly.us.kg \
-  --acme-email admin@gmail.com \
-  --acme-challenge http-01
-```
-
-Both commands use Let's Encrypt staging until `--acme-production` is supplied. Certificates and
-account data use the platform cache directory; systemd services use their managed state directory.
-
-## Docker
-
-The latest Alpine image is published to `ghcr.io/0x676e67/pingly`. Keep certificates in a named
-volume when running it:
-
-```bash
-docker pull ghcr.io/0x676e67/pingly:latest
 docker run --rm --name pingly \
   -p 8181:8181 \
   -v pingly-state:/var/lib/pingly \
   ghcr.io/0x676e67/pingly:latest
 ```
 
-For TLS-ALPN-01, map public port 443 to the container's unprivileged listener:
+For a public deployment, keep ACME data in a named volume and map port 443 for the default
+TLS-ALPN-01 challenge:
 
 ```bash
 docker run -d --name pingly --restart unless-stopped \
@@ -97,8 +74,11 @@ docker run -d --name pingly --restart unless-stopped \
   --acme-production
 ```
 
-HTTP-01 additionally needs `-p 80:8080`, `--acme-challenge http-01`, and
-`--acme-http-bind 0.0.0.0:8080`.
+For HTTP-01, also publish port 80 with `-p 80:8080` and add `--acme-challenge http-01` and
+`--acme-http-bind 0.0.0.0:8080`. Without Docker, run the same ACME options with
+`pingly run --bind 0.0.0.0:443`. Omit `--acme-production` to use Let's Encrypt staging.
+Certificates and account data use the platform cache directory; systemd services use their managed
+state directory.
 
 ## Example
 
@@ -106,7 +86,7 @@ Add Pingly to your project:
 
 ```toml
 [dependencies]
-pingly = "0.1"
+pingly = "0.2"
 ```
 
 And then parse a captured TLS ClientHello:

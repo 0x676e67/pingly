@@ -85,7 +85,7 @@ jobs:
       
       - name: Install dependencies
         run: |
-          apt-get update && apt-get install -y mingw-w64 sudo
+          apt-get update && apt-get install -y bison flex mingw-w64 nasm sudo
 
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
