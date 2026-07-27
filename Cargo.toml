@@ -1,6 +1,6 @@
 [package]
 name = "pingly"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.96"
 license = "Apache-2.0"
@@ -70,14 +70,14 @@ tracing = { version = "0.1.40" }
 
 ## Application and runtime.
 boxcar = { version = "0.2.8", optional = true }
-clap = { version = "4", features = ["derive", "env"], optional = true }
+clap = { version = "4.6.4", features = ["derive", "env"], optional = true }
 dirs = { version = "6.0", optional = true }
 futures-util = { version = "0.3.33", optional = true }
 pin-project-lite = { version = "0.2.9", optional = true }
 pingora-runtime = { version = "0.8.1", optional = true }
 serde_json = { version = "1.0", optional = true }
 socket2 = { version = "0.6", optional = true }
-tokio = { version = "1", optional = true, features = [
+tokio = { version = "1.53.1", optional = true, features = [
     "io-util",
     "macros",
     "net",
@@ -94,7 +94,7 @@ axum-extra = { version = "0.12.1", default-features = false, optional = true, fe
     "erased-json",
 ] }
 http-body-util = { version = "0.1.4", optional = true }
-hyper = { version = "1.10.1", features = ["http1", "http2", "server"], optional = true }
+hyper = { version = "1.11.0", features = ["http1", "http2", "server"], optional = true }
 hyper-util = { version = "0.1.20", default-features = false, optional = true, features = [
     "http1",
     "http2",
@@ -128,7 +128,7 @@ rustls-acme = { version = "0.15.3", default-features = false, features = [
 rustls-pemfile = { version = "2.0", optional = true }
 tokio-rustls = { version = "0.26", optional = true }
 
-## HTTP/3 and QUIC serving.
+## HTTP/3 over QUIC serving.
 h3 = { version = "0.0.8", optional = true }
 h3-quinn = { version = "0.0.10", optional = true, features = ["tracing"] }
 quinn = { version = "0.11.11", default-features = false, optional = true, features = ["runtime-tokio", "rustls-aws-lc-rs"] }

@@ -53,42 +53,19 @@ Options:
   -h, --help  Print help
 ```
 
-## ACME
+## Deployment
 
-TLS-ALPN-01 validates on public TCP port 443 and is the default:
-
-```bash
-pingly run --bind 0.0.0.0:443 \
-  --acme-domain pingly.us.kg \
-  --acme-email admin@gmail.com
-```
-
-HTTP-01 serves its challenge on `0.0.0.0:80` by default:
+The Alpine image is published to `ghcr.io/0x676e67/pingly`. Run it locally with:
 
 ```bash
-pingly run --bind 0.0.0.0:443 \
-  --acme-domain pingly.us.kg \
-  --acme-email admin@gmail.com \
-  --acme-challenge http-01
-```
-
-Both commands use Let's Encrypt staging until `--acme-production` is supplied. Certificates and
-account data use the platform cache directory; systemd services use their managed state directory.
-
-## Docker
-
-The latest Alpine image is published to `ghcr.io/0x676e67/pingly`. Keep certificates in a named
-volume when running it:
-
-```bash
-docker pull ghcr.io/0x676e67/pingly:latest
 docker run --rm --name pingly \
   -p 8181:8181 \
   -v pingly-state:/var/lib/pingly \
   ghcr.io/0x676e67/pingly:latest
 ```
 
-For TLS-ALPN-01, map public port 443 to the container's unprivileged listener:
+For a public deployment, keep ACME data in a named volume and map port 443 for the default
+TLS-ALPN-01 challenge:
 
 ```bash
 docker run -d --name pingly --restart unless-stopped \
@@ -109,7 +86,7 @@ Add Pingly to your project:
 
 ```toml
 [dependencies]
-pingly = "0.1"
+pingly = "0.2"
 ```
 
 The parsers work with captured protocol bytes. For example, a TLS ClientHello can span several TLS

@@ -5,6 +5,9 @@
 : ${os=linux}
 : ${name=pingly}
 
+libpcap_version=1.10.5
+libpcap_sha256=37ced90a19a302a7f32e458224a00c365c117905c2cd35ac544b6880a81488f0
+
 # Function to print colored text based on log level
 log() {
   local level=$1
@@ -85,13 +88,86 @@ check_windows_rustup_target_installed() {
   done
 }
 
+# The pcap crate provides bindings but not libpcap itself. Build a matching
+# static library so each musl release remains self-contained.
+build_linux_libpcap() {
+  build_target=$1
+
+  case "$build_target" in
+  x86_64-unknown-linux-musl)
+    zig_target=x86_64-linux-musl
+    ;;
+  aarch64-unknown-linux-musl)
+    zig_target=aarch64-linux-musl
+    ;;
+  i686-unknown-linux-musl)
+    zig_target=x86-linux-musl
+    ;;
+  armv7-unknown-linux-musleabihf | arm-unknown-linux-musleabihf)
+    zig_target=arm-linux-musleabihf
+    ;;
+  *)
+    log "error" "Unsupported libpcap target: ${build_target}"
+    exit 1
+    ;;
+  esac
+
+  libpcap_root="${root}/target/libpcap/${zig_target}"
+  libpcap_prefix="${libpcap_root}/install"
+  if [ -f "${libpcap_prefix}/lib/libpcap.a" ]; then
+    return
+  fi
+
+  archive="${root}/target/libpcap/libpcap-${libpcap_version}.tar.gz"
+  source_dir="${libpcap_root}/source"
+  mkdir -p "$(dirname "$archive")" "$source_dir"
+
+  if [ ! -f "$archive" ]; then
+    wget -q "https://www.tcpdump.org/release/libpcap-${libpcap_version}.tar.gz" -O "$archive"
+  fi
+
+  if ! echo "${libpcap_sha256}  ${archive}" | sha256sum --check --status; then
+    log "error" "libpcap ${libpcap_version} checksum verification failed"
+    exit 1
+  fi
+
+  if ! tar xzf "$archive" --strip-components=1 -C "$source_dir"; then
+    log "error" "Failed to extract libpcap ${libpcap_version}"
+    exit 1
+  fi
+
+  if ! (
+    cd "$source_dir"
+    AR="zig ar" \
+      CC="zig cc -target ${zig_target}" \
+      RANLIB="zig ranlib" \
+      ./configure \
+      --host="$zig_target" \
+      --prefix="$libpcap_prefix" \
+      --disable-shared \
+      --without-libnl \
+      --disable-dbus \
+      --disable-bluetooth \
+      --disable-rdma \
+      --disable-usb &&
+      make -j"$(nproc)" &&
+      make install
+  ); then
+    log "error" "Failed to build libpcap ${libpcap_version} for ${build_target}"
+    exit 1
+  fi
+}
+
 # Build linux target
 build_linux_target() {
   for target in "${linux_target[@]}"; do
     build_target=$(echo $target | cut -d':' -f1)
     feature=$(echo $target | cut -d':' -f2)
     log "info" "Building ${target}..."
-    if cargo zigbuild --release --target "${build_target}" --features "server,${feature}"; then
+    build_linux_libpcap "$build_target"
+    libpcap_dir="${root}/target/libpcap/${zig_target}/install/lib"
+    if LIBPCAP_LIBDIR="$libpcap_dir" LIBPCAP_VER="$libpcap_version" \
+      cargo zigbuild --release --target "${build_target}" --features "server,${feature}"; then
       compress_and_move $build_target
       log "info" "Build ${target} done"
     else
