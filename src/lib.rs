@@ -1,8 +1,11 @@
 //! Protocol data models and fingerprint parsers used by the pingly server.
 //!
-//! The crate can parse TLS ClientHello captures, HTTP/1 message heads, HTTP/2 byte streams,
-//! decrypted HTTP/3 streams, and QUIC transport parameters. Decoded structures can be serialized
-//! to JSON and restored without losing protocol data.
+//! The crate parses TLS ClientHello captures, HTTP/1 message heads, HTTP/2 byte streams, decrypted
+//! HTTP/3 streams, and QUIC transport parameters. Its decoded structures support JSON round trips
+//! without discarding protocol data.
+//!
+//! Parsers operate on bytes supplied by the caller. They do not open sockets, reassemble TCP
+//! segments, or decrypt TLS and QUIC traffic.
 //!
 //! # TLS ClientHello
 //!
@@ -73,6 +76,12 @@
 //! # }
 //! ```
 //!
+//! # TCP
+//!
+//! [`tcp::TcpPacket::parse`] decodes one complete packet from a supported libpcap link-layer
+//! format. [`tcp::TcpFingerprint::from_initial_syn`] derives passive client fingerprints from the
+//! opening SYN packet. Stream reassembly and packet capture remain the caller's responsibility.
+//!
 //! # HTTP/3 and QUIC
 //!
 //! [`h3::Http3Parser`] accepts decrypted bytes from one HTTP/3 request stream or client-initiated
@@ -86,6 +95,7 @@
 #![deny(unused)]
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
+#![warn(clippy::missing_errors_doc)]
 #![cfg_attr(test, deny(warnings))]
 
 pub mod h1;

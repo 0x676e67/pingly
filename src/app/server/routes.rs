@@ -49,6 +49,7 @@ const ANY_METHOD: &str = "ANY";
 const ALWAYS_AVAILABLE: &str = "Always";
 const LINUX_CAPTURE_AVAILABLE: &str = "Linux + capture";
 
+/// One endpoint shown in the Web UI route directory.
 #[derive(Serialize)]
 struct PublicRoute {
     /// HTTP method shown in the route directory.
@@ -118,8 +119,8 @@ const PUBLIC_ROUTES: &[PublicRoute] = &[
 static UI_DOCUMENT: LazyLock<Box<str>> = LazyLock::new(build_ui_document);
 
 // Compression can change the transfer bytes without changing the UI document, so the
-// validator is weak across content codings.
-// https://www.rfc-editor.org/rfc/rfc9110.html#name-entity-tag
+// validator is weak across content codings. See RFC 9110, Section 8.8.3:
+// <https://www.rfc-editor.org/rfc/rfc9110.html#name-entity-tag>
 static UI_ETAG_TEXT: LazyLock<Box<str>> = LazyLock::new(|| {
     let digest = Sha256::digest(UI_DOCUMENT.as_bytes());
     format!("W/\"{}\"", hex::encode(digest)).into_boxed_str()
@@ -183,8 +184,9 @@ fn matches_ui_etag(headers: &HeaderMap) -> bool {
             continue;
         };
 
-        // GET and HEAD use weak comparison for If-None-Match validators.
-        // https://www.rfc-editor.org/rfc/rfc9110.html#name-if-none-match
+        // GET and HEAD use weak comparison for If-None-Match validators. See RFC 9110,
+        // Section 13.1.2:
+        // <https://www.rfc-editor.org/rfc/rfc9110.html#name-if-none-match>
         if value.split(',').any(|candidate| {
             let candidate = candidate.trim();
             let candidate = candidate.strip_prefix("W/").unwrap_or(candidate);

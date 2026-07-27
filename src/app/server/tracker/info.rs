@@ -1,3 +1,5 @@
+//! Response models assembled from connection captures after a request reaches its endpoint.
+
 use std::{
     net::SocketAddr,
     sync::{Arc, OnceLock},
@@ -173,14 +175,23 @@ pub struct TrackInfo {
     tcp: Option<TcpAnalysis>,
 }
 
-/// Track enum to specify which tracking information to collect.
+/// Protocol analysis selected by an API endpoint.
 #[repr(u8)]
 #[derive(Clone, Copy)]
 pub enum Track {
+    /// Include every available protocol layer.
     All,
+
+    /// Include TLS ClientHello analysis.
     Tls,
+
+    /// Include ordered HTTP/1 fields.
     HTTP1,
+
+    /// Include HTTP/2 frames and the Akamai fingerprint.
     HTTP2,
+
+    /// Include HTTP/3 frames, fingerprint, and QUIC data.
     HTTP3,
 }
 
@@ -203,16 +214,21 @@ impl Track {
 }
 
 struct ProtocolTrackInfo {
+    /// Parsed TLS analysis, when requested and available.
     tls: Option<TlsTrackInfo>,
+
+    /// Parsed HTTP/1 analysis, when requested and available.
     http1: Option<Http1TrackInfo>,
+
+    /// HTTP/2 analysis, when requested and available.
     http2: Option<Http2TrackInfo>,
+
+    /// HTTP/3 analysis, when requested and available.
     http3: Option<Http3TrackInfo>,
 }
 
-// ==== impl TlsTrackInfo ====
-
 impl TlsTrackInfo {
-    /// Create a new [`TlsTrackInfo`] instance.
+    /// Computes TLS fingerprints from a parsed ClientHello.
     pub fn new(client_hello: ClientHello) -> TlsTrackInfo {
         let ja3 = client_hello.ja3();
         let ja4 = client_hello.ja4();
@@ -226,17 +242,15 @@ impl TlsTrackInfo {
         }
     }
 
-    /// Set TLS version negotiated during the handshake.
+    /// Records the TLS version negotiated during the handshake.
     pub fn set_tls_version_negotiated(&mut self, version: Option<ProtocolVersion>) {
         self.client_hello
             .set_tls_version_negotiated(version.map(u16::from).map(TlsVersion::from));
     }
 }
 
-// ==== impl Http1TrackInfo ====
-
 impl Http1TrackInfo {
-    /// Create a new [`Http1TrackInfo`] instance.
+    /// Wraps a parsed HTTP/1 request for response serialization.
     pub fn new(request: RequestHead) -> Http1TrackInfo {
         Http1TrackInfo { request }
     }
@@ -251,10 +265,8 @@ impl Serialize for Http1TrackInfo {
     }
 }
 
-// ==== impl Http2TrackInfo ====
-
 impl Http2TrackInfo {
-    /// Create a new [`Http2TrackInfo`] instance.
+    /// Builds HTTP/2 analysis when the captured frames contain fingerprint input.
     pub fn new(sent_frames: Http2Frame) -> Option<Http2TrackInfo> {
         let akamai = AkamaiFingerprint::from_frames(sent_frames.iter().map(|(_, frame)| frame))?;
 
@@ -276,8 +288,6 @@ where
         .collect::<Vec<_>>();
     vec.serialize(serializer)
 }
-
-// ==== impl Http3TrackInfo ====
 
 impl Http3TrackInfo {
     /// Builds HTTP/3 analysis only after both client frames have been captured.
@@ -321,10 +331,8 @@ where
     }
 }
 
-// ==== impl ConnectionTrack ====
-
 impl ConnectionTrack {
-    /// Set TLS version negotiated during the handshake.
+    /// Records the TLS version negotiated during the handshake.
     #[inline]
     pub fn set_tls_version_negotiated(&mut self, version: Option<ProtocolVersion>) {
         self.tls_version_negotiated = version;
@@ -460,12 +468,10 @@ fn protocol_track_info(track: Track, connection_track: ConnectionTrack) -> Proto
     }
 }
 
-// ==== impl TrackInfo ====
-
 impl TrackInfo {
     const DONATE_MESSAGE: &'static str = "Please consider supporting Pingly to keep this API running. Visit https://github.com/0x676e67/pingly";
 
-    /// Create a new [`TrackInfo`] instance.
+    /// Builds the endpoint response from request and connection metadata.
     #[inline]
     pub fn new(
         track: Track,
@@ -499,7 +505,7 @@ impl TrackInfo {
         }
     }
 
-    /// Create a new [`TrackInfo`] instance with TCP data.
+    /// Builds the endpoint response with packets captured for this TCP connection.
     #[inline]
     #[cfg(target_os = "linux")]
     pub fn new_with_tcp(

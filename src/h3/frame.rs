@@ -1,3 +1,5 @@
+//! HTTP/3 frame, setting, stream-type, and QPACK field models.
+
 use std::collections::HashSet;
 
 use serde::{Deserialize, Deserializer, Serialize};
@@ -471,6 +473,11 @@ impl Setting {
     }
 
     /// Validates a wire value and creates its canonical setting representation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Http3FrameError::InvalidBooleanSetting`] when a boolean setting uses a value
+    /// other than zero or one.
     pub fn try_from_wire(id: u64, value: u64) -> Result<Self, Http3FrameError> {
         if SettingName::from_id(id).uses_boolean_value() && value > 1 {
             return Err(Http3FrameError::InvalidBooleanSetting { id, value });

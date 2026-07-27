@@ -1,3 +1,8 @@
+//! Pingly command-line server entry point.
+//!
+//! The binary parses commands, configures tracing and middleware, selects a certificate source,
+//! then starts the TCP and QUIC listeners.
+
 mod args;
 mod error;
 mod server;
@@ -87,6 +92,12 @@ fn log_filter_from(default_level: &str, directives: &str) -> EnvFilter {
     }
 }
 
+/// Starts the analysis server with the validated command-line settings.
+///
+/// # Errors
+///
+/// Returns an error when logging, certificate setup, listener creation, runtime startup, or a
+/// server task fails.
 pub(crate) fn run(mut args: ServerArgs) -> Result<()> {
     tracing::subscriber::set_global_default(
         FmtSubscriber::builder()
@@ -97,8 +108,8 @@ pub(crate) fn run(mut args: ServerArgs) -> Result<()> {
 
     let threads = std::thread::available_parallelism()?;
 
-    // HTTPS responses advertise HTTP/3 on the matching UDP port.
-    // https://www.rfc-editor.org/rfc/rfc9114#section-3.1.1
+    // Advertise HTTP/3 on the matching UDP port as described by RFC 9114, Section 3.1.1:
+    // <https://www.rfc-editor.org/rfc/rfc9114#section-3.1.1>
     let alt_svc = HeaderValue::from_str(&format!("h3=\":{}\"; ma=86400", args.bind.port()))
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
 

@@ -1,3 +1,5 @@
+//! HTTP/3 fingerprints built from SETTINGS order and request pseudo-fields.
+
 use std::fmt::Write;
 
 use serde::{Deserialize, Serialize};

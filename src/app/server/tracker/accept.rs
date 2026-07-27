@@ -1,3 +1,8 @@
+//! TLS acceptor that selects an HTTP inspector from the negotiated ALPN protocol.
+//!
+//! HTTP/2 over TLS uses the `h2` protocol identifier defined by
+//! [RFC 9113, Section 3.2](https://www.rfc-editor.org/rfc/rfc9113#section-3.2).
+
 use std::{io, time::Instant};
 
 use axum::{middleware::AddExtension, Extension};
@@ -14,14 +19,12 @@ use crate::server::{
     tls::rustls::RustlsAcceptor,
 };
 
-/// TrackAcceptor is a wrapper around RustlsAcceptor that inspects incoming TLS connections,
-/// automatically detects the negotiated ALPN protocol (such as HTTP/1.1 or HTTP/2),
-/// and wraps the stream with the appropriate Inspector type (Http1Inspector or Http2Inspector).
+/// Adds TLS, HTTP/1, and HTTP/2 capture to accepted HTTPS connections.
 #[derive(Clone)]
 pub struct TrackAcceptor(RustlsAcceptor);
 
 impl TrackAcceptor {
-    /// Create a new [`TrackAcceptor`] with the provided RustlsAcceptor.
+    /// Wraps the TLS acceptor used by the server.
     pub fn new(acceptor: RustlsAcceptor) -> Self {
         Self(acceptor)
     }
@@ -52,14 +55,12 @@ where
             connect_track.set_tls_version_negotiated(stream.get_ref().1.protocol_version());
 
             let stream = match stream.get_ref().1.alpn_protocol() {
-                // If ALPN is set to HTTP/2, use Http2Inspector
                 Some(b"h2") => {
                     tracing::debug!("negotiated ALPN protocol: HTTP/2");
                     let inspector = Http2Inspector::new(stream);
                     connect_track.set_http2_frames(inspector.frames());
                     Inspector::Http2(inspector)
                 }
-                //  If ALPN is not set, default to HTTP/1.1
                 _ => {
                     tracing::debug!("negotiated ALPN protocol: HTTP/1.1 or not set");
                     let inspector = Http1Inspector::new(stream);

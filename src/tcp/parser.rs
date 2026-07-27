@@ -1,3 +1,5 @@
+//! Link-layer, IPv4, IPv6, and TCP packet decoding.
+
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use thiserror::Error;
@@ -79,6 +81,11 @@ pub enum TcpPacketParseError {
 
 impl TcpPacket {
     /// Parses one complete captured frame using the supplied link-layer format.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when link-layer or network headers are malformed or truncated, the packet
+    /// is fragmented or uses an unsupported IPv6 extension, or the IP payload is not TCP.
     pub fn parse(data: &[u8], link_layer: LinkLayer) -> Result<Self, TcpPacketParseError> {
         let wire_length = data.len();
         let (version, ip_packet) = ip_payload(data, link_layer)?;

@@ -1,3 +1,5 @@
+//! Incremental parsing for complete HTTP/2 client connections or frame-only captures.
+
 use bytes::{Buf, BytesMut};
 
 use super::frame::{Frame, FrameParseError, FrameParseOutcome, FrameParser};
@@ -120,6 +122,12 @@ impl Http2Parser {
     ///
     /// If a malformed frame stops parsing, [`Http2PushError`] retains frames completed earlier in
     /// the same chunk.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Http2PushError`] when the connection preface is invalid or a complete frame
+    /// cannot be decoded. Frames completed earlier in the same chunk remain available on the
+    /// error.
     pub fn push(&mut self, data: &[u8]) -> Result<Vec<Frame>, Http2PushError> {
         let mut frames = Vec::new();
         if let Err(error) = self.push_into(data, &mut frames) {
@@ -138,6 +146,11 @@ impl Http2Parser {
     /// encountered, that frame is removed from the internal buffer before the
     /// error is returned; calling this method again can continue with trailing
     /// bytes already buffered after it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the connection preface is invalid or a complete frame violates
+    /// HTTP/2 or HPACK rules.
     pub fn push_into(
         &mut self,
         data: &[u8],
@@ -195,6 +208,11 @@ impl Http2Parser {
     }
 
     /// Verifies that a finite input ended on a complete logical frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Http2ParseError::IncompleteInput`] while a preface, frame, or CONTINUATION
+    /// sequence remains incomplete.
     pub fn finish(&self) -> Result<(), Http2ParseError> {
         if self.is_idle() {
             return Ok(());
@@ -224,6 +242,11 @@ impl Default for Http2Parser {
 /// Parses a complete HTTP/2 client byte stream, including its connection preface.
 ///
 /// Use [`Http2Parser`] directly when bytes arrive incrementally.
+///
+/// # Errors
+///
+/// Returns an error when the preface is invalid, a frame is malformed, or the input ends with an
+/// incomplete preface, frame, or field block.
 pub fn parse_connection(data: &[u8]) -> Result<Vec<Frame>, Http2ParseError> {
     parse_complete(Http2Parser::new(), data)
 }
@@ -231,6 +254,11 @@ pub fn parse_connection(data: &[u8]) -> Result<Vec<Frame>, Http2ParseError> {
 /// Parses complete HTTP/2 wire frames without a connection preface.
 ///
 /// This is useful for a captured frame sequence or a protocol test vector.
+///
+/// # Errors
+///
+/// Returns an error when a frame is malformed or the input ends with an incomplete frame or field
+/// block.
 pub fn parse_frames(data: &[u8]) -> Result<Vec<Frame>, Http2ParseError> {
     parse_complete(Http2Parser::without_preface(), data)
 }

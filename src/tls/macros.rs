@@ -1,3 +1,5 @@
+//! Macros shared by TLS identifier enums and GREASE-aware wrappers.
+
 macro_rules! identifier_is_grease {
     ($value:expr, STANDARD_GREASE) => {
         is_grease_value($value)

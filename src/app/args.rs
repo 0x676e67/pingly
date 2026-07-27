@@ -13,6 +13,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 )]
 #[command(args_conflicts_with_subcommands = true)]
 pub(crate) struct AppArgs {
+    /// Command selected by the user.
     #[clap(subcommand)]
     pub(crate) command: Command,
 }
@@ -22,14 +23,14 @@ pub(crate) struct AppArgs {
 pub(crate) enum AcmeChallenge {
     /// Validate through the acme-tls/1 ALPN protocol on public TCP port 443.
     ///
-    /// https://www.rfc-editor.org/rfc/rfc8737
+    /// See [RFC 8737](https://www.rfc-editor.org/rfc/rfc8737).
     #[default]
     #[value(name = "tls-alpn-01")]
     TlsAlpn01,
 
     /// Serve key authorization over plain HTTP on public TCP port 80.
     ///
-    /// https://www.rfc-editor.org/rfc/rfc8555#section-8.3
+    /// See [RFC 8555, Section 8.3](https://www.rfc-editor.org/rfc/rfc8555#section-8.3).
     #[value(name = "http-01")]
     Http01,
 }
@@ -37,7 +38,7 @@ pub(crate) enum AcmeChallenge {
 /// ACME settings shared by TLS-ALPN-01 and HTTP-01 validation.
 #[derive(clap::Args, Default)]
 pub(crate) struct AcmeArgs {
-    /// Domain to include in the certificate; may be supplied more than once
+    /// Domain to include in the certificate; may be supplied more than once.
     #[arg(
         long,
         value_name = "DOMAIN",
@@ -46,7 +47,7 @@ pub(crate) struct AcmeArgs {
     )]
     acme_domain: Vec<String>,
 
-    /// ACME account email; may be supplied more than once
+    /// ACME account email; may be supplied more than once.
     #[arg(
         long,
         value_name = "EMAIL",
@@ -55,15 +56,15 @@ pub(crate) struct AcmeArgs {
     )]
     acme_email: Vec<String>,
 
-    /// ACME challenge type
+    /// ACME challenge type.
     #[arg(long, value_enum, default_value_t, requires = "acme_domain")]
     acme_challenge: AcmeChallenge,
 
-    /// Address for the HTTP-01 challenge listener
+    /// Address for the HTTP-01 challenge listener.
     #[arg(long, value_name = "ADDR", requires = "acme_domain")]
     acme_http_bind: Option<SocketAddr>,
 
-    /// Use the production ACME directory instead of staging
+    /// Use the production ACME directory instead of staging.
     #[arg(long, requires = "acme_domain")]
     acme_production: bool,
 }
@@ -104,17 +105,18 @@ pub(crate) enum TlsSource {
     Acme(AcmeOptions),
 }
 
+/// Settings used to start the HTTP analysis server.
 #[derive(clap::Args)]
 pub(crate) struct ServerArgs {
-    /// Debug mode
+    /// Tracing filter level or directive.
     #[arg(long, default_value = "info", env = "PINGLY_LOG")]
     pub(crate) log: String,
 
-    /// Bind address
+    /// TCP and UDP listener address.
     #[arg(short, long, default_value = "0.0.0.0:8181")]
     pub(crate) bind: SocketAddr,
 
-    /// Maximum concurrent requests
+    /// Maximum number of concurrent requests.
     #[arg(short, long, default_value = "1024")]
     pub(crate) concurrent: NonZeroUsize,
 
@@ -122,7 +124,7 @@ pub(crate) struct ServerArgs {
     #[arg(short, long, default_value = "0")]
     pub(crate) keep_alive_timeout: u64,
 
-    /// TLS certificate file path
+    /// TLS certificate file path.
     #[arg(
         short = 'C',
         long,
@@ -131,7 +133,7 @@ pub(crate) struct ServerArgs {
     )]
     pub(crate) tls_cert: Option<PathBuf>,
 
-    /// TLS private key file path (EC/PKCS8/RSA)
+    /// TLS private key file path (EC, PKCS#8, or RSA).
     #[arg(
         short = 'K',
         long,
@@ -140,15 +142,16 @@ pub(crate) struct ServerArgs {
     )]
     pub(crate) tls_key: Option<PathBuf>,
 
+    /// ACME certificate options.
     #[command(flatten)]
     pub(crate) acme: AcmeArgs,
 
-    /// Enable packet capture for TCP/IP analysis (requires root privileges)
+    /// Enable packet capture for TCP/IP analysis; this normally requires root privileges.
     #[cfg(target_os = "linux")]
     #[arg(long, short = 'T')]
     pub(crate) tcp_capture_packet: bool,
 
-    /// Network interface to capture packets from (default: auto-detect)
+    /// Network interface to capture packets from; the default is selected automatically.
     #[cfg(target_os = "linux")]
     #[arg(long, short = 'I')]
     pub(crate) tcp_capture_interface: Option<String>,
@@ -156,6 +159,11 @@ pub(crate) struct ServerArgs {
 
 impl ServerArgs {
     /// Takes the validated TLS certificate source from the parsed arguments.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if certificate and private-key arguments are incomplete or ACME options
+    /// are inconsistent.
     pub(crate) fn take_tls_source(&mut self) -> crate::Result<TlsSource> {
         match (self.tls_cert.take(), self.tls_key.take()) {
             (Some(cert), Some(key)) => Ok(TlsSource::Files { cert, key }),
@@ -169,6 +177,7 @@ impl ServerArgs {
         }
     }
 
+    /// Returns whether the selected listeners require a privileged TCP port.
     #[cfg(target_os = "linux")]
     pub(crate) fn requires_privileged_bind(&self) -> bool {
         self.bind.port() < 1024
@@ -222,30 +231,31 @@ impl AcmeArgs {
 
 #[derive(Subcommand)]
 pub(crate) enum Command {
-    /// Run tracking server
+    /// Run the protocol analysis server.
     Run(ServerArgs),
 
-    /// Manage the systemd service
+    /// Manage the systemd service.
     #[cfg(target_os = "linux")]
     #[command(subcommand)]
     Systemd(SystemdCommand),
 }
 
+/// Operations available through `pingly systemd`.
 #[cfg(target_os = "linux")]
 #[derive(Subcommand)]
 pub(crate) enum SystemdCommand {
-    /// Install, enable, and start the systemd service
+    /// Install, enable, and start the systemd service.
     Start(ServerArgs),
 
-    /// Update and restart the systemd service
+    /// Update and restart the systemd service.
     Restart(ServerArgs),
 
-    /// Stop the systemd service
+    /// Stop the systemd service.
     Stop,
 
-    /// Show recent systemd logs and follow new entries
+    /// Show recent systemd logs and follow new entries.
     Logs,
 
-    /// Show the systemd service status
+    /// Show the systemd service status.
     Status,
 }

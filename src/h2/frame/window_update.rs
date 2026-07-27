@@ -1,3 +1,5 @@
+//! HTTP/2 WINDOW_UPDATE frame parsing and validation.
+
 use serde::{Deserialize, Serialize};
 
 use super::{FrameError, FrameType};

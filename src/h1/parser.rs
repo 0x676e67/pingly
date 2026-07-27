@@ -1,3 +1,5 @@
+//! Incremental HTTP/1 head framing, validation, and owned model construction.
+
 use super::{HeadKind, HeaderField, Http1Head, RequestHead, ResponseHead, Version};
 
 /// Initial allocation used by [Http1HeadBuffer::new] and [Http1Parser::new].
@@ -237,6 +239,11 @@ impl Http1HeadBuffer {
     }
 
     /// Parses the captured head when its terminating empty line is available.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a complete head violates HTTP/1 syntax or the capture has reached its
+    /// configured byte limit without completing.
     pub fn try_parse(&self) -> Result<Option<Http1Head>, Http1ParseError> {
         if self.complete {
             return parse_head(self.kind, &self.buffer, self.header_limit).map(Some);
@@ -252,6 +259,11 @@ impl Http1HeadBuffer {
     }
 
     /// Parses a complete captured head.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for incomplete input, a configured size or field-count violation, or
+    /// malformed HTTP/1 syntax.
     pub fn parse(&self) -> Result<Http1Head, Http1ParseError> {
         self.try_parse()?.ok_or(Http1ParseError::IncompleteInput {
             buffered_bytes: self.buffer.len(),
@@ -368,6 +380,11 @@ impl Http1Parser {
     /// The chunk may stop inside the start line, a field line, or the terminating empty line.
     /// Field syntax follows
     /// [RFC 9112, Section 5](https://www.rfc-editor.org/rfc/rfc9112.html#section-5).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the parser has already completed, a previous error made it invalid,
+    /// a configured limit is exceeded, or a complete head is malformed.
     pub fn push(&mut self, data: &[u8]) -> Result<Option<Http1Head>, Http1ParseError> {
         match self.state {
             ParserState::Active => {}
@@ -398,6 +415,11 @@ impl Http1Parser {
     }
 
     /// Verifies that a finite input ended after a complete head.
+    ///
+    /// # Errors
+    ///
+    /// Returns the parser's earlier error, or [`Http1ParseError::IncompleteInput`] when the head
+    /// has not completed.
     pub fn finish(&self) -> Result<(), Http1ParseError> {
         match self.state {
             ParserState::Complete => Ok(()),
@@ -430,6 +452,11 @@ impl Http1Parser {
 /// Parses one complete HTTP/1 request head.
 ///
 /// Use [Http1Parser] directly when bytes arrive incrementally.
+///
+/// # Errors
+///
+/// Returns an error when the input is incomplete, exceeds the default limits, is malformed, or
+/// contains a response start line.
 pub fn parse_request_head(data: &[u8]) -> Result<RequestHead, Http1ParseError> {
     match parse_complete(Http1Parser::request(), data)? {
         Http1Head::Request(request) => Ok(request),
@@ -440,6 +467,11 @@ pub fn parse_request_head(data: &[u8]) -> Result<RequestHead, Http1ParseError> {
 /// Parses one complete HTTP/1 response head.
 ///
 /// Use [Http1Parser] directly when bytes arrive incrementally.
+///
+/// # Errors
+///
+/// Returns an error when the input is incomplete, exceeds the default limits, is malformed, or
+/// contains a request start line.
 pub fn parse_response_head(data: &[u8]) -> Result<ResponseHead, Http1ParseError> {
     match parse_complete(Http1Parser::response(), data)? {
         Http1Head::Request(_) => Err(Http1ParseError::InvalidStartLine),

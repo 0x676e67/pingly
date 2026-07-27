@@ -13,6 +13,7 @@ use tokio::sync::watch;
 /// connections are asked to drain once.
 #[derive(Clone)]
 pub(crate) struct Handle {
+    /// Broadcast shutdown state shared by listeners and connection tasks.
     graceful_shutdown: watch::Sender<bool>,
 }
 

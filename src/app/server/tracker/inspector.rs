@@ -1,3 +1,8 @@
+//! Stream adapters that retain protocol bytes for delayed analysis.
+//!
+//! Each adapter forwards reads and writes unchanged. Capture work on the I/O path is limited to
+//! bounded buffering and incremental framing.
+
 use std::{
     ops::Deref,
     pin::Pin,
@@ -16,6 +21,8 @@ use tokio_rustls::server::TlsStream;
 
 /// Shared storage for one raw HTTP/1 request head.
 pub type Http1RequestCapture = Arc<OnceLock<Http1HeadBuffer>>;
+
+/// Concurrent storage for HTTP/2 frames captured from one connection.
 pub type Http2Frame = Arc<boxcar::Vec<Frame>>;
 
 const HTTP2_CAPTURE_MAX_BYTES: usize = 1024 * 1024;
@@ -23,8 +30,13 @@ const HTTP2_CAPTURE_MAX_FRAMES: usize = 128;
 
 #[derive(Default)]
 struct Http2CaptureBudget {
+    /// Number of client bytes admitted to the capture buffer.
     bytes: usize,
+
+    /// Number of complete wire frames observed.
     frames: usize,
+
+    /// Whether this connection no longer needs inspection.
     stopped: bool,
 }
 
@@ -63,11 +75,15 @@ impl Http2CaptureBudget {
     }
 }
 
-/// `Inspector` is an enum that wraps protocol-specific inspectors (such as `Http1Inspector` and
-/// `Http2Inspector`) to provide a unified interface for inspecting and tracking different protocol
-/// streams. Implements `AsyncRead` and `AsyncWrite` by delegating to the underlying
+/// HTTP stream selected after TLS ALPN negotiation.
+///
+/// Both variants implement [`AsyncRead`] and [`AsyncWrite`] by forwarding operations to their
+/// wrapped TLS stream.
 pub enum Inspector<S> {
+    /// HTTP/1 stream with request-head capture.
     Http1(Http1Inspector<S>),
+
+    /// HTTP/2 stream with frame capture.
     Http2(Http2Inspector<S>),
 }
 
@@ -122,14 +138,13 @@ where
 }
 
 pin_project! {
-    /// A wrapper over a TLS stream that inspects TLS client hello messages.
-    /// It buffers incoming data, parses the client hello message,
-    /// and records the parsed client hello for later inspection or analysis.
-    /// Does not interfere with normal stream reading or writing.
+    /// Stream wrapper that retains the first TLS ClientHello while forwarding all I/O.
     pub struct TlsInspector<I> {
+        // Accepted TCP stream.
         #[pin]
         inner: I,
 
+        // Bounded TLS-record capture removed after the handshake.
         client_hello: Option<ClientHelloBuffer>,
     }
 }
@@ -138,7 +153,7 @@ impl<I> TlsInspector<I>
 where
     I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    /// Create a new [`TlsInspector`] instance.
+    /// Wraps an accepted stream with ClientHello capture.
     pub fn new(inner: I) -> Self {
         Self {
             inner,
@@ -146,8 +161,9 @@ where
         }
     }
 
-    /// Extracts and takes ownership of the buffered ClientHello payload,
-    /// leaving `None` in its place.
+    /// Takes the buffered ClientHello capture.
+    ///
+    /// Later calls return `None`.
     #[inline]
     #[must_use]
     pub fn client_hello(&mut self) -> Option<ClientHelloBuffer> {
@@ -212,10 +228,11 @@ pin_project! {
     /// is defined by
     /// [RFC 9112, Section 2.1](https://www.rfc-editor.org/rfc/rfc9112.html#section-2.1).
     pub struct Http1Inspector<I> {
+        // TLS stream forwarded to Hyper.
         #[pin]
         inner: TlsStream<TlsInspector<I>>,
 
-        // Request bytes retained until the head is complete or reaches its limit.
+        // Request bytes retained until the head completes or reaches its limit.
         capture: Option<Http1HeadBuffer>,
 
         // Completed raw head shared with response analysis.
@@ -227,7 +244,7 @@ impl<I> Http1Inspector<I>
 where
     I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    /// Creates a new [Http1Inspector] instance.
+    /// Wraps a TLS stream with bounded HTTP/1 request-head capture.
     #[inline]
     pub fn new(inner: TlsStream<TlsInspector<I>>) -> Self {
         Self {
@@ -305,20 +322,25 @@ where
 }
 
 pin_project! {
-    /// A wrapper over a TLS stream that inspects HTTP/2 traffic.
-    /// It buffers incoming data, parses HTTP/2 frames (including the connection preface),
-    /// and records parsed frames for later inspection or analysis.
-    /// Does not interfere with normal stream reading
+    /// TLS stream wrapper that captures the initial HTTP/2 client frame sequence.
+    ///
+    /// Capture stops after the first complete HEADERS block or when its byte or frame budget is
+    /// exhausted. Reads and writes continue normally after capture stops.
     pub struct Http2Inspector<I> {
+        // TLS stream forwarded to Hyper.
         #[pin]
         inner: TlsStream<TlsInspector<I>>,
 
+        // Bytes waiting for a complete preface or frame.
         buf: Vec<u8>,
 
+        // Complete client frames shared with response analysis.
         frames: Http2Frame,
 
+        // Stateful frame and HPACK decoder.
         parser: frame::FrameParser,
 
+        // Per-connection bounds for capture work and retained data.
         capture_budget: Http2CaptureBudget,
     }
 }
@@ -327,7 +349,7 @@ impl<I> Http2Inspector<I>
 where
     I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    /// Create a new [`Http2Inspector`] instance.
+    /// Wraps a TLS stream with bounded HTTP/2 frame capture.
     #[inline]
     pub fn new(inner: TlsStream<TlsInspector<I>>) -> Self {
         Self {
@@ -339,7 +361,7 @@ where
         }
     }
 
-    /// Get previously parsed HTTP/2 frames.
+    /// Returns shared storage for captured HTTP/2 frames.
     #[inline]
     pub fn frames(&self) -> Http2Frame {
         self.frames.clone()

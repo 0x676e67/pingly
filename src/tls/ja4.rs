@@ -1,3 +1,5 @@
+//! JA4 and JA4_r fingerprint construction from parsed ClientHello fields.
+
 use std::fmt::Write;
 
 use serde::{Deserialize, Serialize};

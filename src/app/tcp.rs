@@ -1,3 +1,5 @@
+//! Linux packet-capture analysis associated with an HTTP connection.
+
 mod capture;
 mod latency;
 mod proxy;

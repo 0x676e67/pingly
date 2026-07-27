@@ -1,3 +1,5 @@
+//! TLS registry identifiers retained by the ClientHello model.
+
 #![allow(non_camel_case_types)]
 
 enum_builder! {

@@ -1,3 +1,5 @@
+//! Strict parsers for ClientHello extension payloads.
+
 use nom::{
     bytes::streaming::take,
     combinator::{eof, map_opt, verify},

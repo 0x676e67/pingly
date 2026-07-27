@@ -1,3 +1,5 @@
+//! Parse a decrypted HTTP/3 request stream containing a stateless QPACK field section.
+
 use pingly::h3::{parse_request_stream, Frame};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -1,3 +1,5 @@
+//! Bounded libpcap capture for packets addressed to the Pingly listener.
+
 use std::{
     collections::{HashMap, VecDeque},
     error::Error as StdError,
@@ -41,9 +43,15 @@ pub struct CapturedPacket {
     pub packet: TcpPacket,
 }
 
+/// Shared capture state and the worker that owns the libpcap handle.
 struct CaptureInner {
+    /// Bounded packet store indexed by normalized remote address.
     packets: Arc<Mutex<CaptureStore>>,
+
+    /// Stop flag polled by the capture loop.
     shutdown: Arc<AtomicBool>,
+
+    /// Worker handle taken by explicit shutdown or the final owner.
     worker: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -64,6 +72,11 @@ pub struct TcpCapture {
 
 impl TcpCapture {
     /// Opens a capture device and starts a background worker with bounded storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the capacity is zero, the requested device or link layer is
+    /// unavailable, the capture filter cannot be installed, or the worker thread cannot start.
     pub fn start(
         max_connections: usize,
         server_port: u16,
@@ -135,6 +148,7 @@ impl TcpCapture {
 
 const MAX_PACKETS_PER_CONNECTION: usize = 64;
 
+/// Bounded packets grouped by remote connection generation.
 struct CaptureStore {
     /// Latest captured generation for each normalized remote socket.
     connections: HashMap<SocketAddr, VecDeque<CapturedPacket>>,

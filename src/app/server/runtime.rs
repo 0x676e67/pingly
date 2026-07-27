@@ -1,6 +1,6 @@
 //! Pingora runtime management for the HTTP server.
 //!
-//! This keeps Pingora scheduling and shutdown details out of routing and HTTP/TLS code.
+//! The module keeps Pingora scheduling and shutdown details out of routing and HTTP/TLS code.
 
 use std::{
     any::Any, future::Future, io, num::NonZeroUsize, panic::AssertUnwindSafe, time::Duration,
@@ -30,6 +30,11 @@ impl Runtime {
     ///
     /// A process shutdown signal asks the handle to start graceful shutdown. Server panics are
     /// returned as errors.
+    ///
+    /// # Errors
+    ///
+    /// Returns the server result, a channel error if the server task exits without reporting, or
+    /// an I/O error containing the payload of a server panic.
     pub(crate) fn block_on<F, Fut>(self, serve: F) -> Result<()>
     where
         F: FnOnce(Handle) -> Fut + Send + 'static,
@@ -38,8 +43,9 @@ impl Runtime {
         let handle = Handle::new();
         let (finish, finished) = oneshot::channel();
 
-        // `get_handle()` selects a random worker from the no-steal runtime pool.
-        // https://docs.rs/pingora-runtime/0.8.1/src/pingora_runtime/lib.rs.html#63-72
+        // `get_handle()` selects a random worker from the no-steal runtime pool. See the
+        // pingora-runtime implementation:
+        // <https://docs.rs/pingora-runtime/0.8.1/src/pingora_runtime/lib.rs.html#63-72>
         let runtime = self.0.get_handle();
         runtime.spawn(handle.clone().graceful_shutdown());
         runtime.spawn(async move {
