@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
-    <meta name="description" content="Pingly TLS, HTTP, and TCP protocol analysis">
+    <meta name="description" content="Inspect TLS, HTTP, QUIC, and TCP request fingerprints">
     <title>Pingly Protocol Inspector</title>
     <script>
         (() => {
@@ -21,828 +21,1813 @@
             theme ??= window.matchMedia("(prefers-color-scheme: dark)").matches
                 ? "dark"
                 : "light";
-            const root = document.documentElement;
 
-            // Primer supplies the palette; these variables bridge it to Tabler components.
-            window.pinglyPrimerTheme = Object.freeze({
-                shared: Object.freeze({
-                    "--tblr-active-bg": "var(--bgColor-neutral-muted)",
-                    "--tblr-azure": "var(--fgColor-accent)",
-                    "--tblr-azure-lt": "var(--bgColor-accent-muted)",
-                    "--tblr-backdrop-bg": "var(--bgColor-inset)",
-                    "--tblr-bg-forms": "var(--bgColor-inset)",
-                    "--tblr-bg-surface": "var(--card-bgColor)",
-                    "--tblr-bg-surface-dark": "var(--bgColor-inset)",
-                    "--tblr-bg-surface-primary": "var(--bgColor-default)",
-                    "--tblr-bg-surface-secondary": "var(--bgColor-default)",
-                    "--tblr-bg-surface-tertiary": "var(--bgColor-muted)",
-                    "--tblr-blue": "var(--fgColor-accent)",
-                    "--tblr-blue-lt": "var(--bgColor-accent-muted)",
-                    "--tblr-body-bg": "var(--bgColor-default)",
-                    "--tblr-body-color": "var(--fgColor-default)",
-                    "--tblr-border-active-color": "var(--borderColor-emphasis)",
-                    "--tblr-border-color": "var(--borderColor-default)",
-                    "--tblr-border-color-translucent": "var(--borderColor-muted)",
-                    "--tblr-code-bg": "var(--bgColor-accent-muted)",
-                    "--tblr-code-color": "var(--fgColor-accent)",
-                    "--tblr-danger": "var(--fgColor-danger)",
-                    "--tblr-danger-lt": "var(--bgColor-danger-muted)",
-                    "--tblr-disabled-bg": "var(--bgColor-disabled)",
-                    "--tblr-disabled-color": "var(--fgColor-disabled)",
-                    "--tblr-emphasis-color": "var(--fgColor-onEmphasis)",
-                    "--tblr-focus-ring-color": "var(--borderColor-accent-muted)",
-                    "--tblr-green": "var(--fgColor-success)",
-                    "--tblr-green-lt": "var(--bgColor-success-muted)",
-                    "--tblr-icon-color": "var(--fgColor-muted)",
-                    "--tblr-info": "var(--fgColor-accent)",
-                    "--tblr-info-lt": "var(--bgColor-accent-muted)",
-                    "--tblr-link-color": "var(--fgColor-accent)",
-                    "--tblr-link-hover-color": "var(--fgColor-link)",
-                    "--tblr-list-group-action-hover-bg": "var(--bgColor-neutral-muted)",
-                    "--tblr-list-group-action-hover-color": "var(--fgColor-default)",
-                    "--tblr-list-group-active-bg": "var(--bgColor-neutral-muted)",
-                    "--tblr-list-group-active-border-color": "var(--borderColor-muted)",
-                    "--tblr-list-group-active-color": "var(--fgColor-default)",
-                    "--tblr-nav-pills-link-active-bg": "var(--button-default-bgColor-active)",
-                    "--tblr-nav-pills-link-active-color": "var(--button-default-fgColor-rest)",
-                    "--tblr-orange": "var(--fgColor-severe)",
-                    "--tblr-orange-lt": "var(--bgColor-severe-muted)",
-                    "--tblr-primary": "var(--button-primary-bgColor-rest)",
-                    "--tblr-primary-fg": "var(--fgColor-onEmphasis)",
-                    "--tblr-primary-lt": "var(--bgColor-success-muted)",
-                    "--tblr-purple": "var(--fgColor-done)",
-                    "--tblr-purple-lt": "var(--bgColor-done-muted)",
-                    "--tblr-red": "var(--fgColor-danger)",
-                    "--tblr-red-lt": "var(--bgColor-danger-muted)",
-                    "--tblr-secondary": "var(--fgColor-muted)",
-                    "--tblr-secondary-bg": "var(--bgColor-muted)",
-                    "--tblr-secondary-color": "var(--fgColor-muted)",
-                    "--tblr-secondary-lt": "var(--bgColor-neutral-muted)",
-                    "--tblr-shadow-border": "inset 0 0 0 1px var(--borderColor-muted)",
-                    "--tblr-shadow-card": "none",
-                    "--tblr-tertiary-bg": "var(--bgColor-inset)",
-                    "--tblr-tertiary-color": "var(--fgColor-muted)",
-                    "--tblr-warning": "var(--fgColor-attention)",
-                    "--tblr-warning-lt": "var(--bgColor-attention-muted)",
-                }),
-                light: Object.freeze({
-                    "--tblr-azure-rgb": "9, 105, 218",
-                    "--tblr-blue-rgb": "9, 105, 218",
-                    "--tblr-body-bg-rgb": "255, 255, 255",
-                    "--tblr-body-color-rgb": "31, 35, 40",
-                    "--tblr-danger-rgb": "209, 36, 47",
-                    "--tblr-emphasis-color-rgb": "255, 255, 255",
-                    "--tblr-green-rgb": "26, 127, 55",
-                    "--tblr-info-rgb": "9, 105, 218",
-                    "--tblr-orange-rgb": "188, 76, 0",
-                    "--tblr-primary-rgb": "31, 136, 61",
-                    "--tblr-purple-rgb": "130, 80, 223",
-                    "--tblr-red-rgb": "209, 36, 47",
-                    "--tblr-secondary-bg-rgb": "246, 248, 250",
-                    "--tblr-secondary-color-rgb": "89, 99, 110",
-                    "--tblr-secondary-rgb": "89, 99, 110",
-                    "--tblr-tertiary-bg-rgb": "246, 248, 250",
-                    "--tblr-tertiary-color-rgb": "89, 99, 110",
-                    "--tblr-warning-rgb": "154, 103, 0",
-                }),
-                dark: Object.freeze({
-                    "--tblr-azure-rgb": "71, 139, 230",
-                    "--tblr-blue-rgb": "71, 139, 230",
-                    "--tblr-body-bg-rgb": "33, 40, 48",
-                    "--tblr-body-color-rgb": "209, 215, 224",
-                    "--tblr-danger-rgb": "244, 112, 103",
-                    "--tblr-emphasis-color-rgb": "240, 246, 252",
-                    "--tblr-green-rgb": "87, 171, 90",
-                    "--tblr-info-rgb": "71, 139, 230",
-                    "--tblr-orange-rgb": "246, 157, 80",
-                    "--tblr-primary-rgb": "52, 125, 57",
-                    "--tblr-purple-rgb": "152, 110, 226",
-                    "--tblr-red-rgb": "244, 112, 103",
-                    "--tblr-secondary-bg-rgb": "38, 44, 54",
-                    "--tblr-secondary-color-rgb": "145, 152, 161",
-                    "--tblr-secondary-rgb": "145, 152, 161",
-                    "--tblr-tertiary-bg-rgb": "21, 27, 35",
-                    "--tblr-tertiary-color-rgb": "145, 152, 161",
-                    "--tblr-warning-rgb": "218, 170, 63",
-                }),
-            });
-
-            window.applyPinglyPrimerTheme = function (selectedTheme) {
-                const palette = window.pinglyPrimerTheme;
+            window.applyPinglyTheme = function (selectedTheme) {
+                const root = document.documentElement;
                 root.dataset.theme = selectedTheme;
-                root.dataset.bsTheme = selectedTheme;
-                root.dataset.colorMode = selectedTheme;
-                root.dataset.lightTheme = "light";
-                root.dataset.darkTheme = "dark_dimmed";
-
-                [palette.shared, palette[selectedTheme] || palette.light].forEach(
-                    function (values) {
-                        Object.entries(values).forEach(function (entry) {
-                            root.style.setProperty(entry[0], entry[1]);
-                        });
-                    }
-                );
+                root.style.colorScheme = selectedTheme;
             };
 
-            window.applyPinglyPrimerTheme(theme);
+            window.applyPinglyTheme(theme);
         })();
     </script>
     <link
         rel="icon"
-        href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='10' fill='%23212830' stroke='%233d444d' stroke-width='2'/%3E%3Ctext x='32' y='43' text-anchor='middle' font-family='Arial,sans-serif' font-size='34' font-weight='700' fill='%23f0f6fc'%3EP%3C/text%3E%3C/svg%3E"
+        href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='10' fill='%2321262d'/%3E%3Ctext x='32' y='43' text-anchor='middle' font-family='Arial,sans-serif' font-size='34' font-weight='700' fill='%23f0f6fc'%3EP%3C/text%3E%3C/svg%3E"
     >
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link
         rel="stylesheet"
-        href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap"
-    >
-    <link
-        rel="stylesheet"
-        href="https://cdn.jsdelivr.net/npm/@primer/primitives@11.7.1/dist/css/functional/themes/light.css"
-        integrity="sha384-Dr6x7dVhkHJRYxojTVMY8ZZt494t/y5kZYqWFzpiIz+7hZMNw+4N3O1qG+yFGtHD"
+        href="https://cdn.jsdelivr.net/npm/@fontsource-variable/manrope@5.3.0/index.css"
         crossorigin="anonymous"
         referrerpolicy="no-referrer"
     >
     <link
         rel="stylesheet"
-        href="https://cdn.jsdelivr.net/npm/@primer/primitives@11.7.1/dist/css/functional/themes/dark-dimmed.css"
-        integrity="sha384-tyGOUiC6/O2IZry7gBhZ2iuyYIp+dgaAjQVXkX8ZUSuP7D8KoMhPKYCeqKY8lykt"
+        href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-mono@5.3.0/400.css"
         crossorigin="anonymous"
         referrerpolicy="no-referrer"
     >
     <link
         rel="stylesheet"
-        href="https://cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/css/tabler.min.css"
-        integrity="sha384-kz+I4+mczbNiZfLAJMxOlJaZmnbRYhARHNkR2k6tal4gz7OL33/0puDD3SvkiNX9"
-        crossorigin="anonymous"
-        referrerpolicy="no-referrer"
-    >
-    <link
-        rel="stylesheet"
-        href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.44.0/dist/tabler-icons.min.css"
-        integrity="sha384-ccZHbezhtZWmNy0cg8odL0D/jFU5k5HIls9y78Qd6lWor7rpvFIZtK0fTFG4z456"
+        href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-mono@5.3.0/600.css"
         crossorigin="anonymous"
         referrerpolicy="no-referrer"
     >
     <style>
         :root {
-            --pingly-content-width: 1180px;
-            --pingly-header-height: 64px;
-            --pingly-radius: 6px;
-            --pingly-sidebar-width: 12.5rem;
-            --pingly-font-sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-            --pingly-font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
-            margin-left: 0;
-            margin-right: 0;
+            --pingly-content-width: 84rem;
+            --pingly-header-height: 4rem;
+            --pingly-sidebar-width: 13.75rem;
+            --pingly-radius: 8px;
+            --pingly-radius-small: 6px;
+            --pingly-font-sans: "Manrope Variable", Manrope, -apple-system, BlinkMacSystemFont,
+                "Segoe UI", sans-serif;
+            --pingly-font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas,
+                "Liberation Mono", monospace;
+
+            --pingly-canvas: #f5f4f2;
+            --pingly-surface: #fbfaf8;
+            --pingly-surface-raised: #ffffff;
+            --pingly-surface-subtle: #efede9;
+            --pingly-surface-strong: #e7e4df;
+            --pingly-text: #121110;
+            --pingly-text-muted: #68645f;
+            --pingly-text-subtle: #8a857e;
+            --pingly-text-inverse: #fffdf9;
+            --pingly-border: #dedad3;
+            --pingly-border-strong: #c8c2b9;
+            --pingly-hover: rgb(18 17 16 / 0.045);
+            --pingly-active: rgb(18 17 16 / 0.075);
+            --pingly-overlay: rgb(18 17 16 / 0.48);
+
+            --pingly-accent: #d96d1d;
+            --pingly-accent-hover: #bd5710;
+            --pingly-accent-text: #a7470c;
+            --pingly-accent-muted: #fff0e3;
+            --pingly-accent-border: #edbb90;
+
+            --pingly-blue: #2b67a8;
+            --pingly-blue-muted: #e8f1fb;
+            --pingly-blue-border: #bfd3e9;
+            --pingly-green: #2d704f;
+            --pingly-green-muted: #e6f3eb;
+            --pingly-green-border: #bad9c7;
+            --pingly-violet: #6c5a9a;
+            --pingly-violet-muted: #f0ebf8;
+            --pingly-violet-border: #d4c9e8;
+            --pingly-danger: #b3433b;
+            --pingly-danger-muted: #fbe9e6;
+            --pingly-danger-border: #e9bbb5;
+            --pingly-warning: #936313;
+            --pingly-warning-muted: #fbf1d7;
+            --pingly-warning-border: #e5cd91;
+
+            --pingly-code: #171717;
+            --pingly-code-surface: #20201f;
+            --pingly-code-text: #f2eee8;
+            --pingly-code-muted: #aaa49c;
+            --pingly-focus: #c65d16;
+            --pingly-shadow-small: 0 1px 2px rgb(25 22 18 / 0.06);
+            --pingly-shadow-raised: 0 10px 28px -18px rgb(25 22 18 / 0.34),
+                0 1px 2px rgb(25 22 18 / 0.06);
+
+            --bgColor-default: var(--pingly-surface-raised);
+            --bgColor-inset: var(--pingly-canvas);
+            --bgColor-muted: var(--pingly-surface-subtle);
+            --bgColor-neutral-muted: var(--pingly-surface-strong);
+            --bgColor-accent-muted: var(--pingly-accent-muted);
+            --bgColor-success-muted: var(--pingly-green-muted);
+            --bgColor-danger-muted: var(--pingly-danger-muted);
+            --bgColor-attention-muted: var(--pingly-warning-muted);
+            --bgColor-emphasis: var(--pingly-code);
+            --fgColor-default: var(--pingly-text);
+            --fgColor-muted: var(--pingly-text-muted);
+            --fgColor-accent: var(--pingly-blue);
+            --fgColor-success: var(--pingly-green);
+            --fgColor-danger: var(--pingly-danger);
+            --fgColor-attention: var(--pingly-warning);
+            --fgColor-onEmphasis: var(--pingly-text-inverse);
+            --borderColor-default: var(--pingly-border-strong);
+            --borderColor-muted: var(--pingly-border);
+            --borderColor-accent-emphasis: var(--pingly-accent);
+            --borderColor-accent-muted: var(--pingly-accent-border);
+            --borderColor-success-muted: var(--pingly-green-border);
+            --borderColor-danger-muted: var(--pingly-danger-border);
+            --borderColor-attention-muted: var(--pingly-warning-border);
+            --button-default-bgColor-rest: var(--pingly-surface-raised);
+            --button-default-bgColor-hover: var(--pingly-surface-subtle);
+            --button-default-bgColor-disabled: var(--pingly-surface-subtle);
+            --button-default-borderColor-rest: var(--pingly-border-strong);
+            --button-default-borderColor-hover: #aca59a;
+            --button-default-fgColor-rest: var(--pingly-text);
+            --button-default-fgColor-disabled: var(--pingly-text-subtle);
+            --button-primary-bgColor-rest: var(--pingly-code);
+            --button-primary-borderColor-rest: var(--pingly-code);
+            --button-primary-fgColor-rest: var(--pingly-text-inverse);
+            --control-transparent-bgColor-hover: var(--pingly-hover);
+            --control-transparent-bgColor-active: var(--pingly-active);
+            --focus-outlineColor: var(--pingly-focus);
+            --overlay-backdrop-bgColor: var(--pingly-overlay);
+            --shadow-floating-small: var(--pingly-shadow-raised);
+        }
+
+        [data-theme="dark"] {
+            --pingly-canvas: #0e1011;
+            --pingly-surface: #141617;
+            --pingly-surface-raised: #191b1d;
+            --pingly-surface-subtle: #212427;
+            --pingly-surface-strong: #292c2f;
+            --pingly-text: #e9e6e1;
+            --pingly-text-muted: #aaa59e;
+            --pingly-text-subtle: #7f7b76;
+            --pingly-text-inverse: #fffdf9;
+            --pingly-border: #303438;
+            --pingly-border-strong: #454a4f;
+            --pingly-hover: rgb(255 255 255 / 0.055);
+            --pingly-active: rgb(255 255 255 / 0.09);
+            --pingly-overlay: rgb(0 0 0 / 0.64);
+
+            --pingly-accent: #ef8a45;
+            --pingly-accent-hover: #f39b60;
+            --pingly-accent-text: #f1a06a;
+            --pingly-accent-muted: #2c1e16;
+            --pingly-accent-border: #64432c;
+
+            --pingly-blue: #78aee8;
+            --pingly-blue-muted: #172536;
+            --pingly-blue-border: #294864;
+            --pingly-green: #7cc49d;
+            --pingly-green-muted: #172a21;
+            --pingly-green-border: #30543f;
+            --pingly-violet: #b4a1df;
+            --pingly-violet-muted: #251f34;
+            --pingly-violet-border: #493e64;
+            --pingly-danger: #e58a82;
+            --pingly-danger-muted: #321d1c;
+            --pingly-danger-border: #633a36;
+            --pingly-warning: #dbb667;
+            --pingly-warning-muted: #302817;
+            --pingly-warning-border: #5b4b27;
+
+            --pingly-code: #090a0b;
+            --pingly-code-surface: #111315;
+            --pingly-code-text: #e8e4de;
+            --pingly-code-muted: #98938c;
+            --pingly-focus: #ef8a45;
+            --pingly-shadow-small: 0 1px 2px rgb(0 0 0 / 0.28);
+            --pingly-shadow-raised: 0 14px 34px -20px rgb(0 0 0 / 0.82),
+                0 1px 2px rgb(0 0 0 / 0.34);
+
+            --button-default-borderColor-hover: #646a70;
         }
 
         *,
         *::before,
         *::after {
+            box-sizing: border-box;
             letter-spacing: 0 !important;
         }
 
-        html,
+        html {
+            min-height: 100%;
+            overflow-y: scroll;
+            scroll-padding-top: calc(var(--pingly-header-height) + 1rem);
+            scrollbar-gutter: stable;
+            background: var(--pingly-canvas);
+        }
+
         body {
             min-height: 100%;
-        }
-
-        html {
-            overflow-y: scroll;
-            background: var(--bgColor-inset);
-        }
-
-        body {
-            background: var(--bgColor-inset);
-            color: var(--fgColor-default);
+            margin: 0;
+            color: var(--pingly-text);
+            background: var(--pingly-canvas);
             font-family: var(--pingly-font-sans);
+            font-size: 14px;
+            line-height: 1.5;
+            text-rendering: optimizeLegibility;
+        }
+
+        button,
+        input,
+        select,
+        textarea {
+            color: inherit;
+            font: inherit;
+        }
+
+        table {
+            color: inherit;
         }
 
         code,
         pre,
         .font-monospace {
             font-family: var(--pingly-font-mono) !important;
+            font-variant-ligatures: none;
         }
 
         code {
-            color: var(--fgColor-accent);
+            color: var(--pingly-blue);
         }
 
-        .pingly-header {
+        a {
+            color: var(--pingly-accent-text);
+            text-decoration-thickness: 1px;
+            text-underline-offset: 0.18em;
+        }
+
+        a:hover {
+            color: var(--pingly-accent-hover);
+        }
+
+        ::selection {
+            color: var(--pingly-text);
+            background: var(--pingly-accent-border);
+        }
+
+        [hidden] {
+            display: none !important;
+        }
+
+        :focus-visible {
+            outline: 2px solid var(--focus-outlineColor, var(--fgColor-accent));
+            outline-offset: 2px;
+        }
+
+        .skip-link {
+            position: fixed;
+            top: 0.5rem;
+            left: 0.5rem;
+            z-index: 120;
+            transform: translateY(-160%);
+        }
+
+        .skip-link:focus {
+            transform: translateY(0);
+        }
+
+        .app-shell {
+            min-height: 100dvh;
+        }
+
+        .app-header {
+            position: sticky;
+            top: 0;
+            z-index: 100;
             min-height: var(--pingly-header-height);
-            background: var(--bgColor-default) !important;
-            border-color: var(--borderColor-muted) !important;
+            border-bottom: 1px solid var(--pingly-border);
+            background: var(--pingly-surface);
+            box-shadow: var(--pingly-shadow-small);
         }
 
-        .pingly-header-inner {
-            min-height: 63px;
-            padding-inline: clamp(1rem, 2vw, 1.75rem);
+        .app-header-inner {
+            display: flex;
+            min-height: var(--pingly-header-height);
+            align-items: center;
+            gap: 0.875rem;
+            padding: 0 1.25rem;
         }
 
-        .pingly-brand-mark {
-            display: inline-grid;
+        .app-brand {
+            display: inline-flex;
+            min-width: 0;
+            align-items: center;
+            gap: 0.625rem;
+            color: var(--fgColor-default);
+            text-decoration: none;
+        }
+
+        .brand-mark {
+            display: grid;
             width: 2.25rem;
             height: 2.25rem;
+            flex: 0 0 2.25rem;
             place-items: center;
-            border: 1px solid var(--borderColor-emphasis);
+            border: 1px solid var(--pingly-code);
             border-radius: var(--pingly-radius);
-            background: var(--fgColor-default);
-            color: var(--bgColor-default);
+            color: var(--pingly-code-text);
+            background: var(--pingly-code);
+            box-shadow: var(--pingly-shadow-raised);
+            font-size: 1rem;
+            font-weight: 800;
+        }
+
+        .brand-copy {
+            display: flex;
+            min-width: 0;
+            flex-direction: column;
+            line-height: 1.15;
+        }
+
+        .brand-copy strong {
             font-size: 1rem;
             font-weight: 700;
         }
 
-        .pingly-brand-copy strong {
-            color: var(--fgColor-default);
-            font-size: 1rem;
+        .brand-copy small {
+            color: var(--pingly-text-muted);
+            font-size: 0.75rem;
         }
 
-        .pingly-brand-copy small {
-            color: var(--fgColor-muted);
-            font-size: .75rem;
+        .header-actions {
+            display: flex;
+            min-width: 0;
+            align-items: center;
+            gap: 0.5rem;
+            margin-left: auto;
         }
 
-        .toolbar-button {
+        .icon-button {
+            display: inline-grid;
             width: 2.25rem;
+            min-width: 2.25rem;
             height: 2.25rem;
-            border-radius: var(--pingly-radius);
+            padding: 0 !important;
+            place-items: center;
+            border-color: var(--button-default-borderColor-rest);
+            color: var(--button-default-fgColor-rest);
+            background: var(--button-default-bgColor-rest);
+            box-shadow: var(--pingly-shadow-small);
         }
 
-        .pingly-sidebar {
-            width: var(--pingly-sidebar-width);
-            flex: 0 0 var(--pingly-sidebar-width);
-            min-width: 0;
-            height: calc(100vh - var(--pingly-header-height));
-            height: calc(100dvh - var(--pingly-header-height));
-            background: var(--bgColor-default) !important;
-            border-color: var(--borderColor-muted) !important;
-            overflow: hidden;
-        }
-
-        .pingly-sidebar > div,
-        .pingly-nav {
-            min-height: 0;
-        }
-
-        .pingly-nav {
-            margin: 0;
-            padding: .5rem 0 !important;
-        }
-
-        .pingly-nav .list-group-item {
-            width: 100%;
-            min-height: 2.5rem;
-            margin: 0;
-            padding: .5rem .875rem .5rem .75rem;
-            border: 0;
-            border-left: 3px solid transparent;
-            border-radius: 0 !important;
-            background: transparent;
-            color: var(--fgColor-muted);
-            font-weight: 500;
-        }
-
-        .pingly-nav .list-group-item:hover {
+        .icon-button:hover {
+            border-color: var(--button-default-borderColor-hover);
             background: var(--button-default-bgColor-hover);
-            color: var(--fgColor-default);
+            box-shadow: var(--pingly-shadow-raised);
         }
 
-        .pingly-nav .list-group-item.active {
-            border-left-color: var(--borderColor-accent-emphasis);
-            background: var(--button-default-bgColor-active);
-            color: var(--fgColor-default);
+        .icon-button:active {
+            transform: translateY(1px);
         }
 
-        .pingly-nav .list-group-item .icon {
-            width: 1.1rem;
-            height: 1.1rem;
+        .icon-button:disabled {
+            color: var(--button-default-fgColor-disabled);
+            background: var(--button-default-bgColor-disabled);
         }
 
-        #main-content {
-            width: calc(100% - var(--pingly-sidebar-width));
-            flex: 1 1 0;
-            min-width: 0;
-            background: var(--bgColor-inset);
+        .icon-button svg,
+        .sidebar-item svg,
+        .summary-icon svg,
+        .empty-icon svg,
+        .btn svg {
+            width: 1rem;
+            height: 1rem;
+            stroke-width: 1.8;
         }
 
-        .pingly-page-body {
-            min-height: calc(100vh - var(--pingly-header-height));
+        .github-icon {
+            width: 1.125rem;
+            height: 1.125rem;
+            background: currentColor;
+            -webkit-mask: url("https://cdn.jsdelivr.net/npm/simple-icons@16.27.0/icons/github.svg") center / contain no-repeat;
+            mask: url("https://cdn.jsdelivr.net/npm/simple-icons@16.27.0/icons/github.svg") center / contain no-repeat;
+        }
+
+        .capture-status {
+            display: inline-flex;
+            min-height: 1.75rem;
+            align-items: center;
+            gap: 0.375rem;
+            padding: 0 0.625rem;
+            border: 1px solid var(--pingly-border);
+            border-radius: 999px;
+            color: var(--pingly-text-muted);
+            background: var(--pingly-surface-raised);
+            box-shadow: var(--pingly-shadow-small);
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .status-dot {
+            width: 0.4375rem;
+            height: 0.4375rem;
+            flex: 0 0 0.4375rem;
+            border-radius: 50%;
+            background: var(--fgColor-muted);
+        }
+
+        .capture-status[data-state="live"] {
+            border-color: var(--borderColor-success-muted);
+            color: var(--fgColor-success);
+            background: var(--bgColor-success-muted);
+        }
+
+        .capture-status[data-state="live"] .status-dot {
+            background: var(--fgColor-success);
+        }
+
+        .capture-status[data-state="error"] {
+            border-color: var(--borderColor-danger-muted);
+            color: var(--fgColor-danger);
+            background: var(--bgColor-danger-muted);
+        }
+
+        .capture-status[data-state="error"] .status-dot {
+            background: var(--fgColor-danger);
+        }
+
+        .status-dot-animated {
+            animation: status-pulse 1.6s ease-in-out infinite;
+        }
+
+        @keyframes status-pulse {
+            50% {
+                opacity: 0.35;
+            }
+        }
+
+        .app-layout {
+            display: grid;
             min-height: calc(100dvh - var(--pingly-header-height));
+            grid-template-columns: var(--pingly-sidebar-width) minmax(0, 1fr);
         }
 
-        .pingly-content {
+        .app-sidebar {
+            position: sticky;
+            top: var(--pingly-header-height);
+            align-self: start;
+            width: var(--pingly-sidebar-width);
+            height: calc(100dvh - var(--pingly-header-height));
+            overflow-y: auto;
+            border-right: 1px solid var(--pingly-border);
+            background: var(--pingly-surface);
+            scrollbar-width: thin;
+        }
+
+        .sidebar-nav {
+            display: flex;
+            flex-direction: column;
+            gap: 0.375rem;
+            padding: 1rem 0.75rem;
+        }
+
+        .sidebar-item {
+            position: relative;
+            display: grid;
+            width: 100%;
+            min-height: 2.375rem;
+            grid-template-columns: 1.25rem minmax(0, 1fr) auto;
+            align-items: center;
+            gap: 0.625rem;
+            padding: 0.5rem 0.625rem;
+            border: 1px solid transparent;
+            border-radius: var(--pingly-radius);
+            color: var(--pingly-text-muted);
+            background: transparent;
+            font-weight: 600;
+            text-align: left;
+            cursor: pointer;
+            transition:
+                color 120ms ease,
+                background-color 120ms ease,
+                border-color 120ms ease,
+                transform 120ms ease;
+        }
+
+        .sidebar-item:hover {
+            border-color: var(--pingly-border);
+            color: var(--pingly-text);
+            background: var(--pingly-surface-raised);
+            transform: translateX(2px);
+        }
+
+        .sidebar-item.active {
+            border-color: var(--pingly-code);
+            color: var(--pingly-code-text);
+            background: var(--pingly-code);
+            box-shadow: var(--pingly-shadow-raised);
+            font-weight: 600;
+        }
+
+        .sidebar-item.active svg {
+            color: var(--pingly-accent);
+        }
+
+        .nav-count {
+            min-width: 1.5rem;
+            padding: 0.0625rem 0.375rem;
+            border-radius: 999px;
+            color: var(--pingly-text-muted);
+            background: var(--pingly-surface-strong);
+            font-family: var(--pingly-font-mono);
+            font-size: 0.6875rem;
+            text-align: center;
+        }
+
+        .sidebar-item.active .nav-count {
+            color: var(--pingly-code-text);
+            background: rgb(255 255 255 / 0.12);
+        }
+
+        .sidebar-backdrop {
+            display: none;
+        }
+
+        .app-main {
+            min-width: 0;
+        }
+
+        .app-main:focus {
+            outline: none;
+        }
+
+        .content-shell {
             width: min(100%, var(--pingly-content-width));
-            margin-inline: auto;
-            padding: clamp(1.5rem, 3vw, 2.5rem) clamp(1rem, 2.5vw, 2rem) !important;
+            margin: 0 auto;
+            padding: 2.5rem clamp(1.25rem, 3vw, 3rem) 0;
         }
 
-        .workspace-header {
-            margin-bottom: 1.5rem !important;
+        .view-heading {
+            display: flex;
+            min-width: 0;
+            align-items: flex-end;
+            justify-content: space-between;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
         }
 
-        .workspace-header .page-title {
-            color: var(--fgColor-default);
-            font-size: 1.75rem;
+        .view-context {
+            margin: 0 0 0.375rem;
+            color: var(--pingly-accent-text);
+            font-size: 0.75rem;
             font-weight: 600;
-            line-height: 1.2;
         }
 
-        .page-pretitle {
-            color: var(--fgColor-accent);
-            font-size: .72rem;
-            font-weight: 600;
-            text-transform: uppercase;
+        .view-heading h1 {
+            margin: 0;
+            font-size: clamp(1.75rem, 3vw, 2.25rem);
+            font-weight: 650;
+            line-height: 1.12;
         }
 
         .capture-time {
-            display: inline-flex;
-            align-items: center;
-            min-height: 2rem;
-            padding: .35rem .65rem;
-            border: 1px solid var(--borderColor-muted);
-            border-radius: var(--pingly-radius);
-            background: var(--bgColor-default);
-        }
-
-        .connection-summary {
-            margin-bottom: 2.5rem;
-            border: 1px solid var(--borderColor-default);
-            border-radius: var(--pingly-radius);
-            background: var(--bgColor-default);
-            overflow: hidden;
+            flex-shrink: 0;
+            padding: 0.4375rem 0.625rem;
+            border: 1px solid var(--pingly-border);
+            border-radius: 999px;
+            color: var(--pingly-text-muted);
+            background: var(--pingly-surface-raised);
+            box-shadow: var(--pingly-shadow-small);
+            font-family: var(--pingly-font-mono);
+            font-size: 0.75rem;
         }
 
         .summary-grid {
             display: grid;
+            margin-bottom: 2rem;
+            overflow: hidden;
+            border: 1px solid var(--pingly-border);
+            border-radius: var(--pingly-radius);
             grid-template-columns: repeat(4, minmax(0, 1fr));
+            background: var(--pingly-surface-raised);
+            box-shadow: var(--pingly-shadow-raised);
         }
 
         .summary-item {
             min-width: 0;
             padding: 1rem;
-            border-right: 1px solid var(--borderColor-muted);
         }
 
-        .summary-item:last-child {
-            border-right: 0;
+        .summary-item + .summary-item {
+            border-left: 1px solid var(--pingly-border);
+        }
+
+        .summary-row {
+            display: grid;
+            min-width: 0;
+            grid-template-columns: 2rem minmax(0, 1fr);
+            align-items: center;
+            gap: 0.75rem;
         }
 
         .summary-icon {
-            display: inline-grid;
-            width: 2.25rem;
-            height: 2.25rem;
-            flex: 0 0 2.25rem;
+            display: grid;
+            width: 2rem;
+            height: 2rem;
             place-items: center;
-            border: 1px solid currentColor;
+            border: 1px solid var(--pingly-accent-border);
             border-radius: var(--pingly-radius);
-            background: var(--bgColor-muted);
+            color: var(--pingly-accent-text);
+            background: var(--pingly-accent-muted);
         }
 
-        .summary-icon .icon {
-            width: 1.1rem;
-            height: 1.1rem;
+        .summary-item:nth-child(2) .summary-icon {
+            border-color: var(--pingly-blue-border);
+            color: var(--pingly-blue);
+            background: var(--pingly-blue-muted);
+        }
+
+        .summary-item:nth-child(3) .summary-icon {
+            border-color: var(--pingly-green-border);
+            color: var(--pingly-green);
+            background: var(--pingly-green-muted);
+        }
+
+        .summary-item:nth-child(4) .summary-icon {
+            border-color: var(--pingly-violet-border);
+            color: var(--pingly-violet);
+            background: var(--pingly-violet-muted);
+        }
+
+        .summary-label {
+            margin-bottom: 0.125rem;
+            color: var(--pingly-text-muted);
+            font-size: 0.75rem;
+        }
+
+        .summary-value {
+            display: block;
+            overflow: hidden;
+            font-family: var(--pingly-font-mono);
+            font-size: 0.8125rem;
+            font-weight: 600;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
 
         .analysis-section {
-            margin-bottom: 2.75rem !important;
+            margin-bottom: 2.25rem;
         }
 
         .section-heading {
-            margin-bottom: 1rem !important;
-            padding-bottom: .75rem !important;
-            border-color: var(--borderColor-muted) !important;
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-between;
+            gap: 1rem;
+            margin-bottom: 1rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 1px solid var(--pingly-border);
         }
 
-        .section-heading h2 {
-            color: var(--fgColor-default);
-            font-size: 1.1rem;
+        .section-heading h2,
+        .section-heading .h3 {
+            margin: 0;
+            font-size: 1.0625rem;
+            font-weight: 650;
+            line-height: 1.4;
+        }
+
+        .page-pretitle {
+            margin: 0 0 0.125rem;
+            color: var(--pingly-accent-text);
+            font-size: 0.75rem;
             font-weight: 600;
+        }
+
+        .row.g-3 {
+            display: grid;
+            align-items: start;
+            gap: 1rem;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .row.g-3 > * {
+            min-width: 0;
+            width: auto !important;
+            max-width: none !important;
+        }
+
+        .card {
+            border: 1px solid var(--pingly-border);
+            border-radius: var(--pingly-radius);
+            background: var(--pingly-surface-raised);
+            box-shadow: var(--pingly-shadow-small);
+        }
+
+        .card-body {
+            padding: 1rem;
         }
 
         .fingerprint-card {
-            border-color: var(--borderColor-default);
-            border-radius: var(--pingly-radius);
-            background: var(--bgColor-default);
-            box-shadow: none;
-            overflow: hidden;
+            align-self: start;
+            transition:
+                border-color 120ms ease,
+                box-shadow 120ms ease,
+                transform 120ms ease;
         }
 
-        .fingerprint-card::before {
-            display: block;
-            height: 3px;
-            background: var(--pingly-fingerprint-accent, var(--fgColor-accent));
-            content: "";
+        .fingerprint-card:hover {
+            border-color: var(--pingly-border-strong);
+            box-shadow: var(--pingly-shadow-raised);
+            transform: translateY(-1px);
         }
 
-        .fingerprint-card-blue {
-            --pingly-fingerprint-accent: var(--fgColor-accent);
+        .fingerprint-card.opacity-50 {
+            opacity: 0.65;
         }
 
-        .fingerprint-card-green {
-            --pingly-fingerprint-accent: var(--fgColor-success);
-        }
-
-        .fingerprint-card-orange {
-            --pingly-fingerprint-accent: var(--fgColor-severe);
-        }
-
-        .fingerprint-card-purple {
-            --pingly-fingerprint-accent: var(--fgColor-done);
+        .fingerprint-card-body {
+            display: flex;
+            min-height: 100%;
+            flex-direction: column;
         }
 
         .fingerprint-label {
-            border: 1px solid currentColor;
+            display: inline-flex;
+            width: fit-content;
+            align-items: center;
+            padding: 0.125rem 0.4375rem;
+            border: 1px solid var(--pingly-accent-border);
             border-radius: 999px;
-            font-size: .72rem;
+            color: var(--pingly-accent-text);
+            background: var(--pingly-accent-muted);
+            font-size: 0.6875rem;
             font-weight: 600;
+            line-height: 1.25;
+        }
+
+        .badge,
+        .protocol-token {
+            display: inline-flex;
+            width: fit-content;
+            align-items: center;
+            padding: 0.125rem 0.4375rem;
+            border: 1px solid var(--pingly-blue-border);
+            border-radius: 999px;
+            color: var(--pingly-blue);
+            background: var(--pingly-blue-muted);
+            font-size: 0.6875rem;
+            font-weight: 600;
+            line-height: 1.25;
         }
 
         .fingerprint-value-box {
             min-height: 2.75rem;
-            border-left-color: var(--pingly-fingerprint-accent) !important;
-            background: var(--bgColor-muted);
+            padding: 0.75rem;
+            border-left: 2px solid var(--pingly-accent);
+            border-radius: 0 var(--pingly-radius) var(--pingly-radius) 0;
+            color: var(--pingly-code-text);
+            background: var(--pingly-code);
+            box-shadow: inset 0 1px rgb(255 255 255 / 0.04);
+        }
+
+        .fingerprint-value-box code,
+        .fingerprint-value-box .text-body {
+            color: var(--pingly-code-text) !important;
+        }
+
+        .fingerprint-value-box .text-secondary {
+            color: var(--pingly-code-muted) !important;
         }
 
         .fingerprint-source {
-            border-color: var(--borderColor-muted) !important;
+            margin-top: 1rem;
+            padding-top: 0.875rem;
+            border-top: 1px solid var(--pingly-border);
         }
 
         .fingerprint-source code {
             display: block;
-            min-width: 0;
-            padding: .65rem .75rem;
-            border: 1px solid var(--borderColor-muted);
-            border-radius: 4px;
-            background: var(--bgColor-muted);
-            color: var(--fgColor-accent);
+            padding: 0.625rem;
+            border: 1px solid var(--pingly-border);
+            border-radius: var(--pingly-radius);
+            color: var(--pingly-blue);
+            background: var(--pingly-surface-subtle);
             line-height: 1.55;
         }
 
         .detail-grid {
-            display: grid !important;
+            display: grid;
+            margin: 0 0 1rem;
+            overflow: hidden;
+            border: 1px solid var(--pingly-border);
+            border-radius: var(--pingly-radius);
             grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 1px;
-            border-color: var(--borderColor-default) !important;
-            border-radius: var(--pingly-radius) !important;
-            background: var(--borderColor-muted);
+            background: var(--pingly-surface-raised);
+            box-shadow: var(--pingly-shadow-small);
         }
 
         .detail-item {
-            width: auto;
-            padding: 1rem !important;
-            border: 0 !important;
-            background: var(--bgColor-default);
+            min-width: 0;
+            padding: 0.875rem 1rem;
+            border-bottom: 1px solid var(--pingly-border);
         }
 
-        .data-table-wrap {
-            border-color: var(--borderColor-default) !important;
-            border-radius: var(--pingly-radius) !important;
-            background: var(--bgColor-default);
+        .detail-item:nth-child(odd) {
+            border-right: 1px solid var(--pingly-border);
         }
 
-        .data-table {
-            --tblr-table-hover-bg: var(--bgColor-neutral-muted);
-        }
-
-        .data-table thead {
-            background: var(--bgColor-muted);
-        }
-
-        .data-table thead th {
-            border-bottom-color: var(--borderColor-default);
-            background: transparent;
-            color: var(--fgColor-muted) !important;
-            font-size: .7rem;
-            font-weight: 600;
-        }
-
-        .data-table tbody td {
-            border-color: var(--borderColor-muted);
-        }
-
-        .protocol-list {
-            border: 1px solid var(--borderColor-default);
-            border-radius: var(--pingly-radius);
-            background: var(--bgColor-default);
-            overflow: hidden;
-        }
-
-        .protocol-item {
-            border: 0;
-            border-bottom: 1px solid var(--borderColor-muted);
-            background: var(--bgColor-default);
-        }
-
-        .protocol-item:last-child {
+        .detail-item:nth-last-child(-n + 2) {
             border-bottom: 0;
         }
 
-        .protocol-summary {
-            min-height: 3.25rem;
-        }
-
-        .protocol-summary:hover,
-        .protocol-item[open] > .protocol-summary {
-            background: var(--bgColor-neutral-muted);
-        }
-
-        .protocol-body {
-            border-color: var(--borderColor-muted) !important;
-            background: var(--bgColor-muted) !important;
-        }
-
-        .protocol-token,
-        .route-method {
-            border: 1px solid var(--borderColor-accent-muted);
-            border-radius: 999px;
-            background: var(--bgColor-accent-muted) !important;
-            color: var(--fgColor-accent) !important;
+        .detail-item dt {
+            margin-bottom: 0.25rem;
+            color: var(--pingly-text-muted);
+            font-size: 0.75rem;
             font-weight: 500;
         }
 
-        .proxy-probe-control {
-            border: 1px solid var(--borderColor-default);
+        .detail-item dd {
+            margin: 0;
+            overflow-wrap: anywhere;
+        }
+
+        .data-table-wrap {
+            max-width: 100%;
+            margin-bottom: 1rem;
+            overflow: auto;
+            border: 1px solid var(--pingly-border);
             border-radius: var(--pingly-radius);
-            background: var(--bgColor-default);
+            background: var(--pingly-surface-raised);
+            box-shadow: var(--pingly-shadow-small);
+        }
+
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.8125rem;
+        }
+
+        .data-table th {
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            padding: 0.625rem 0.75rem;
+            border-bottom: 1px solid var(--pingly-border-strong);
+            color: var(--pingly-text-muted);
+            background: var(--pingly-surface-subtle);
+            font-size: 0.6875rem;
+            font-weight: 600;
+            text-align: left;
+            white-space: nowrap;
+        }
+
+        .data-table td {
+            min-width: 5.5rem;
+            padding: 0.6875rem 0.75rem;
+            border-bottom: 1px solid var(--pingly-border);
+            vertical-align: top;
+        }
+
+        .data-table tr:last-child td {
+            border-bottom: 0;
+        }
+
+        .data-table tbody tr:hover {
+            background: var(--pingly-hover);
+        }
+
+        .data-table .table-active {
+            background: var(--pingly-accent-muted);
+        }
+
+        .route-method {
+            min-width: 2.75rem;
+            justify-content: center;
+            border-color: var(--pingly-code);
+            color: var(--pingly-code-text);
+            background: var(--pingly-code);
+            font-family: var(--pingly-font-mono);
+        }
+
+        .protocol-list {
+            margin: 0 0 1rem;
+            overflow: hidden;
+            border: 1px solid var(--pingly-border);
+            border-radius: var(--pingly-radius);
+            background: var(--pingly-surface-raised);
+            box-shadow: var(--pingly-shadow-small);
+        }
+
+        .protocol-item + .protocol-item {
+            border-top: 1px solid var(--pingly-border);
+        }
+
+        .protocol-summary {
+            display: flex;
+            min-height: 2.75rem;
+            align-items: center;
+            gap: 0.625rem;
+            padding: 0.6875rem 0.875rem;
+            cursor: pointer;
+            list-style: none;
+        }
+
+        .protocol-summary::-webkit-details-marker {
+            display: none;
+        }
+
+        .protocol-summary:hover {
+            background: var(--pingly-hover);
+        }
+
+        .protocol-summary::after {
+            width: 0.4375rem;
+            height: 0.4375rem;
+            margin-left: 0.25rem;
+            border-right: 1px solid currentColor;
+            border-bottom: 1px solid currentColor;
+            content: "";
+            transform: rotate(45deg);
+            transition: transform 120ms ease;
+        }
+
+        details[open] > .protocol-summary::after {
+            transform: rotate(225deg);
+        }
+
+        .protocol-body {
+            padding: 0.875rem;
+            border-top: 1px solid var(--pingly-border);
+            background: var(--pingly-surface-subtle);
+        }
+
+        .protocol-token {
+            font-family: var(--pingly-font-mono);
+            overflow-wrap: anywhere;
+        }
+
+        .btn {
+            display: inline-flex;
+            min-height: 2.125rem;
+            align-items: center;
+            justify-content: center;
+            gap: 0.4375rem;
+            padding: 0.375rem 0.75rem;
+            border: 1px solid var(--button-default-borderColor-rest);
+            border-radius: var(--pingly-radius);
+            color: var(--button-default-fgColor-rest);
+            background: var(--button-default-bgColor-rest);
+            box-shadow: var(--pingly-shadow-small);
+            font-weight: 650;
+            line-height: 1.2;
+            text-decoration: none;
+            cursor: pointer;
+            transition:
+                border-color 120ms ease,
+                color 120ms ease,
+                background-color 120ms ease,
+                box-shadow 120ms ease,
+                transform 120ms ease;
+        }
+
+        .btn:disabled {
+            color: var(--button-default-fgColor-disabled);
+            background: var(--button-default-bgColor-disabled);
+            box-shadow: none;
+            cursor: not-allowed;
+        }
+
+        .btn-primary {
+            border-color: var(--pingly-code);
+            color: var(--pingly-code-text);
+            background: var(--pingly-code);
+        }
+
+        .btn-primary:hover {
+            border-color: var(--pingly-code-surface);
+            color: var(--pingly-code-text);
+            background: var(--pingly-code-surface);
+            box-shadow: var(--pingly-shadow-raised);
+            transform: translateY(-1px);
+        }
+
+        .btn-outline-secondary {
+            border-color: var(--button-default-borderColor-rest);
+            color: var(--button-default-fgColor-rest);
+            background: var(--button-default-bgColor-rest);
+        }
+
+        .btn-outline-secondary:hover {
+            border-color: var(--button-default-borderColor-hover);
+            background: var(--button-default-bgColor-hover);
+            box-shadow: var(--pingly-shadow-raised);
+        }
+
+        .btn-success {
+            border-color: var(--pingly-green);
+            color: var(--pingly-text-inverse);
+            background: var(--pingly-green);
+        }
+
+        .bg-secondary-lt {
+            border-color: var(--pingly-border);
+            background: var(--pingly-surface-subtle);
+        }
+
+        .bg-blue-lt {
+            border-color: var(--pingly-blue-border);
+            background: var(--pingly-blue-muted);
+        }
+
+        .text-blue {
+            color: var(--pingly-blue);
+        }
+
+        .bg-red-lt {
+            border-color: var(--borderColor-danger-muted);
+            background: var(--bgColor-danger-muted);
+        }
+
+        .text-red {
+            color: var(--fgColor-danger);
+        }
+
+        .bg-green-lt {
+            border-color: var(--borderColor-success-muted);
+            background: var(--bgColor-success-muted);
+        }
+
+        .text-green {
+            color: var(--fgColor-success);
+        }
+
+        .bg-warning-lt {
+            border-color: var(--borderColor-attention-muted);
+            background: var(--bgColor-attention-muted);
+        }
+
+        .text-warning {
+            color: var(--fgColor-attention);
+        }
+
+        .bg-blue {
+            background: var(--pingly-blue);
+        }
+
+        .bg-green {
+            background: var(--pingly-green);
+        }
+
+        .bg-red {
+            background: var(--pingly-danger);
+        }
+
+        .btn-sm {
+            padding: 0.25rem 0.625rem;
+            font-size: 0.75rem;
+        }
+
+        .spinner-border {
+            display: inline-block;
+            width: 0.875rem;
+            height: 0.875rem;
+            border: 2px solid currentColor;
+            border-right-color: transparent;
+            border-radius: 50%;
+            animation: spinner 700ms linear infinite;
+        }
+
+        @keyframes spinner {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .proxy-probe-control,
+        .proxy-verdict {
+            margin-bottom: 1rem;
+            padding: 1rem;
+            border: 1px solid var(--pingly-border);
+            border-radius: var(--pingly-radius);
+            background: var(--pingly-surface-raised);
+            box-shadow: var(--pingly-shadow-small);
         }
 
         .proxy-progress {
-            height: .35rem;
-            border-radius: 999px;
-            background: var(--bgColor-neutral-muted);
+            height: 0.25rem;
+            margin-top: 0.875rem;
             overflow: hidden;
+            border-radius: 999px;
+            background: var(--pingly-surface-strong);
         }
 
         .proxy-progress-bar {
-            width: 0;
             height: 100%;
-            border-radius: inherit;
-            background: var(--bgColor-accent-emphasis);
-            transition: width 120ms ease;
-        }
-
-        .proxy-verdict {
-            border: 1px solid var(--borderColor-default);
-            border-left: 3px solid var(--borderColor-muted);
-            border-radius: var(--pingly-radius);
-            background: var(--bgColor-default);
-        }
-
-        .proxy-verdict-likely {
-            border-left-color: var(--borderColor-danger-emphasis);
-        }
-
-        .proxy-verdict-possible,
-        .proxy-verdict-unknown {
-            border-left-color: var(--borderColor-attention-emphasis);
-        }
-
-        .proxy-verdict-unlikely {
-            border-left-color: var(--borderColor-success-emphasis);
+            background: var(--pingly-accent);
+            transition: width 180ms ease;
         }
 
         .proxy-chart {
             display: grid;
-            gap: .8rem;
+            gap: 0.625rem;
+            margin-top: 1rem;
         }
 
         .proxy-chart-row {
             display: grid;
-            grid-template-columns: 8.5rem minmax(5rem, 1fr) 5rem;
+            grid-template-columns: minmax(7rem, 10rem) minmax(7rem, 1fr) 5rem;
             align-items: center;
-            gap: .75rem;
+            gap: 0.75rem;
         }
 
         .proxy-chart-track {
-            height: .65rem;
-            border-radius: 999px;
-            background: var(--bgColor-neutral-muted);
+            height: 0.375rem;
             overflow: hidden;
+            border-radius: 999px;
+            background: var(--pingly-surface-strong);
         }
 
         .proxy-chart-fill {
-            min-width: 2px;
             height: 100%;
             border-radius: inherit;
-            background: var(--bgColor-accent-emphasis);
+            background: var(--pingly-blue);
+        }
+
+        .proxy-chart-fill-tcp {
+            background: var(--pingly-accent);
         }
 
         .proxy-chart-fill-tls {
-            background: var(--bgColor-attention-emphasis);
+            background: var(--pingly-green);
         }
 
         .proxy-chart-fill-application {
-            background: var(--bgColor-success-emphasis);
+            background: var(--pingly-violet);
         }
 
-        .json-card {
-            border-color: var(--borderColor-default);
-            border-radius: var(--pingly-radius);
-            box-shadow: none;
+        .json-panel {
             overflow: hidden;
+            border: 1px solid var(--pingly-border);
+            border-radius: var(--pingly-radius);
+            background: var(--pingly-surface-raised);
+            box-shadow: var(--pingly-shadow-raised);
         }
 
         .json-header {
-            border-color: var(--borderColor-muted);
-            background: var(--bgColor-default);
+            display: grid;
+            gap: 0.875rem;
+            padding: 1rem;
+            border-bottom: 1px solid var(--pingly-border);
+        }
+
+        .json-title-row {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .json-title {
+            min-width: 0;
+        }
+
+        .json-title h2 {
+            display: inline;
+            margin: 0;
+            font-size: 1rem;
+        }
+
+        .json-title code {
+            margin-left: 0.5rem;
         }
 
         .json-route-options {
-            padding: .25rem;
-            border: 1px solid var(--borderColor-muted);
-            border-radius: var(--pingly-radius);
-            background: var(--bgColor-muted);
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.375rem;
         }
 
         .json-route-options .nav-link {
-            position: relative;
-            border: 1px solid transparent;
-            border-radius: 4px;
-            color: var(--fgColor-muted);
-            font-size: .78rem;
-            font-weight: 500;
+            display: inline-flex;
+            min-height: 1.875rem;
+            align-items: center;
+            gap: 0.375rem;
+            padding: 0.25rem 0.625rem;
+            border: 1px solid var(--pingly-border);
+            border-radius: var(--pingly-radius);
+            color: var(--pingly-text-muted);
+            background: var(--pingly-surface);
+            box-shadow: var(--pingly-shadow-small);
+            font-size: 0.75rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition:
+                border-color 120ms ease,
+                color 120ms ease,
+                background-color 120ms ease,
+                transform 120ms ease;
         }
 
         .json-route-options .nav-link:hover {
-            color: var(--fgColor-default);
+            border-color: var(--pingly-border-strong);
+            color: var(--pingly-text);
+            background: var(--pingly-surface-raised);
+            transform: translateY(-1px);
         }
 
         .json-route-options .nav-link.active {
-            border-color: var(--borderColor-default);
-            background: var(--bgColor-default);
-            color: var(--fgColor-accent);
+            border-color: var(--pingly-code);
+            color: var(--pingly-code-text);
+            background: var(--pingly-code);
         }
 
         .json-route-options .nav-link:disabled {
-            opacity: 1;
-        }
-
-        .json-route-option-label,
-        .json-route-spinner {
-            transition: opacity 80ms ease;
-        }
-
-        .json-route-spinner {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            width: .75rem;
-            height: .75rem;
-            margin: -.375rem 0 0 -.375rem;
-            opacity: 0;
-            pointer-events: none;
-        }
-
-        .json-route-options .nav-link.is-loading {
             cursor: wait;
+            opacity: 0.75;
         }
 
-        .json-route-options .nav-link.is-loading .json-route-option-label {
-            opacity: 0;
+        .json-route-spinner {
+            display: none;
         }
 
-        .json-route-options .nav-link.is-loading .json-route-spinner {
-            opacity: 1;
+        .json-route-options .is-loading .json-route-spinner {
+            display: inline-block;
         }
 
         .json-code {
-            max-height: 70vh;
-            border: 0;
-            background: var(--bgColor-muted) !important;
-            color: var(--fgColor-default);
-            font-size: .78rem;
-            line-height: 1.65;
+            min-height: 28rem;
+            max-height: calc(100dvh - 17rem);
+            margin: 0;
+            padding: 1rem;
+            overflow: auto;
+            color: var(--pingly-code-text);
+            background: var(--pingly-code);
+            font-size: 0.75rem;
+            line-height: 1.55;
+            tab-size: 2;
+            scrollbar-color: var(--pingly-border-strong) var(--pingly-code);
+        }
+
+        .state-panel {
+            display: grid;
+            min-height: 18rem;
+            place-items: center;
+            padding: 2rem;
+            border: 1px solid var(--pingly-border);
+            border-radius: var(--pingly-radius);
+            background: var(--pingly-surface-raised);
+            box-shadow: var(--pingly-shadow-small);
+            text-align: center;
+        }
+
+        .empty {
+            display: flex;
+            min-height: 18rem;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            padding: 2rem;
+            border: 1px solid var(--pingly-border);
+            border-radius: var(--pingly-radius);
+            background: var(--pingly-surface-raised);
+            box-shadow: var(--pingly-shadow-small);
+            text-align: center;
+        }
+
+        .state-panel-inner,
+        .empty > * {
+            max-width: 32rem;
+        }
+
+        .state-panel h1,
+        .empty-title {
+            margin: 0.75rem 0 0.375rem;
+            font-size: 1rem;
+        }
+
+        .state-panel p,
+        .empty-subtitle {
+            margin: 0 0 1rem;
+            color: var(--pingly-text-muted);
+        }
+
+        .state-icon,
+        .empty-icon {
+            display: inline-grid;
+            width: 2.5rem;
+            height: 2.5rem;
+            margin: 0 auto;
+            place-items: center;
+            border: 1px solid var(--pingly-accent-border);
+            border-radius: var(--pingly-radius);
+            color: var(--pingly-accent-text);
+            background: var(--pingly-accent-muted);
+        }
+
+        .loading-state {
+            display: grid;
+            gap: 1.25rem;
+        }
+
+        .loading-heading {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+        }
+
+        .placeholder {
+            display: block;
+            height: 0.75rem;
+            border-radius: 999px;
+            background: var(--pingly-surface-strong);
+            animation: placeholder-pulse 1.5s ease-in-out infinite;
+        }
+
+        .placeholder-title {
+            width: min(16rem, 65%);
+            height: 1.75rem;
+        }
+
+        .placeholder-meta {
+            width: 8rem;
+        }
+
+        .loading-summary {
+            display: grid;
+            overflow: hidden;
+            border: 1px solid var(--pingly-border);
+            border-radius: var(--pingly-radius);
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            background: var(--pingly-surface-raised);
+        }
+
+        .loading-summary > div {
+            padding: 1.25rem;
+        }
+
+        .loading-summary > div + div {
+            border-left: 1px solid var(--pingly-border);
+        }
+
+        .loading-block {
+            height: 13rem;
+            border: 1px solid var(--pingly-border);
+            border-radius: var(--pingly-radius);
+            background: var(--pingly-surface-raised);
+        }
+
+        @keyframes placeholder-pulse {
+            50% {
+                opacity: 0.45;
+            }
+        }
+
+        .toast-container {
+            position: fixed;
+            right: 1rem;
+            bottom: 1rem;
+            z-index: 140;
+        }
+
+        .toast {
+            max-width: min(24rem, calc(100vw - 2rem));
+            padding: 0.75rem 1rem;
+            border: 1px solid var(--pingly-code-surface);
+            border-radius: var(--pingly-radius);
+            color: var(--pingly-code-text);
+            background: var(--pingly-code);
+            box-shadow: var(--pingly-shadow-raised);
+            font-size: 0.8125rem;
         }
 
         .pingly-footer {
+            padding: 2rem 0;
+            color: var(--pingly-text-muted);
+            font-size: 0.75rem;
+            text-align: center;
+        }
+
+        .pingly-footer a {
+            font-weight: 600;
+        }
+
+        .d-flex {
+            display: flex;
+        }
+
+        .d-block {
+            display: block;
+        }
+
+        .d-inline-flex {
+            display: inline-flex;
+        }
+
+        .bg-body-tertiary {
+            background: var(--pingly-surface-subtle);
+        }
+
+        .flex-column {
+            flex-direction: column;
+        }
+
+        .flex-lg-row {
+            flex-direction: row;
+        }
+
+        .flex-wrap {
+            flex-wrap: wrap;
+        }
+
+        .flex-fill {
+            flex: 1 1 auto;
+        }
+
+        .flex-shrink-0 {
+            flex-shrink: 0;
+        }
+
+        .align-items-center,
+        .align-items-lg-center {
+            align-items: center;
+        }
+
+        .align-items-start {
+            align-items: flex-start;
+        }
+
+        .align-items-end {
+            align-items: flex-end;
+        }
+
+        .justify-content-between {
+            justify-content: space-between;
+        }
+
+        .gap-1 {
+            gap: 0.25rem;
+        }
+
+        .gap-2 {
+            gap: 0.5rem;
+        }
+
+        .gap-3 {
+            gap: 0.75rem;
+        }
+
+        .vstack {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .ms-auto {
+            margin-left: auto;
+        }
+
+        .me-2 {
+            margin-right: 0.5rem;
+        }
+
+        .mt-2 {
+            margin-top: 0.5rem;
+        }
+
+        .mt-3 {
+            margin-top: 0.75rem;
+        }
+
+        .mt-4 {
+            margin-top: 1rem;
+        }
+
+        .mb-0 {
+            margin-bottom: 0;
+        }
+
+        .mb-1 {
+            margin-bottom: 0.25rem;
+        }
+
+        .mb-2 {
+            margin-bottom: 0.5rem;
+        }
+
+        .mb-3 {
+            margin-bottom: 0.75rem;
+        }
+
+        .mb-4 {
+            margin-bottom: 1rem;
+        }
+
+        .mb-5 {
+            margin-bottom: 2.25rem;
+        }
+
+        .p-2 {
+            padding: 0.5rem;
+        }
+
+        .p-3 {
+            padding: 0.75rem;
+        }
+
+        .py-2 {
+            padding-top: 0.5rem;
+            padding-bottom: 0.5rem;
+        }
+
+        .py-5 {
+            padding-top: 2rem;
+            padding-bottom: 2rem;
+        }
+
+        .px-0 {
+            padding-right: 0;
+            padding-left: 0;
+        }
+
+        .px-2 {
+            padding-right: 0.5rem;
+            padding-left: 0.5rem;
+        }
+
+        .pt-3 {
+            padding-top: 0.75rem;
+        }
+
+        .ps-3 {
+            padding-left: 0.75rem;
+        }
+
+        .border,
+        .border-top,
+        .border-bottom,
+        .border-start {
+            border-color: var(--borderColor-muted) !important;
+        }
+
+        .border {
+            border: 1px solid var(--borderColor-muted);
+        }
+
+        .border-top {
             border-top: 1px solid var(--borderColor-muted);
         }
 
-        @media (max-width: 1199.98px) {
-            .summary-grid {
+        .border-bottom {
+            border-bottom: 1px solid var(--borderColor-muted);
+        }
+
+        .border-start {
+            border-left: 1px solid var(--borderColor-muted);
+        }
+
+        .border-3 {
+            border-left-width: 2px;
+        }
+
+        .rounded-2 {
+            border-radius: var(--pingly-radius);
+        }
+
+        .overflow-hidden {
+            overflow: hidden;
+        }
+
+        .overflow-auto {
+            overflow: auto;
+        }
+
+        .text-secondary {
+            color: var(--fgColor-muted) !important;
+        }
+
+        .text-body {
+            color: var(--fgColor-default) !important;
+        }
+
+        .text-break {
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
+
+        .text-end {
+            text-align: right;
+        }
+
+        .text-start {
+            text-align: left;
+        }
+
+        .text-center {
+            text-align: center;
+        }
+
+        .text-wrap {
+            white-space: normal;
+        }
+
+        .text-uppercase {
+            text-transform: uppercase;
+        }
+
+        .fw-medium {
+            font-weight: 500;
+        }
+
+        .fw-semibold,
+        .fw-bold {
+            font-weight: 600;
+        }
+
+        .small {
+            font-size: 0.75rem;
+        }
+
+        .rounded-pill {
+            border-radius: 999px;
+        }
+
+        .cursor-pointer {
+            cursor: pointer;
+        }
+
+        .user-select-all {
+            user-select: all;
+        }
+
+        @media (max-width: 63.99rem) {
+            .summary-grid,
+            .loading-summary {
                 grid-template-columns: repeat(2, minmax(0, 1fr));
             }
 
-            .summary-item:nth-child(2) {
-                border-right: 0;
+            .summary-item:nth-child(3),
+            .summary-item:nth-child(4),
+            .loading-summary > div:nth-child(3),
+            .loading-summary > div:nth-child(4) {
+                border-top: 1px solid var(--borderColor-muted);
             }
 
-            .summary-item:nth-child(-n + 2) {
-                border-bottom: 1px solid var(--borderColor-muted);
+            .summary-item:nth-child(3),
+            .loading-summary > div:nth-child(3) {
+                border-left: 0;
             }
         }
 
-        @media (max-width: 991.98px) {
-            .detail-grid {
+        @media (min-width: 48rem) and (max-width: 55.99rem) {
+            .row.g-3 {
                 grid-template-columns: minmax(0, 1fr);
             }
         }
 
-        @media (max-width: 767.98px) {
-            #analysis-sidebar {
-                position: fixed;
-                top: var(--pingly-header-height, 0px);
-                bottom: 0;
-                left: 0;
-                z-index: 1025;
-                width: min(15rem, calc(100vw - 3rem));
-                flex-basis: auto;
-                height: calc(100vh - var(--pingly-header-height, 0px));
-                height: calc(100dvh - var(--pingly-header-height, 0px));
-                max-width: none;
-                overflow-y: auto;
-                visibility: hidden;
-                transform: translateX(-100%);
-                transition: transform 160ms ease, visibility 160ms ease;
+        @media (max-width: 47.99rem) {
+            .app-header-inner {
+                padding: 0 0.75rem;
             }
 
-            #analysis-sidebar.is-open {
-                visibility: visible;
+            .desktop-only {
+                display: none !important;
+            }
+
+            .app-layout {
+                display: block;
+            }
+
+            .app-sidebar {
+                position: fixed;
+                z-index: 110;
+                top: var(--pingly-header-height) !important;
+                bottom: 0;
+                left: 0;
+                width: min(17rem, 86vw);
+                height: auto;
+                transform: translateX(-102%);
+                transition: transform 160ms ease;
+            }
+
+            .app-sidebar.is-open {
                 transform: translateX(0);
-                box-shadow: var(--tblr-box-shadow-lg, 0 1rem 2rem rgb(0 0 0 / 20%));
             }
 
-            .pingly-sidebar-backdrop {
+            .sidebar-backdrop {
                 position: fixed;
-                top: var(--pingly-header-height, 0px);
-                right: 0;
-                bottom: 0;
-                left: 0;
-                z-index: 1024;
-                background: rgb(0 0 0 / 35%);
+                z-index: 105;
+                inset: var(--pingly-header-height) 0 0;
+                display: block;
+                background: var(--overlay-backdrop-bgColor, rgba(0, 0, 0, 0.45));
             }
 
             body.mobile-sidebar-open {
                 overflow: hidden;
             }
 
-            #main-content {
+            .content-shell {
+                padding: 1.25rem 0.875rem 0;
+            }
+
+            .view-heading {
+                align-items: flex-start;
+                flex-direction: column;
+                margin-bottom: 1.25rem;
+            }
+
+            .capture-time {
                 width: 100%;
             }
 
-            .pingly-content {
-                padding-top: 1.25rem !important;
-            }
-
-            .workspace-header .page-title {
-                font-size: 1.5rem;
-            }
-
             .summary-grid {
+                margin-bottom: 1.5rem;
+            }
+
+            .summary-item {
+                padding: 0.875rem;
+            }
+
+            .summary-row {
+                grid-template-columns: 1.75rem minmax(0, 1fr);
+                gap: 0.625rem;
+            }
+
+            .summary-icon {
+                width: 1.75rem;
+                height: 1.75rem;
+            }
+
+            .summary-value {
+                font-size: 0.75rem;
+            }
+
+            .row.g-3,
+            .detail-grid {
                 grid-template-columns: minmax(0, 1fr);
             }
 
-            .summary-item,
-            .summary-item:nth-child(2) {
+            .detail-item,
+            .detail-item:nth-child(odd),
+            .detail-item:nth-last-child(-n + 2) {
                 border-right: 0;
                 border-bottom: 1px solid var(--borderColor-muted);
             }
 
-            .summary-item:last-child {
+            .detail-item:last-child {
                 border-bottom: 0;
             }
 
-            .protocol-summary {
-                align-items: flex-start !important;
-                flex-wrap: wrap;
-            }
-
-            .protocol-summary > .ms-auto {
-                width: 100%;
-                margin-left: 0 !important;
-                text-align: left !important;
+            .json-code {
+                min-height: 24rem;
+                max-height: none;
             }
 
             .proxy-chart-row {
-                grid-template-columns: minmax(0, 1fr) auto;
-            }
-
-            .proxy-chart-row > :first-child {
-                grid-row: 1;
-                grid-column: 1;
-            }
-
-            .proxy-chart-row > :last-child {
-                grid-row: 1;
-                grid-column: 2;
+                grid-template-columns: minmax(0, 1fr) 4.5rem;
             }
 
             .proxy-chart-track {
-                grid-row: 2;
                 grid-column: 1 / -1;
+                grid-row: 2;
+            }
+
+            .flex-lg-row {
+                flex-direction: column;
+            }
+
+            .align-items-lg-center {
+                align-items: stretch;
+            }
+        }
+
+        @media (min-width: 48rem) {
+            .mobile-only {
+                display: none !important;
+            }
+        }
+
+        @media (max-width: 27.99rem) {
+            .brand-copy small,
+            .capture-status {
+                display: none;
+            }
+        }
+
+        @media (max-width: 21.99rem) {
+            .summary-grid,
+            .loading-summary {
+                grid-template-columns: minmax(0, 1fr);
+            }
+
+            .summary-item + .summary-item,
+            .summary-item:nth-child(3),
+            .loading-summary > div + div,
+            .loading-summary > div:nth-child(3) {
+                border-top: 1px solid var(--borderColor-muted);
+                border-left: 0;
             }
         }
 
         @media (prefers-reduced-motion: reduce) {
-            #analysis-sidebar,
-            .proxy-progress-bar {
-                transition: none;
-            }
-
-            .status-dot-animated {
-                animation: none !important;
+            *,
+            *::before,
+            *::after {
+                scroll-behavior: auto !important;
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
             }
         }
     </style>
@@ -854,22 +1839,16 @@
         referrerpolicy="no-referrer"
     ></script>
 </head>
-<body class="pingly-app">
-    <a
-        class="visually-hidden-focusable position-absolute top-0 start-0 z-3 m-2 btn btn-primary"
-        href="#main-content"
-    >
+<body>
+    <a class="skip-link btn btn-primary" href="#main-content">
         Skip to analysis
     </a>
 
-    <div class="page">
-        <header
-            class="navbar navbar-expand-md d-print-none border-bottom bg-body sticky-top pingly-header"
-            id="app-header"
-        >
-            <div class="container-fluid flex-nowrap pingly-header-inner">
+    <div class="app-shell">
+        <header class="app-header" id="app-header">
+            <div class="app-header-inner">
                 <button
-                    class="btn btn-icon btn-outline-secondary d-md-none flex-shrink-0 me-2 toolbar-button"
+                    class="btn icon-button mobile-only"
                     id="sidebar-toggle"
                     type="button"
                     title="Open analysis navigation"
@@ -877,32 +1856,27 @@
                     aria-controls="analysis-sidebar"
                     aria-expanded="false"
                 >
-                    <i class="icon" data-lucide="menu" aria-hidden="true"></i>
+                    <i data-lucide="menu" aria-hidden="true"></i>
                 </button>
 
-                <a
-                    class="navbar-brand d-flex align-items-center gap-2 m-0 text-decoration-none pingly-brand"
-                    href="/"
-                    aria-label="Pingly home"
-                >
-                    <span class="pingly-brand-mark" aria-hidden="true">
-                        P
-                    </span>
-                    <span class="d-flex flex-column lh-sm pingly-brand-copy">
+                <a class="app-brand" href="/" aria-label="Pingly home">
+                    <span class="brand-mark" aria-hidden="true">P</span>
+                    <span class="brand-copy">
                         <strong>Pingly</strong>
-                        <small class="text-secondary d-none d-lg-block">Protocol Inspector</small>
+                        <small>Protocol Inspector</small>
                     </span>
                 </a>
 
-                <div class="d-flex flex-row flex-nowrap align-items-center gap-2 ms-auto">
+                <div class="header-actions">
                     <span
-                        class="badge bg-secondary-lt text-secondary d-none d-lg-inline-flex align-items-center"
+                        class="capture-status desktop-only"
                         id="capture-status"
+                        data-state="loading"
                         role="status"
                         aria-live="polite"
                     >
                         <span
-                            class="status-dot status-dot-animated bg-secondary me-2"
+                            class="status-dot status-dot-animated"
                             id="capture-status-dot"
                             aria-hidden="true"
                         ></span>
@@ -910,359 +1884,314 @@
                     </span>
 
                     <button
-                        class="btn btn-icon btn-outline-secondary toolbar-button"
+                        class="btn icon-button"
                         id="theme-button"
                         type="button"
                         title="Toggle color theme"
                         aria-label="Toggle color theme"
                     >
-                        <i class="icon" data-lucide="moon" aria-hidden="true"></i>
+                        <i data-lucide="moon" aria-hidden="true"></i>
                     </button>
 
                     <button
-                        class="btn btn-icon btn-outline-secondary d-none d-sm-inline-flex toolbar-button"
+                        class="btn icon-button desktop-only"
                         id="download-button"
                         type="button"
                         title="Download analysis JSON"
                         aria-label="Download analysis JSON"
                         disabled
                     >
-                        <i class="icon" data-lucide="download" aria-hidden="true"></i>
+                        <i data-lucide="download" aria-hidden="true"></i>
                     </button>
 
                     <a
-                        class="btn btn-icon btn-outline-secondary toolbar-button"
+                        class="btn icon-button"
                         href="https://github.com/0x676e67/pingly"
                         target="_blank"
                         rel="noreferrer"
                         title="View Pingly on GitHub"
                         aria-label="View Pingly on GitHub"
                     >
-                        <i class="ti ti-brand-github fs-2" aria-hidden="true"></i>
+                        <span class="github-icon" aria-hidden="true"></span>
                     </a>
-
                 </div>
             </div>
         </header>
 
         <div
-            class="pingly-sidebar-backdrop d-md-none"
+            class="sidebar-backdrop"
             id="analysis-sidebar-backdrop"
             aria-hidden="true"
             hidden
         ></div>
 
-        <div class="page-wrapper">
-            <div class="container-fluid p-0">
-                <div class="row g-0 align-items-stretch">
-                    <aside
-                        class="border-end align-self-start pingly-sidebar"
-                        id="analysis-sidebar"
-                        aria-label="Analysis views"
-                        aria-hidden="true"
+        <div class="app-layout">
+            <aside
+                class="app-sidebar"
+                id="analysis-sidebar"
+                aria-label="Analysis views"
+                aria-hidden="true"
+            >
+                <nav
+                    class="sidebar-nav"
+                    id="analysis-nav"
+                    role="tablist"
+                    aria-orientation="vertical"
+                >
+                    <button
+                        class="sidebar-item active"
+                        type="button"
+                        role="tab"
+                        aria-selected="true"
+                        aria-controls="panel-overview"
+                        data-view="overview"
                     >
-                        <div class="d-flex flex-column w-100">
-                            <nav
-                                class="list-group flex-column flex-nowrap overflow-auto w-100 pingly-nav"
-                                id="analysis-nav"
-                                role="tablist"
-                                aria-orientation="vertical"
-                            >
-                                <button
-                                    class="list-group-item list-group-item-action active d-flex align-items-center gap-2 flex-shrink-0 text-start"
-                                    type="button"
-                                    role="tab"
-                                    aria-selected="true"
-                                    aria-controls="panel-overview"
-                                    data-view="overview"
-                                >
-                                    <i class="icon" data-lucide="layout-dashboard" aria-hidden="true"></i>
-                                    <span>Overview</span>
-                                </button>
-                                <button
-                                    class="list-group-item list-group-item-action d-flex align-items-center gap-2 flex-shrink-0 text-start"
-                                    type="button"
-                                    role="tab"
-                                    aria-selected="false"
-                                    aria-controls="panel-tls"
-                                    data-view="tls"
-                                >
-                                    <i class="icon" data-lucide="shield-check" aria-hidden="true"></i>
-                                    <span>TLS</span>
-                                    <span class="badge bg-secondary-lt text-secondary ms-auto" id="tls-count">0</span>
-                                </button>
-                                <button
-                                    class="list-group-item list-group-item-action d-flex align-items-center gap-2 flex-shrink-0 text-start"
-                                    type="button"
-                                    role="tab"
-                                    aria-selected="false"
-                                    aria-controls="panel-http"
-                                    data-view="http"
-                                >
-                                    <i class="icon" data-lucide="rows-3" aria-hidden="true"></i>
-                                    <span>HTTP</span>
-                                    <span class="badge bg-secondary-lt text-secondary ms-auto" id="http-count">0</span>
-                                </button>
-                                <button
-                                    class="list-group-item list-group-item-action d-flex align-items-center gap-2 flex-shrink-0 text-start"
-                                    type="button"
-                                    role="tab"
-                                    aria-selected="false"
-                                    aria-controls="panel-h2"
-                                    data-view="h2"
-                                >
-                                    <i class="icon" data-lucide="network" aria-hidden="true"></i>
-                                    <span>HTTP/2</span>
-                                    <span class="badge bg-secondary-lt text-secondary ms-auto" id="h2-count">0</span>
-                                </button>
-                                <button
-                                    class="list-group-item list-group-item-action d-flex align-items-center gap-2 flex-shrink-0 text-start"
-                                    type="button"
-                                    role="tab"
-                                    aria-selected="false"
-                                    aria-controls="panel-h3"
-                                    data-view="h3"
-                                >
-                                    <i class="icon" data-lucide="radio-tower" aria-hidden="true"></i>
-                                    <span>HTTP/3</span>
-                                    <span class="badge bg-secondary-lt text-secondary ms-auto" id="h3-count">0</span>
-                                </button>
-                                <button
-                                    class="list-group-item list-group-item-action d-flex align-items-center gap-2 flex-shrink-0 text-start"
-                                    type="button"
-                                    role="tab"
-                                    aria-selected="false"
-                                    aria-controls="panel-tcp"
-                                    data-view="tcp"
-                                >
-                                    <i class="icon" data-lucide="waypoints" aria-hidden="true"></i>
-                                    <span>TCP</span>
-                                    <span class="badge bg-secondary-lt text-secondary ms-auto" id="tcp-count">0</span>
-                                </button>
-                                <button
-                                    class="list-group-item list-group-item-action d-flex align-items-center gap-2 flex-shrink-0 text-start"
-                                    type="button"
-                                    role="tab"
-                                    aria-selected="false"
-                                    aria-controls="panel-proxy"
-                                    data-view="proxy"
-                                >
-                                    <i class="icon" data-lucide="scan-search" aria-hidden="true"></i>
-                                    <span>Latency</span>
-                                </button>
-                                <button
-                                    class="list-group-item list-group-item-action d-flex align-items-center gap-2 flex-shrink-0 text-start"
-                                    type="button"
-                                    role="tab"
-                                    aria-selected="false"
-                                    aria-controls="panel-json"
-                                    data-view="json"
-                                >
-                                    <i class="icon" data-lucide="braces" aria-hidden="true"></i>
-                                    <span>JSON</span>
-                                </button>
-                            </nav>
+                        <i data-lucide="layout-dashboard" aria-hidden="true"></i>
+                        <span>Overview</span>
+                    </button>
+                    <button
+                        class="sidebar-item"
+                        type="button"
+                        role="tab"
+                        aria-selected="false"
+                        aria-controls="panel-tls"
+                        data-view="tls"
+                    >
+                        <i data-lucide="shield-check" aria-hidden="true"></i>
+                        <span>TLS</span>
+                        <span class="nav-count" id="tls-count">0</span>
+                    </button>
+                    <button
+                        class="sidebar-item"
+                        type="button"
+                        role="tab"
+                        aria-selected="false"
+                        aria-controls="panel-http"
+                        data-view="http"
+                    >
+                        <i data-lucide="rows-3" aria-hidden="true"></i>
+                        <span>HTTP</span>
+                        <span class="nav-count" id="http-count">0</span>
+                    </button>
+                    <button
+                        class="sidebar-item"
+                        type="button"
+                        role="tab"
+                        aria-selected="false"
+                        aria-controls="panel-h2"
+                        data-view="h2"
+                    >
+                        <i data-lucide="network" aria-hidden="true"></i>
+                        <span>HTTP/2</span>
+                        <span class="nav-count" id="h2-count">0</span>
+                    </button>
+                    <button
+                        class="sidebar-item"
+                        type="button"
+                        role="tab"
+                        aria-selected="false"
+                        aria-controls="panel-h3"
+                        data-view="h3"
+                    >
+                        <i data-lucide="radio-tower" aria-hidden="true"></i>
+                        <span>HTTP/3</span>
+                        <span class="nav-count" id="h3-count">0</span>
+                    </button>
+                    <button
+                        class="sidebar-item"
+                        type="button"
+                        role="tab"
+                        aria-selected="false"
+                        aria-controls="panel-tcp"
+                        data-view="tcp"
+                    >
+                        <i data-lucide="waypoints" aria-hidden="true"></i>
+                        <span>TCP</span>
+                        <span class="nav-count" id="tcp-count">0</span>
+                    </button>
+                    <button
+                        class="sidebar-item"
+                        type="button"
+                        role="tab"
+                        aria-selected="false"
+                        aria-controls="panel-proxy"
+                        data-view="proxy"
+                    >
+                        <i data-lucide="scan-search" aria-hidden="true"></i>
+                        <span>Latency</span>
+                    </button>
+                    <button
+                        class="sidebar-item"
+                        type="button"
+                        role="tab"
+                        aria-selected="false"
+                        aria-controls="panel-json"
+                        data-view="json"
+                    >
+                        <i data-lucide="braces" aria-hidden="true"></i>
+                        <span>JSON</span>
+                    </button>
+                </nav>
+            </aside>
+
+            <main class="app-main" id="main-content" tabindex="-1">
+                <div class="content-shell">
+                    <section class="loading-state" id="loading-state" aria-live="polite">
+                        <div class="loading-heading">
+                            <span class="placeholder placeholder-title"></span>
+                            <span class="placeholder placeholder-meta"></span>
                         </div>
-                    </aside>
+                        <div class="loading-summary" aria-hidden="true">
+                            <div><span class="placeholder"></span></div>
+                            <div><span class="placeholder"></span></div>
+                            <div><span class="placeholder"></span></div>
+                            <div><span class="placeholder"></span></div>
+                        </div>
+                        <div class="loading-block" aria-hidden="true"></div>
+                    </section>
 
-                    <main id="main-content" tabindex="-1">
-                        <div class="page-body m-0 pingly-page-body">
-                            <div class="container-xl py-4 pingly-content">
-                                <section class="placeholder-glow" id="loading-state" aria-live="polite">
-                                    <div class="d-flex justify-content-between align-items-center mb-4">
-                                        <span class="placeholder col-4"></span>
-                                        <span class="placeholder col-2"></span>
-                                    </div>
-                                    <div class="row row-cards mb-4" aria-hidden="true">
-                                        <div class="col-sm-6 col-xl-3">
-                                            <div class="card"><div class="card-body"><span class="placeholder col-8"></span></div></div>
-                                        </div>
-                                        <div class="col-sm-6 col-xl-3">
-                                            <div class="card"><div class="card-body"><span class="placeholder col-8"></span></div></div>
-                                        </div>
-                                        <div class="col-sm-6 col-xl-3">
-                                            <div class="card"><div class="card-body"><span class="placeholder col-8"></span></div></div>
-                                        </div>
-                                        <div class="col-sm-6 col-xl-3">
-                                            <div class="card"><div class="card-body"><span class="placeholder col-8"></span></div></div>
-                                        </div>
-                                    </div>
-                                    <div class="card" aria-hidden="true">
-                                        <div class="card-body py-5"><span class="placeholder col-12"></span></div>
-                                    </div>
-                                </section>
+                    <section class="state-panel" id="error-state" role="alert" hidden>
+                        <div class="state-panel-inner">
+                            <span class="state-icon" aria-hidden="true">
+                                <i data-lucide="circle-alert"></i>
+                            </span>
+                            <h1>Analysis unavailable</h1>
+                            <p id="error-message">The request could not be analyzed.</p>
+                            <button class="btn btn-primary" id="retry-button" type="button">
+                                <i data-lucide="refresh-cw" aria-hidden="true"></i>
+                                Try again
+                            </button>
+                        </div>
+                    </section>
 
-                                <section class="empty py-5" id="error-state" role="alert" hidden>
-                                    <div class="empty-icon">
-                                        <i class="icon" data-lucide="circle-alert" aria-hidden="true"></i>
+                    <div id="analysis-workspace" hidden>
+                        <header class="view-heading">
+                            <div>
+                                <p class="view-context" id="view-eyebrow">Current request</p>
+                                <h1 id="view-title">Connection analysis</h1>
+                            </div>
+                            <time class="capture-time" id="captured-at">Captured just now</time>
+                        </header>
+
+                        <section class="summary-grid" aria-label="Connection summary">
+                            <article class="summary-item">
+                                <div class="summary-row">
+                                    <span class="summary-icon" aria-hidden="true">
+                                        <i data-lucide="map-pin"></i>
+                                    </span>
+                                    <div>
+                                        <div class="summary-label">Remote address</div>
+                                        <strong class="summary-value" id="summary-address">Unavailable</strong>
                                     </div>
-                                    <p class="empty-title">Analysis unavailable</p>
-                                    <p class="empty-subtitle text-secondary" id="error-message">
-                                        The analysis response could not be loaded.
-                                    </p>
-                                    <div class="empty-action">
-                                        <button class="btn btn-primary" id="retry-button" type="button">
-                                            <i class="icon" data-lucide="refresh-cw" aria-hidden="true"></i>
-                                            <span>Try again</span>
+                                </div>
+                            </article>
+                            <article class="summary-item">
+                                <div class="summary-row">
+                                    <span class="summary-icon" aria-hidden="true">
+                                        <i data-lucide="arrow-up-right"></i>
+                                    </span>
+                                    <div>
+                                        <div class="summary-label">Request</div>
+                                        <strong class="summary-value" id="summary-http">Unavailable</strong>
+                                    </div>
+                                </div>
+                            </article>
+                            <article class="summary-item">
+                                <div class="summary-row">
+                                    <span class="summary-icon" aria-hidden="true">
+                                        <i data-lucide="shield-check"></i>
+                                    </span>
+                                    <div>
+                                        <div class="summary-label">Negotiated TLS</div>
+                                        <strong class="summary-value" id="summary-tls">Unavailable</strong>
+                                    </div>
+                                </div>
+                            </article>
+                            <article class="summary-item">
+                                <div class="summary-row">
+                                    <span class="summary-icon" aria-hidden="true">
+                                        <i data-lucide="network"></i>
+                                    </span>
+                                    <div>
+                                        <div class="summary-label">Protocol frames</div>
+                                        <strong class="summary-value" id="summary-frames">0</strong>
+                                    </div>
+                                </div>
+                            </article>
+                        </section>
+
+                        <section id="panel-overview" role="tabpanel" data-panel="overview">
+                            <div id="overview-content"></div>
+                        </section>
+                        <section id="panel-tls" role="tabpanel" data-panel="tls" hidden>
+                            <div id="tls-content"></div>
+                        </section>
+                        <section id="panel-http" role="tabpanel" data-panel="http" hidden>
+                            <div id="http-content"></div>
+                        </section>
+                        <section id="panel-h2" role="tabpanel" data-panel="h2" hidden>
+                            <div id="h2-content"></div>
+                        </section>
+                        <section id="panel-h3" role="tabpanel" data-panel="h3" hidden>
+                            <div id="h3-content"></div>
+                        </section>
+                        <section id="panel-tcp" role="tabpanel" data-panel="tcp" hidden>
+                            <div id="tcp-content"></div>
+                        </section>
+                        <section id="panel-proxy" role="tabpanel" data-panel="proxy" hidden>
+                            <div id="proxy-content"></div>
+                        </section>
+                        <section id="panel-json" role="tabpanel" data-panel="json" hidden>
+                            <div class="json-panel">
+                                <div class="json-header">
+                                    <div class="json-title-row">
+                                        <div class="json-title">
+                                            <p class="page-pretitle">Serialized response</p>
+                                            <h2>Raw JSON</h2>
+                                            <code class="badge" id="json-route-label">/api/all</code>
+                                        </div>
+                                        <button
+                                            class="btn icon-button ms-auto"
+                                            id="copy-json-button"
+                                            type="button"
+                                            title="Copy raw JSON"
+                                            aria-label="Copy raw JSON"
+                                            disabled
+                                        >
+                                            <i data-lucide="copy" aria-hidden="true"></i>
                                         </button>
                                     </div>
-                                </section>
-
-                                <div id="analysis-workspace" hidden>
-                                    <div class="page-header d-print-none mb-4 workspace-header">
-                                        <div class="row align-items-start g-2">
-                                            <div class="col-12 col-sm">
-                                                <div class="page-pretitle" id="view-eyebrow">Current request</div>
-                                                <h1 class="page-title" id="view-title">Connection analysis</h1>
-                                            </div>
-                                            <div class="col-12 col-sm-auto ms-sm-auto">
-                                                <time class="text-secondary font-monospace small capture-time" id="captured-at"></time>
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    <section class="connection-summary" aria-label="Connection summary">
-                                        <div class="summary-grid">
-                                            <article class="summary-item">
-                                                <div class="d-flex align-items-start gap-3">
-                                                    <span class="summary-icon text-blue" aria-hidden="true">
-                                                        <i class="icon" data-lucide="map-pin"></i>
-                                                    </span>
-                                                    <div class="flex-fill overflow-hidden">
-                                                        <div class="text-secondary small fw-medium mb-1">Remote address</div>
-                                                        <strong class="font-monospace text-break" id="summary-address">Unavailable</strong>
-                                                    </div>
-                                                </div>
-                                            </article>
-                                            <article class="summary-item">
-                                                <div class="d-flex align-items-start gap-3">
-                                                    <span class="summary-icon text-orange" aria-hidden="true">
-                                                        <i class="icon" data-lucide="arrow-up-right"></i>
-                                                    </span>
-                                                    <div class="flex-fill overflow-hidden">
-                                                        <div class="text-secondary small fw-medium mb-1">Request</div>
-                                                        <strong class="font-monospace text-break" id="summary-http">Unavailable</strong>
-                                                    </div>
-                                                </div>
-                                            </article>
-                                            <article class="summary-item">
-                                                <div class="d-flex align-items-start gap-3">
-                                                    <span class="summary-icon text-green" aria-hidden="true">
-                                                        <i class="icon" data-lucide="shield-check"></i>
-                                                    </span>
-                                                    <div class="flex-fill overflow-hidden">
-                                                        <div class="text-secondary small fw-medium mb-1">Negotiated TLS</div>
-                                                        <strong class="font-monospace text-break" id="summary-tls">Unavailable</strong>
-                                                    </div>
-                                                </div>
-                                            </article>
-                                            <article class="summary-item">
-                                                <div class="d-flex align-items-start gap-3">
-                                                    <span class="summary-icon text-purple" aria-hidden="true">
-                                                        <i class="icon" data-lucide="network"></i>
-                                                    </span>
-                                                    <div class="flex-fill overflow-hidden">
-                                                        <div class="text-secondary small fw-medium mb-1">Protocol frames</div>
-                                                        <strong class="font-monospace text-break" id="summary-frames">0</strong>
-                                                    </div>
-                                                </div>
-                                            </article>
-                                        </div>
-                                    </section>
-
-                                    <section id="panel-overview" role="tabpanel" data-panel="overview">
-                                        <div id="overview-content"></div>
-                                    </section>
-                                    <section id="panel-tls" role="tabpanel" data-panel="tls" hidden>
-                                        <div id="tls-content"></div>
-                                    </section>
-                                    <section id="panel-http" role="tabpanel" data-panel="http" hidden>
-                                        <div id="http-content"></div>
-                                    </section>
-                                    <section id="panel-h2" role="tabpanel" data-panel="h2" hidden>
-                                        <div id="h2-content"></div>
-                                    </section>
-                                    <section id="panel-h3" role="tabpanel" data-panel="h3" hidden>
-                                        <div id="h3-content"></div>
-                                    </section>
-                                    <section id="panel-tcp" role="tabpanel" data-panel="tcp" hidden>
-                                        <div id="tcp-content"></div>
-                                    </section>
-                                    <section id="panel-proxy" role="tabpanel" data-panel="proxy" hidden>
-                                        <div id="proxy-content"></div>
-                                    </section>
-                                    <section id="panel-json" role="tabpanel" data-panel="json" hidden>
-                                        <div class="card json-card">
-                                            <div class="card-header flex-column align-items-stretch gap-3 json-header">
-                                                <div class="d-flex align-items-center">
-                                                    <div>
-                                                        <div class="page-pretitle">Serialized response</div>
-                                                        <div class="d-flex align-items-center gap-2">
-                                                            <h2 class="card-title">Raw JSON</h2>
-                                                            <code
-                                                                class="badge bg-blue-lt text-blue font-monospace"
-                                                                id="json-route-label"
-                                                            >/api/all</code>
-                                                        </div>
-                                                    </div>
-                                                    <div class="card-actions ms-auto">
-                                                        <button
-                                                            class="btn btn-icon btn-outline-secondary"
-                                                            id="copy-json-button"
-                                                            type="button"
-                                                            title="Copy raw JSON"
-                                                            aria-label="Copy raw JSON"
-                                                            disabled
-                                                        >
-                                                            <i
-                                                                class="icon"
-                                                                data-lucide="copy"
-                                                                aria-hidden="true"
-                                                            ></i>
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                                <div
-                                                    class="nav nav-pills flex-nowrap gap-1 overflow-x-auto json-route-options"
-                                                    id="json-route-options"
-                                                    role="group"
-                                                    aria-label="JSON response route"
-                                                ></div>
-                                            </div>
-                                            <pre
-                                                class="card-body bg-body-tertiary font-monospace overflow-auto m-0 json-code"
-                                                id="json-content"
-                                                tabindex="0"
-                                            ></pre>
-                                        </div>
-                                    </section>
-
-                                    <footer class="py-4 text-center text-secondary small pingly-footer">
-                                        Powered by
-                                        <a
-                                            class="fw-semibold"
-                                            href="https://github.com/0x676e67/pingly"
-                                            target="_blank"
-                                            rel="noreferrer"
-                                        >Pingly</a>
-                                    </footer>
+                                    <div
+                                        class="json-route-options"
+                                        id="json-route-options"
+                                        role="group"
+                                        aria-label="JSON response route"
+                                    ></div>
                                 </div>
+                                <pre
+                                    class="json-code"
+                                    id="json-content"
+                                    tabindex="0"
+                                ></pre>
                             </div>
-                        </div>
-                    </main>
+                        </section>
+
+                        <footer class="pingly-footer">
+                            Powered by
+                            <a
+                                href="https://github.com/0x676e67/pingly"
+                                target="_blank"
+                                rel="noreferrer"
+                            >Pingly</a>
+                        </footer>
+                    </div>
                 </div>
-            </div>
+            </main>
         </div>
     </div>
 
-    <div class="toast-container position-fixed bottom-0 end-0 p-3">
-        <div
-            class="toast show p-3 text-bg-dark border-0"
-            id="toast"
-            role="status"
-            aria-live="polite"
-            hidden
-        ></div>
+    <div class="toast-container">
+        <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
     </div>
 
     <!-- PINGLY_SCRIPT -->
