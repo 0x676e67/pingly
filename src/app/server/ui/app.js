@@ -647,7 +647,7 @@ function renderOverview(data) {
     const http2 = isObject(data.http2) ? data.http2 : {};
     const http3 = isObject(data.http3) ? data.http3 : {};
 
-    const fingerprints = createFingerprintSection("Client identity", [
+    const fingerprintItems = [
         fingerprintItem("JA4", tls.ja4, tls.ja4_r),
         fingerprintItem("JA3", tls.ja3_hash, tls.ja3),
         fingerprintItem(
@@ -660,7 +660,9 @@ function renderOverview(data) {
             http3.h3_text_hash,
             http3.h3_text
         ),
-    ]);
+    ].filter(function (item) {
+        return item.primary || item.source;
+    });
 
     const request = createSection("Connection", "Request details", "");
     request.append(
@@ -684,7 +686,12 @@ function renderOverview(data) {
         ])
     );
 
-    root.replaceChildren(fingerprints, request, createServerRoutesSection());
+    const sections = [];
+    if (fingerprintItems.length > 0) {
+        sections.push(createFingerprintSection("Client identity", fingerprintItems));
+    }
+    sections.push(request, createServerRoutesSection());
+    root.replaceChildren(...sections);
 }
 
 function createServerRoutesSection() {
