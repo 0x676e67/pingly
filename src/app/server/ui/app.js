@@ -1,6 +1,5 @@
 "use strict";
 
-
 const VIEW_META = {
     overview: ["Current request", "Connection analysis"],
     tls: ["Client hello", "TLS analysis"],
@@ -16,41 +15,6 @@ const SERVER_ROUTES = /* PINGLY_ROUTES */ [];
 const DEFAULT_JSON_ROUTE = "/api/all";
 const LATENCY_PATH = "/api/latency";
 const UNAVAILABLE_LABEL = "Unavailable";
-const PRIMER_DEFAULT_BUTTON_STYLE = Object.freeze({
-    "--tblr-btn-active-bg": "var(--button-default-bgColor-active)",
-    "--tblr-btn-active-border-color": "var(--button-default-borderColor-active)",
-    "--tblr-btn-active-color": "var(--button-default-fgColor-rest)",
-    "--tblr-btn-bg": "var(--button-default-bgColor-rest)",
-    "--tblr-btn-border-color": "var(--button-default-borderColor-rest)",
-    "--tblr-btn-box-shadow": "var(--button-default-shadow-resting)",
-    "--tblr-btn-color": "var(--button-default-fgColor-rest)",
-    "--tblr-btn-disabled-bg": "var(--button-default-bgColor-disabled)",
-    "--tblr-btn-disabled-border-color": "var(--button-default-borderColor-disabled)",
-    "--tblr-btn-disabled-color": "var(--button-default-fgColor-disabled)",
-    "--tblr-btn-disabled-opacity": "1",
-    "--tblr-btn-focus-box-shadow": "0 0 0 0.2rem var(--borderColor-accent-muted)",
-    "--tblr-btn-hover-bg": "var(--button-default-bgColor-hover)",
-    "--tblr-btn-hover-border-color": "var(--button-default-borderColor-hover)",
-    "--tblr-btn-hover-color": "var(--button-default-fgColor-rest)",
-});
-const PRIMER_PRIMARY_BUTTON_STYLE = Object.freeze({
-    "--tblr-btn-active-bg": "var(--button-primary-bgColor-active)",
-    "--tblr-btn-active-border-color": "var(--button-primary-borderColor-active)",
-    "--tblr-btn-active-color": "var(--button-primary-fgColor-rest)",
-    "--tblr-btn-bg": "var(--button-primary-bgColor-rest)",
-    "--tblr-btn-border-color": "var(--button-primary-borderColor-rest)",
-    "--tblr-btn-box-shadow": "var(--button-default-shadow-resting)",
-    "--tblr-btn-color": "var(--button-primary-fgColor-rest)",
-    "--tblr-btn-disabled-bg": "var(--button-primary-bgColor-disabled)",
-    "--tblr-btn-disabled-border-color": "var(--button-primary-borderColor-disabled)",
-    "--tblr-btn-disabled-color": "var(--button-primary-fgColor-disabled)",
-    "--tblr-btn-disabled-opacity": "1",
-    "--tblr-btn-focus-box-shadow": "0 0 0 0.2rem var(--borderColor-accent-muted)",
-    "--tblr-btn-hover-bg": "var(--button-primary-bgColor-hover)",
-    "--tblr-btn-hover-border-color": "var(--button-primary-borderColor-hover)",
-    "--tblr-btn-hover-color": "var(--button-primary-fgColor-rest)",
-});
-const PRIMER_BUTTON_PROPERTIES = Object.keys(PRIMER_DEFAULT_BUTTON_STYLE);
 const JSON_ROUTE_FEEDBACK_MS = 300;
 const PRIORITY_PROBE_TIMEOUT_MS = 10_000;
 const PRIORITY_PROBE_SETTLE_MS = 250;
@@ -165,7 +129,6 @@ function init() {
     refs.jsonRoutes = document.getElementById("json-route-options");
     refs.jsonRouteLabel = document.getElementById("json-route-label");
     refs.toast = document.getElementById("toast");
-    refs.header = document.getElementById("app-header");
     refs.main = document.getElementById("main-content");
     refs.sidebar = document.getElementById("analysis-sidebar");
     refs.sidebarToggle = document.getElementById("sidebar-toggle");
@@ -257,21 +220,6 @@ function bindEvents() {
 }
 
 function syncSidebarLayout() {
-    const desktop = desktopLayout.matches;
-    const headerHeight = Math.ceil(refs.header.getBoundingClientRect().height);
-
-    document.documentElement.style.setProperty(
-        "--pingly-header-height",
-        headerHeight + "px"
-    );
-    refs.sidebar.classList.toggle("position-sticky", desktop);
-
-    if (desktop) {
-        refs.sidebar.style.top = headerHeight + "px";
-    } else {
-        refs.sidebar.style.removeProperty("top");
-    }
-
     setMobileSidebar(refs.sidebar.classList.contains("is-open"));
 }
 
@@ -340,11 +288,11 @@ function toggleTheme() {
 }
 
 function applyTheme(theme) {
-    if (typeof window.applyPinglyPrimerTheme === "function") {
-        window.applyPinglyPrimerTheme(theme);
+    if (typeof window.applyPinglyTheme === "function") {
+        window.applyPinglyTheme(theme);
     } else {
         document.documentElement.dataset.theme = theme;
-        document.documentElement.dataset.bsTheme = theme;
+        document.documentElement.style.colorScheme = theme;
     }
 
     refs.themeButton.setAttribute(
@@ -366,30 +314,10 @@ function applyTheme(theme) {
     paintIcons();
 }
 
-function stylePrimerButtons() {
-    document.querySelectorAll(".btn").forEach(stylePrimerButton);
-}
-
-function stylePrimerButton(button) {
-    const style = button.classList.contains("btn-primary")
-        || button.classList.contains("btn-success")
-        ? PRIMER_PRIMARY_BUTTON_STYLE
-        : PRIMER_DEFAULT_BUTTON_STYLE;
-
-    PRIMER_BUTTON_PROPERTIES.forEach(function (property) {
-        button.style.setProperty(property, style[property]);
-    });
-}
-
 function paintIcons() {
-    stylePrimerButtons();
     if (!window.lucide || typeof window.lucide.createIcons !== "function") {
         return;
     }
-
-    document.querySelectorAll("[data-lucide]").forEach(function (icon) {
-        icon.classList.add("icon");
-    });
 
     try {
         window.lucide.createIcons();
@@ -399,24 +327,8 @@ function paintIcons() {
 }
 
 function setStatus(label, mode) {
-    const color = mode === "live"
-        ? "green"
-        : mode === "error"
-            ? "red"
-            : "secondary";
-
     refs.statusLabel.textContent = label;
-    refs.status.classList.remove(
-        "bg-green-lt",
-        "bg-red-lt",
-        "bg-secondary-lt",
-        "text-green",
-        "text-red",
-        "text-secondary"
-    );
-    refs.statusDot.classList.remove("bg-green", "bg-red", "bg-secondary");
-    refs.status.classList.add("bg-" + color + "-lt", "text-" + color);
-    refs.statusDot.classList.add("bg-" + color);
+    refs.status.dataset.state = mode || "loading";
     refs.statusDot.classList.toggle("status-dot-animated", mode !== "error");
 }
 
@@ -735,22 +647,22 @@ function renderOverview(data) {
     const http2 = isObject(data.http2) ? data.http2 : {};
     const http3 = isObject(data.http3) ? data.http3 : {};
 
-    const fingerprints = createFingerprintSection("Client identity", [
-        fingerprintItem("JA4", "blue", tls.ja4, tls.ja4_r),
-        fingerprintItem("JA3", "green", tls.ja3_hash, tls.ja3),
+    const fingerprintItems = [
+        fingerprintItem("JA4", tls.ja4, tls.ja4_r),
+        fingerprintItem("JA3", tls.ja3_hash, tls.ja3),
         fingerprintItem(
             "Akamai HTTP/2",
-            "orange",
             http2.akamai_fingerprint_hash,
             http2.akamai_fingerprint
         ),
         fingerprintItem(
             "HTTP/3",
-            "purple",
             http3.h3_text_hash,
             http3.h3_text
         ),
-    ]);
+    ].filter(function (item) {
+        return item.primary || item.source;
+    });
 
     const request = createSection("Connection", "Request details", "");
     request.append(
@@ -774,7 +686,12 @@ function renderOverview(data) {
         ])
     );
 
-    root.replaceChildren(fingerprints, request, createServerRoutesSection());
+    const sections = [];
+    if (fingerprintItems.length > 0) {
+        sections.push(createFingerprintSection("Client identity", fingerprintItems));
+    }
+    sections.push(request, createServerRoutesSection());
+    root.replaceChildren(...sections);
 }
 
 function createServerRoutesSection() {
@@ -796,7 +713,7 @@ function createServerRoutesSection() {
 
         return {
             cells: [
-                create("code", "badge bg-blue-lt text-blue font-monospace route-method", route.method),
+                create("code", "badge font-monospace route-method", route.method),
                 path,
                 route.purpose,
                 route.availability,
@@ -809,10 +726,9 @@ function createServerRoutesSection() {
     return section;
 }
 
-function fingerprintItem(label, tone, primary, source) {
+function fingerprintItem(label, primary, source) {
     return {
         label: label,
-        tone: tone,
         primary: primary,
         source: source,
     };
@@ -844,16 +760,13 @@ function createFingerprintSection(title, items) {
 function createFingerprintCard(item) {
     const primary = item.primary;
     const source = item.source;
-    const tone = ["blue", "green", "orange", "purple"].includes(item.tone)
-        ? item.tone
-        : "secondary";
-    const card = create("article", "card h-100 fingerprint-card fingerprint-card-" + tone);
+    const card = create("article", "card fingerprint-card");
     const body = create("div", "card-body p-3 fingerprint-card-body");
     const header = create("div", "d-flex align-items-center gap-2 mb-2");
     header.append(
         create(
             "h3",
-            "badge bg-" + tone + "-lt text-" + tone + " mb-0 fingerprint-label",
+            "badge mb-0 fingerprint-label",
             item.label
         )
     );
@@ -868,10 +781,7 @@ function createFingerprintCard(item) {
         card.classList.add("opacity-50");
     }
 
-    const value = create(
-        "div",
-        "border-start border-3 border-" + tone + " ps-3 py-2 fingerprint-value-box"
-    );
+    const value = create("div", "fingerprint-value-box");
     value.append(createFingerprintValue(item.label, valueOr(primary, "Not available")));
     body.append(header, value);
 
@@ -959,8 +869,8 @@ function renderTls(tls) {
     );
 
     const fingerprints = createFingerprintSection("TLS signatures", [
-        fingerprintItem("JA4", "blue", tls.ja4, tls.ja4_r),
-        fingerprintItem("JA3", "green", tls.ja3_hash, tls.ja3),
+        fingerprintItem("JA4", tls.ja4, tls.ja4_r),
+        fingerprintItem("JA3", tls.ja3_hash, tls.ja3),
     ]);
 
     const suites = Array.isArray(tls.cipher_suites) ? tls.cipher_suites : [];
@@ -1238,7 +1148,6 @@ function renderHttp2(http2) {
     const fingerprint = createFingerprintSection("HTTP/2 fingerprint", [
         fingerprintItem(
             "Akamai HTTP/2",
-            "orange",
             http2.akamai_fingerprint_hash,
             http2.akamai_fingerprint
         ),
@@ -1277,7 +1186,6 @@ function renderHttp3(http3, tls) {
     const fingerprint = createFingerprintSection("HTTP/3 fingerprint", [
         fingerprintItem(
             "HTTP/3",
-            "purple",
             http3.h3_text_hash,
             http3.h3_text
         ),
@@ -1906,8 +1814,8 @@ function renderTcp(tcp) {
         const satori = isObject(fingerprint.satori) ? fingerprint.satori : {};
         content.push(
             createFingerprintSection("TCP client", [
-                fingerprintItem("JA4T", "blue", ja4t.fingerprint, null),
-                fingerprintItem("Satori", "green", satori.fingerprint, null),
+                fingerprintItem("JA4T", ja4t.fingerprint, null),
+                fingerprintItem("Satori", satori.fingerprint, null),
             ])
         );
 
@@ -2660,12 +2568,10 @@ function markCopied(button) {
     const label = button.getAttribute("aria-label");
     button.classList.remove("btn-outline-secondary");
     button.classList.add("btn-success");
-    stylePrimerButton(button);
     button.setAttribute("aria-label", "Copied");
     window.setTimeout(function () {
         button.classList.remove("btn-success");
         button.classList.add("btn-outline-secondary");
-        stylePrimerButton(button);
         button.setAttribute("aria-label", label);
     }, 1200);
 }
