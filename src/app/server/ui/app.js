@@ -6,7 +6,7 @@ const VIEW_META = {
     http: ["Header order", "HTTP request"],
     h2: ["Frame sequence", "HTTP/2 analysis"],
     h3: ["Transport parameters", "HTTP/3 analysis"],
-    websocket: ["Live connection", "WebSocket debugger"],
+    ws: ["Live connection", "WebSocket debugger"],
     tcp: ["Packet capture", "TCP analysis"],
     proxy: ["Cross-layer latency", "Latency analysis"],
     json: ["Serialized response", "Raw JSON"],
