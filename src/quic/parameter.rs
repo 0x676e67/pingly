@@ -26,93 +26,100 @@ pub struct QuicTransportParameter {
     pub value: QuicTransportParameterValue,
 }
 
-/// Semantic name of a QUIC transport parameter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum QuicTransportParameterName {
-    /// `original_destination_connection_id` (`0x00`).
-    OriginalDestinationConnectionId,
+registry_enum! {
+    /// Semantic name of a QUIC transport parameter.
+    #[serde(rename_all = "snake_case")]
+    #[non_exhaustive]
+    pub enum QuicTransportParameterName: u64 {
+        /// `original_destination_connection_id` (`0x00`).
+        OriginalDestinationConnectionId => 0x00,
 
-    /// `max_idle_timeout` (`0x01`).
-    MaxIdleTimeout,
+        /// `max_idle_timeout` (`0x01`).
+        MaxIdleTimeout => 0x01,
 
-    /// `stateless_reset_token` (`0x02`).
-    StatelessResetToken,
+        /// `stateless_reset_token` (`0x02`).
+        StatelessResetToken => 0x02,
 
-    /// `max_udp_payload_size` (`0x03`).
-    MaxUdpPayloadSize,
+        /// `max_udp_payload_size` (`0x03`).
+        MaxUdpPayloadSize => 0x03,
 
-    /// `initial_max_data` (`0x04`).
-    InitialMaxData,
+        /// `initial_max_data` (`0x04`).
+        InitialMaxData => 0x04,
 
-    /// `initial_max_stream_data_bidi_local` (`0x05`).
-    InitialMaxStreamDataBidiLocal,
+        /// `initial_max_stream_data_bidi_local` (`0x05`).
+        InitialMaxStreamDataBidiLocal => 0x05,
 
-    /// `initial_max_stream_data_bidi_remote` (`0x06`).
-    InitialMaxStreamDataBidiRemote,
+        /// `initial_max_stream_data_bidi_remote` (`0x06`).
+        InitialMaxStreamDataBidiRemote => 0x06,
 
-    /// `initial_max_stream_data_uni` (`0x07`).
-    InitialMaxStreamDataUni,
+        /// `initial_max_stream_data_uni` (`0x07`).
+        InitialMaxStreamDataUni => 0x07,
 
-    /// `initial_max_streams_bidi` (`0x08`).
-    InitialMaxStreamsBidi,
+        /// `initial_max_streams_bidi` (`0x08`).
+        InitialMaxStreamsBidi => 0x08,
 
-    /// `initial_max_streams_uni` (`0x09`).
-    InitialMaxStreamsUni,
+        /// `initial_max_streams_uni` (`0x09`).
+        InitialMaxStreamsUni => 0x09,
 
-    /// `ack_delay_exponent` (`0x0a`).
-    AckDelayExponent,
+        /// `ack_delay_exponent` (`0x0a`).
+        AckDelayExponent => 0x0a,
 
-    /// `max_ack_delay` (`0x0b`).
-    MaxAckDelay,
+        /// `max_ack_delay` (`0x0b`).
+        MaxAckDelay => 0x0b,
 
-    /// `disable_active_migration` (`0x0c`).
-    DisableActiveMigration,
+        /// `disable_active_migration` (`0x0c`).
+        DisableActiveMigration => 0x0c,
 
-    /// `preferred_address` (`0x0d`).
-    PreferredAddress,
+        /// `preferred_address` (`0x0d`).
+        PreferredAddress => 0x0d,
 
-    /// `active_connection_id_limit` (`0x0e`).
-    ActiveConnectionIdLimit,
+        /// `active_connection_id_limit` (`0x0e`).
+        ActiveConnectionIdLimit => 0x0e,
 
-    /// `initial_source_connection_id` (`0x0f`).
-    InitialSourceConnectionId,
+        /// `initial_source_connection_id` (`0x0f`).
+        InitialSourceConnectionId => 0x0f,
 
-    /// `retry_source_connection_id` (`0x10`).
-    RetrySourceConnectionId,
+        /// `retry_source_connection_id` (`0x10`).
+        RetrySourceConnectionId => 0x10,
 
-    /// `version_information` (`0x11`).
-    ///
-    /// See [RFC 9368, Section 3](https://www.rfc-editor.org/rfc/rfc9368#section-3).
-    VersionInformation,
+        /// `version_information` (`0x11`).
+        ///
+        /// See [RFC 9368, Section 3](https://www.rfc-editor.org/rfc/rfc9368#section-3).
+        VersionInformation => 0x11,
 
-    /// `max_datagram_frame_size` (`0x20`).
-    ///
-    /// See [RFC 9221, Section 3](https://www.rfc-editor.org/rfc/rfc9221#section-3).
-    MaxDatagramFrameSize,
+        /// `max_datagram_frame_size` (`0x20`).
+        ///
+        /// See [RFC 9221, Section 3](https://www.rfc-editor.org/rfc/rfc9221#section-3).
+        MaxDatagramFrameSize => 0x20,
 
-    /// The reserved QUIC fixed-bit grease parameter (`0x2ab2`).
-    ///
-    /// See [RFC 9287](https://www.rfc-editor.org/rfc/rfc9287).
-    GreaseQuicBit,
+        /// The reserved QUIC fixed-bit grease parameter (`0x2ab2`).
+        ///
+        /// See [RFC 9287](https://www.rfc-editor.org/rfc/rfc9287).
+        GreaseQuicBit => 0x2ab2,
 
-    /// Google's provisional `initial_rtt` parameter (`0x3127`).
-    InitialRtt,
+        /// Google's provisional `initial_rtt` parameter (`0x3127`).
+        InitialRtt => 0x3127,
 
-    /// Google's provisional connection-options parameter (`0x3128`).
-    GoogleConnectionOptions,
+        /// Google's provisional connection-options parameter (`0x3128`).
+        GoogleConnectionOptions => 0x3128,
 
-    /// Google's deprecated provisional user-agent parameter (`0x3129`).
-    UserAgent,
+        /// Google's deprecated provisional user-agent parameter (`0x3129`).
+        UserAgent => 0x3129,
+    }
 
-    /// A reserved value of the form `31 * N + 27`.
-    ///
-    /// See [RFC 9000, Section 18.1](https://www.rfc-editor.org/rfc/rfc9000#section-18.1).
-    Grease,
+    fallback(id) {
+        /// A reserved value of the form `31 * N + 27`.
+        ///
+        /// See [RFC 9000, Section 18.1](https://www.rfc-editor.org/rfc/rfc9000#section-18.1).
+        Grease,
 
-    /// An unassigned or otherwise unsupported parameter retained as bytes.
-    Other,
+        /// An unassigned or otherwise unsupported parameter retained as bytes.
+        Other,
+    } => if is_grease_id(id) {
+        Self::Grease
+    } else {
+        Self::Other
+    };
 }
 
 /// Value representation used by a QUIC transport parameter.
@@ -154,21 +161,28 @@ pub struct QuicVersion {
     pub name: QuicVersionName,
 }
 
-/// Semantic name of a QUIC version.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub enum QuicVersionName {
-    /// QUIC version 1 (`0x00000001`).
-    Version1,
+registry_enum! {
+    /// Semantic name of a QUIC version.
+    #[non_exhaustive]
+    pub enum QuicVersionName: u32 {
+        /// QUIC version 1 (`0x00000001`).
+        Version1 => 0x0000_0001,
 
-    /// QUIC version 2 (`0x6b3343cf`).
-    Version2,
+        /// QUIC version 2 (`0x6b3343cf`).
+        Version2 => 0x6b33_43cf,
+    }
 
-    /// A reserved version whose four low nibbles are all `0x0a`.
-    Grease,
+    fallback(id) {
+        /// A reserved version whose four low nibbles are all `0x0a`.
+        Grease,
 
-    /// An unsupported or unassigned QUIC version.
-    Other,
+        /// An unsupported or unassigned QUIC version.
+        Other,
+    } => if is_grease_version(id) {
+        Self::Grease
+    } else {
+        Self::Other
+    };
 }
 
 /// Errors returned while decoding a complete QUIC transport-parameter block.
@@ -318,33 +332,7 @@ fn deserialize_hex_bytes(value: &str) -> Result<HexBytes, &'static str> {
 impl QuicTransportParameterName {
     /// Returns the semantic name assigned to `id`.
     pub const fn from_id(id: u64) -> Self {
-        match id {
-            0x00 => Self::OriginalDestinationConnectionId,
-            0x01 => Self::MaxIdleTimeout,
-            0x02 => Self::StatelessResetToken,
-            0x03 => Self::MaxUdpPayloadSize,
-            0x04 => Self::InitialMaxData,
-            0x05 => Self::InitialMaxStreamDataBidiLocal,
-            0x06 => Self::InitialMaxStreamDataBidiRemote,
-            0x07 => Self::InitialMaxStreamDataUni,
-            0x08 => Self::InitialMaxStreamsBidi,
-            0x09 => Self::InitialMaxStreamsUni,
-            0x0a => Self::AckDelayExponent,
-            0x0b => Self::MaxAckDelay,
-            0x0c => Self::DisableActiveMigration,
-            0x0d => Self::PreferredAddress,
-            0x0e => Self::ActiveConnectionIdLimit,
-            0x0f => Self::InitialSourceConnectionId,
-            0x10 => Self::RetrySourceConnectionId,
-            0x11 => Self::VersionInformation,
-            0x20 => Self::MaxDatagramFrameSize,
-            0x2ab2 => Self::GreaseQuicBit,
-            0x3127 => Self::InitialRtt,
-            0x3128 => Self::GoogleConnectionOptions,
-            0x3129 => Self::UserAgent,
-            value if is_grease_id(value) => Self::Grease,
-            _ => Self::Other,
-        }
+        Self::from_wire_id(id)
     }
 }
 
@@ -379,7 +367,7 @@ impl QuicVersion {
     pub const fn from_id(id: u32) -> Self {
         Self {
             id,
-            name: QuicVersionName::from_id(id),
+            name: QuicVersionName::from_wire_id(id),
         }
     }
 
@@ -407,12 +395,7 @@ impl TryFrom<QuicVersionRepr> for QuicVersion {
 impl QuicVersionName {
     /// Returns the semantic name assigned to a 32-bit QUIC version.
     pub const fn from_id(id: u32) -> Self {
-        match id {
-            0x0000_0001 => Self::Version1,
-            0x6b33_43cf => Self::Version2,
-            value if is_grease_version(value) => Self::Grease,
-            _ => Self::Other,
-        }
+        Self::from_wire_id(id)
     }
 }
 
@@ -531,9 +514,81 @@ mod tests {
 
     use super::{
         parse_transport_parameters, QuicTransportParameter, QuicTransportParameterError,
-        QuicTransportParameterName, QuicVersionName,
+        QuicTransportParameterName, QuicVersion, QuicVersionName,
     };
     use crate::quic::varint;
+
+    #[test]
+    fn transport_parameter_names_cover_registered_grease_and_other_ids() {
+        let registered = [
+            (
+                0x00,
+                QuicTransportParameterName::OriginalDestinationConnectionId,
+            ),
+            (0x01, QuicTransportParameterName::MaxIdleTimeout),
+            (0x02, QuicTransportParameterName::StatelessResetToken),
+            (0x03, QuicTransportParameterName::MaxUdpPayloadSize),
+            (0x04, QuicTransportParameterName::InitialMaxData),
+            (
+                0x05,
+                QuicTransportParameterName::InitialMaxStreamDataBidiLocal,
+            ),
+            (
+                0x06,
+                QuicTransportParameterName::InitialMaxStreamDataBidiRemote,
+            ),
+            (0x07, QuicTransportParameterName::InitialMaxStreamDataUni),
+            (0x08, QuicTransportParameterName::InitialMaxStreamsBidi),
+            (0x09, QuicTransportParameterName::InitialMaxStreamsUni),
+            (0x0a, QuicTransportParameterName::AckDelayExponent),
+            (0x0b, QuicTransportParameterName::MaxAckDelay),
+            (0x0c, QuicTransportParameterName::DisableActiveMigration),
+            (0x0d, QuicTransportParameterName::PreferredAddress),
+            (0x0e, QuicTransportParameterName::ActiveConnectionIdLimit),
+            (0x0f, QuicTransportParameterName::InitialSourceConnectionId),
+            (0x10, QuicTransportParameterName::RetrySourceConnectionId),
+            (0x11, QuicTransportParameterName::VersionInformation),
+            (0x20, QuicTransportParameterName::MaxDatagramFrameSize),
+            (0x2ab2, QuicTransportParameterName::GreaseQuicBit),
+            (0x3127, QuicTransportParameterName::InitialRtt),
+            (0x3128, QuicTransportParameterName::GoogleConnectionOptions),
+            (0x3129, QuicTransportParameterName::UserAgent),
+        ];
+
+        for (id, expected) in registered {
+            assert_eq!(
+                QuicTransportParameterName::from(id),
+                expected,
+                "transport parameter {id:#x}"
+            );
+        }
+
+        assert_eq!(
+            QuicTransportParameterName::from(58),
+            QuicTransportParameterName::Grease
+        );
+        assert_eq!(
+            QuicTransportParameterName::from(0x12),
+            QuicTransportParameterName::Other
+        );
+    }
+
+    #[test]
+    fn version_names_cover_registered_grease_and_other_ids() {
+        const VERSION_1: QuicVersion = QuicVersion::from_id(0x0000_0001);
+
+        assert_eq!(VERSION_1.name, QuicVersionName::Version1);
+        assert_eq!(
+            QuicVersionName::from(0x0000_0001),
+            QuicVersionName::Version1
+        );
+        assert_eq!(
+            QuicVersionName::from(0x6b33_43cf),
+            QuicVersionName::Version2
+        );
+        assert_eq!(QuicVersionName::from(0x1a2a_3a4a), QuicVersionName::Grease);
+        assert_eq!(QuicVersionName::from(0), QuicVersionName::Other);
+    }
 
     #[test]
     fn transport_parameters_preserve_order_names_and_value_types() {

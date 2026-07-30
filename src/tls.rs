@@ -5,8 +5,6 @@
 //!
 //! See [RFC 9846, Section 4.2.2](https://www.rfc-editor.org/rfc/rfc9846.html#section-4.2.2).
 
-#[macro_use]
-mod macros;
 mod enums;
 mod group;
 mod hello;

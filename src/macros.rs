@@ -1,4 +1,60 @@
-//! Macros shared by TLS identifier enums and GREASE-aware wrappers.
+//! Internal macros shared by protocol identifier types.
+
+macro_rules! registry_enum {
+    (
+        $(#[$enum_meta:meta])*
+        $visibility:vis enum $enum_name:ident: $wire_type:ty {
+            $(
+                $(#[$variant_meta:meta])*
+                $variant:ident => $id:literal $(| $alias:literal)*
+            ),* $(,)?
+        }
+
+        fallback($wire_id:ident) {
+            $(
+                $(#[$fallback_meta:meta])*
+                $fallback_variant:ident
+            ),+ $(,)?
+        } => $fallback:expr $(;)?
+    ) => {
+        #[derive(
+            Debug,
+            Clone,
+            Copy,
+            PartialEq,
+            Eq,
+            ::serde::Serialize,
+            ::serde::Deserialize
+        )]
+        $(#[$enum_meta])*
+        $visibility enum $enum_name {
+            $(
+                $(#[$variant_meta])*
+                $variant,
+            )*
+
+            $(
+                $(#[$fallback_meta])*
+                $fallback_variant,
+            )+
+        }
+
+        impl $enum_name {
+            const fn from_wire_id($wire_id: $wire_type) -> Self {
+                match $wire_id {
+                    $($id $(| $alias)* => Self::$variant,)*
+                    _ => $fallback,
+                }
+            }
+        }
+
+        impl From<$wire_type> for $enum_name {
+            fn from($wire_id: $wire_type) -> Self {
+                Self::from_wire_id($wire_id)
+            }
+        }
+    };
+}
 
 macro_rules! identifier_is_grease {
     ($value:expr, STANDARD_GREASE) => {
