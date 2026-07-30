@@ -1287,7 +1287,10 @@ mod tests {
         time::Duration,
     };
 
-    use axum::http::{header::USER_AGENT, Request, StatusCode};
+    use axum::{
+        body::Body,
+        http::{header, Request, StatusCode},
+    };
     use bytes::Buf;
     use quinn_proto::crypto::rustls::QuicClientConfig;
     use rcgen::{CertificateParams, KeyPair, SanType};
@@ -1296,6 +1299,7 @@ mod tests {
         pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
         ClientConfig, RootCertStore, ServerConfig,
     };
+    use tower::ServiceExt;
 
     use super::{
         routes,
@@ -1308,6 +1312,21 @@ mod tests {
         timeout(Duration::from_secs(10), run_http3_server_test())
             .await
             .expect("HTTP/3 integration test timed out");
+    }
+
+    #[tokio::test]
+    async fn router_rejects_oversized_request_bodies() {
+        let response = test_router()
+            .oneshot(
+                Request::post("/api/all")
+                    .header(header::CONTENT_LENGTH, routes::MAX_REQUEST_BODY_SIZE + 1)
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 
     async fn run_http3_server_test() {
@@ -1347,7 +1366,7 @@ mod tests {
             "https://localhost:{}/api/http3",
             server_addr.port()
         ))
-        .header(USER_AGENT, "pingly-http3-integration")
+        .header(header::USER_AGENT, "pingly-http3-integration")
         .body(())
         .expect("HTTP/3 request should build");
         let mut stream = send_request

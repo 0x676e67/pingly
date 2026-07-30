@@ -21,6 +21,7 @@ use axum_extra::response::ErasedJson;
 use futures_util::StreamExt;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use tower_http::limit::RequestBodyLimitLayer;
 
 use super::tracker::info::{ConnectionTrack, Track, TrackInfo};
 #[cfg(target_os = "linux")]
@@ -36,6 +37,11 @@ const HTTP3_PATH: &str = "/api/http3";
 const WEBSOCKET_PATH: &str = "/api/websocket";
 const TCP_PATH: &str = "/api/tcp";
 const LATENCY_PATH: &str = "/api/latency";
+
+// Analysis endpoints do not inspect request bodies. Reject oversized payloads with the status
+// defined by RFC 9110, Section 15.5.14:
+// <https://www.rfc-editor.org/rfc/rfc9110.html#name-413-content-too-large>
+pub(super) const MAX_REQUEST_BODY_SIZE: usize = 256 * 1024;
 
 #[cfg(target_os = "linux")]
 const LATENCY_PROBE_SAMPLES: u8 = 8;
@@ -167,7 +173,7 @@ pub(crate) fn router(
         router
     };
 
-    router
+    router.layer(RequestBodyLimitLayer::new(MAX_REQUEST_BODY_SIZE))
 }
 
 fn build_ui_document() -> Box<str> {

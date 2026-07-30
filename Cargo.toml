@@ -111,6 +111,7 @@ tower-http = { version = "0.7.0", default-features = false, optional = true, fea
     "cors",
     "compression-br",
     "compression-gzip",
+    "limit",
     "set-header",
 ] }
 
