@@ -1599,6 +1599,7 @@ struct StatusRequestRepr {
 ///
 /// See [RFC 9849, Section 5](https://www.rfc-editor.org/rfc/rfc9849.html#section-5).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[serde(rename_all = "snake_case")]
 pub enum ECHClientHello {
     /// The public ClientHelloOuter payload carrying the encrypted ClientHelloInner.
     Outer(ECHClientHelloOuter),
