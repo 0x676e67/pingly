@@ -301,7 +301,7 @@ impl Http3Parser {
                 return Ok(0);
             };
             self.buffer.advance(consumed);
-            let stream_type = StreamType::from_id(type_id);
+            let stream_type = StreamType::from(type_id);
             self.stream_type = Some(stream_type);
             if stream_type.name == StreamTypeName::Push {
                 self.buffer.clear();
@@ -344,7 +344,7 @@ impl Http3Parser {
                 }
             };
             self.buffer.advance(frame_len);
-            self.record_frame(type_id);
+            self.record_frame(frame.frame_type());
             self.frame_count = self.frame_count.saturating_add(1);
             output.push(frame);
         }
@@ -426,22 +426,25 @@ impl Http3Parser {
     }
 
     fn parse_frame(&self, type_id: u64, payload: &[u8]) -> Result<Frame, Http3ParseError> {
-        let frame_type = FrameType::from_id(type_id);
+        let frame_type = FrameType::from(type_id);
         if frame_type.is_http2_reserved() {
             return Err(Http3ParseError::UnexpectedFrame { type_id });
         }
 
         match self.kind {
             StreamKind::Unidirectional => {
-                if self.frame_count == 0 && type_id != 0x04 {
+                if self.frame_count == 0 && frame_type != FrameType::Settings {
                     return Err(Http3ParseError::ExpectedSettings);
                 }
-                if type_id == 0x04 && self.frame_count > 0 {
+                if frame_type == FrameType::Settings && self.frame_count > 0 {
                     return Err(Http3ParseError::DuplicateSettingsFrame);
                 }
                 // RFC 9114, Section 7.2 forbids DATA, HEADERS, and PUSH_PROMISE on a control
                 // stream: <https://www.rfc-editor.org/rfc/rfc9114#section-7.2>
-                if matches!(type_id, 0x00 | 0x01 | 0x05) {
+                if matches!(
+                    frame_type,
+                    FrameType::Data | FrameType::Headers | FrameType::PushPromise
+                ) {
                     return Err(Http3ParseError::UnexpectedFrame { type_id });
                 }
             }
@@ -453,25 +456,34 @@ impl Http3Parser {
                 // <https://www.rfc-editor.org/rfc/rfc9412#section-2>
                 // <https://www.rfc-editor.org/rfc/rfc9218#section-7.1>
                 if matches!(
-                    type_id,
-                    0x03 | 0x04 | 0x05 | 0x07 | 0x0c | 0x0d | 0x0f_0700 | 0x0f_0701
+                    frame_type,
+                    FrameType::CancelPush
+                        | FrameType::Settings
+                        | FrameType::PushPromise
+                        | FrameType::GoAway
+                        | FrameType::Origin
+                        | FrameType::MaxPushId
+                        | FrameType::PriorityUpdateRequest
+                        | FrameType::PriorityUpdatePush
                 ) {
                     return Err(Http3ParseError::UnexpectedFrame { type_id });
                 }
-                if self.request_state == RequestState::Initial && type_id == 0x00 {
+                if self.request_state == RequestState::Initial && frame_type == FrameType::Data {
                     return Err(Http3ParseError::ExpectedHeaders);
                 }
-                if self.request_state == RequestState::Trailers && matches!(type_id, 0x00 | 0x01) {
+                if self.request_state == RequestState::Trailers
+                    && matches!(frame_type, FrameType::Data | FrameType::Headers)
+                {
                     return Err(Http3ParseError::UnexpectedFrame { type_id });
                 }
             }
         }
 
-        match type_id {
-            0x01 => parse_headers(payload, self.max_field_section_size)
+        match frame_type {
+            FrameType::Headers => parse_headers(payload, self.max_field_section_size)
                 .map(Frame::Headers)
                 .map_err(Into::into),
-            0x04 => parse_settings(payload)
+            FrameType::Settings => parse_settings(payload)
                 .map(Frame::Settings)
                 .map_err(Into::into),
             _ => Ok(Frame::Opaque(OpaqueFrame {
@@ -483,8 +495,8 @@ impl Http3Parser {
         }
     }
 
-    fn record_frame(&mut self, type_id: u64) {
-        if self.kind != StreamKind::Request || type_id != 0x01 {
+    fn record_frame(&mut self, frame_type: FrameType) {
+        if self.kind != StreamKind::Request || frame_type != FrameType::Headers {
             return;
         }
 

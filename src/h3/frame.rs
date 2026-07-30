@@ -6,6 +6,54 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{quic::varint, tls::HexBytes};
 
+macro_rules! h3_registry_enum {
+    (
+        $(#[$enum_meta:meta])*
+        $visibility:vis enum $enum_name:ident {
+            $(
+                $(#[$variant_meta:meta])*
+                $variant:ident => $id:literal $(| $alias:literal)*
+            ),* $(,)?
+        }
+    ) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+        $(#[$enum_meta])*
+        #[non_exhaustive]
+        $visibility enum $enum_name {
+            $(
+                $(#[$variant_meta])*
+                $variant,
+            )*
+
+            /// An identifier reserved by HTTP/3's `31 * N + 33` registry pattern.
+            ///
+            /// See [RFC 9114, Section 11.2](https://www.rfc-editor.org/rfc/rfc9114#section-11.2).
+            Grease,
+
+            /// An unregistered or unsupported identifier.
+            Other,
+        }
+
+        impl $enum_name {
+            const fn from_wire_id(id: u64) -> Self {
+                match id {
+                    // Named entries take priority because provisional 0x4d44 also matches the
+                    // reserved formula: <https://www.iana.org/assignments/http3-parameters/>.
+                    $($id $(| $alias)* => Self::$variant,)*
+                    id if is_grease_id(id) => Self::Grease,
+                    _ => Self::Other,
+                }
+            }
+        }
+
+        impl From<u64> for $enum_name {
+            fn from(id: u64) -> Self {
+                Self::from_wire_id(id)
+            }
+        }
+    };
+}
+
 /// A client-initiated HTTP/3 unidirectional stream type.
 ///
 /// The stream type is the first QUIC varint on every unidirectional stream. See
@@ -21,37 +69,31 @@ pub struct StreamType {
     pub name: StreamTypeName,
 }
 
-/// Semantic name of an HTTP/3 unidirectional stream type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-#[non_exhaustive]
-pub enum StreamTypeName {
-    /// The HTTP/3 control stream (`0x00`).
-    Control,
+h3_registry_enum! {
+    /// Semantic name of an HTTP/3 unidirectional stream type.
+    #[serde(rename_all = "PascalCase")]
+    pub enum StreamTypeName {
+        /// The HTTP/3 control stream (`0x00`).
+        Control => 0x00,
 
-    /// A server push stream (`0x01`).
-    Push,
+        /// A server push stream (`0x01`).
+        Push => 0x01,
 
-    /// The QPACK encoder stream (`0x02`).
-    QpackEncoder,
+        /// The QPACK encoder stream (`0x02`).
+        QpackEncoder => 0x02,
 
-    /// The QPACK decoder stream (`0x03`).
-    QpackDecoder,
+        /// The QPACK decoder stream (`0x03`).
+        QpackDecoder => 0x03,
 
-    /// A WebTransport unidirectional stream (`0x54`).
-    WebTransport,
-
-    /// A reserved stream type of the form `31 * N + 33`.
-    Grease,
-
-    /// An unsupported stream type that HTTP/3 requires recipients to ignore.
-    Other,
+        /// A WebTransport unidirectional stream (`0x54`).
+        WebTransport => 0x54,
+    }
 }
 
 /// One HTTP/3 SETTINGS parameter in its original wire order.
 ///
 /// Both the identifier and value are QUIC variable-length integers. See
-/// [RFC 9114, Section 7.2.8](https://www.rfc-editor.org/rfc/rfc9114#section-7.2.8).
+/// [RFC 9114, Section 7.2.4](https://www.rfc-editor.org/rfc/rfc9114#section-7.2.4).
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "SettingRepr")]
 pub struct Setting {
@@ -83,80 +125,75 @@ pub enum SettingValue {
     Bool(bool),
 }
 
-/// Semantic name of an HTTP/3 SETTINGS identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-#[non_exhaustive]
-pub enum SettingName {
-    /// `SETTINGS_QPACK_MAX_TABLE_CAPACITY` (`0x01`).
-    QpackMaxTableCapacity,
+h3_registry_enum! {
+    /// Semantic name of an HTTP/3 SETTINGS identifier.
+    #[serde(rename_all = "PascalCase")]
+    pub enum SettingName {
+        /// `SETTINGS_QPACK_MAX_TABLE_CAPACITY` (`0x01`).
+        QpackMaxTableCapacity => 0x01,
 
-    /// `SETTINGS_MAX_FIELD_SECTION_SIZE` (`0x06`).
-    MaxFieldSectionSize,
+        /// `SETTINGS_MAX_FIELD_SECTION_SIZE` (`0x06`).
+        MaxFieldSectionSize => 0x06,
 
-    /// `SETTINGS_QPACK_BLOCKED_STREAMS` (`0x07`).
-    QpackBlockedStreams,
+        /// `SETTINGS_QPACK_BLOCKED_STREAMS` (`0x07`).
+        QpackBlockedStreams => 0x07,
 
-    /// `SETTINGS_ENABLE_CONNECT_PROTOCOL` (`0x08`).
-    ///
-    /// See [RFC 9220, Section 3](https://www.rfc-editor.org/rfc/rfc9220#section-3).
-    EnableConnectProtocol,
+        /// `SETTINGS_ENABLE_CONNECT_PROTOCOL` (`0x08`).
+        ///
+        /// See [RFC 9220, Section 3](https://www.rfc-editor.org/rfc/rfc9220#section-3).
+        EnableConnectProtocol => 0x08,
 
-    /// `SETTINGS_H3_DATAGRAM` (`0x33`).
-    ///
-    /// See [RFC 9297, Section 2.1.1](https://www.rfc-editor.org/rfc/rfc9297#section-2.1.1).
-    H3Datagram,
+        /// `SETTINGS_H3_DATAGRAM` (`0x33`).
+        ///
+        /// See [RFC 9297, Section 2.1.1](https://www.rfc-editor.org/rfc/rfc9297#section-2.1.1).
+        H3Datagram => 0x33,
 
-    /// Draft `H3_DATAGRAM` (`0xffd277`) used before RFC 9297 assigned `0x33`.
-    ///
-    /// See [draft-ietf-masque-h3-datagram-08, Section 5.1](https://datatracker.ietf.org/doc/html/draft-ietf-masque-h3-datagram-08#section-5.1).
-    H3DatagramDraft,
+        /// Draft `H3_DATAGRAM` (`0xffd277`) used before RFC 9297 assigned `0x33`.
+        ///
+        /// See [draft-ietf-masque-h3-datagram-08, Section 5.1](https://datatracker.ietf.org/doc/html/draft-ietf-masque-h3-datagram-08#section-5.1).
+        H3DatagramDraft => 0xff_d277,
 
-    /// Provisional `SETTINGS_ENABLE_METADATA` (`0x4d44`).
-    ///
-    /// See the [IANA HTTP/3 Settings registry](https://www.iana.org/assignments/http3-parameters/http3-parameters.xhtml#http3-parameters-2).
-    EnableMetadata,
+        /// Provisional `SETTINGS_ENABLE_METADATA` (`0x4d44`).
+        ///
+        /// See the [IANA HTTP/3 Settings registry](https://www.iana.org/assignments/http3-parameters/http3-parameters.xhtml#http3-parameters-2).
+        EnableMetadata => 0x4d44,
 
-    /// Early `SETTINGS_ENABLE_WEBTRANSPORT` (`0x2b603742`) from IETF drafts 00 through 06.
-    ///
-    /// See [draft-ietf-webtrans-http3-06](https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3-06).
-    EnableWebTransportDraft,
+        /// Early `SETTINGS_ENABLE_WEBTRANSPORT` (`0x2b603742`) from IETF drafts 00 through 06.
+        ///
+        /// See [draft-ietf-webtrans-http3-06](https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3-06).
+        EnableWebTransportDraft => 0x2b60_3742,
 
-    /// Draft `SETTINGS_WEBTRANSPORT_MAX_SESSIONS` and `SETTINGS_WT_MAX_SESSIONS`.
-    ///
-    /// Drafts 04-05 used `0x2b603743`, draft 06 used `0x3c48d522`, drafts 07-12
-    /// used `0xc671706a`, and drafts 13-14 used `0x14e9cd29`.
-    /// See [draft-05](https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3-05#section-8.2),
-    /// [draft-06](https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3-06#section-8.2),
-    /// [draft-12](https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3-12#section-9.2), and
-    /// [draft-14](https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3-14#section-9.2).
-    WebTransportMaxSessionsDraft,
+        /// Draft `SETTINGS_WEBTRANSPORT_MAX_SESSIONS` and `SETTINGS_WT_MAX_SESSIONS`.
+        ///
+        /// Drafts 04-05 used `0x2b603743`, draft 06 used `0x3c48d522`, drafts 07-12
+        /// used `0xc671706a`, and drafts 13-14 used `0x14e9cd29`.
+        /// See [draft-05](https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3-05#section-8.2),
+        /// [draft-06](https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3-06#section-8.2),
+        /// [draft-12](https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3-12#section-9.2), and
+        /// [draft-14](https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3-14#section-9.2).
+        WebTransportMaxSessionsDraft =>
+            0x2b60_3743 | 0x3c48_d522 | 0xc671_706a | 0x14e9_cd29,
 
-    /// Draft `SETTINGS_WT_ENABLED` used from draft 15 onward.
-    ///
-    /// See [draft-ietf-webtrans-http3-16, Section 9.2](https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3-16#section-9.2).
-    WebTransportEnabledDraft,
+        /// Draft `SETTINGS_WT_ENABLED` used from draft 15 onward.
+        ///
+        /// See [draft-ietf-webtrans-http3-16, Section 9.2](https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3-16#section-9.2).
+        WebTransportEnabledDraft => 0x2c7c_f000,
 
-    /// Draft initial unidirectional WebTransport stream limit (`0x2b64`) used since draft 12.
-    ///
-    /// See [draft-ietf-webtrans-http3-16, Section 9.2](https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3-16#section-9.2).
-    WebTransportInitialMaxStreamsUniDraft,
+        /// Draft initial unidirectional WebTransport stream limit (`0x2b64`) used since draft 12.
+        ///
+        /// See [draft-ietf-webtrans-http3-16, Section 9.2](https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3-16#section-9.2).
+        WebTransportInitialMaxStreamsUniDraft => 0x2b64,
 
-    /// Draft initial bidirectional WebTransport stream limit (`0x2b65`) used since draft 12.
-    ///
-    /// See [draft-ietf-webtrans-http3-16, Section 9.2](https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3-16#section-9.2).
-    WebTransportInitialMaxStreamsBidiDraft,
+        /// Draft initial bidirectional WebTransport stream limit (`0x2b65`) used since draft 12.
+        ///
+        /// See [draft-ietf-webtrans-http3-16, Section 9.2](https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3-16#section-9.2).
+        WebTransportInitialMaxStreamsBidiDraft => 0x2b65,
 
-    /// Draft initial WebTransport session data limit (`0x2b61`) used since draft 12.
-    ///
-    /// See [draft-ietf-webtrans-http3-16, Section 9.2](https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3-16#section-9.2).
-    WebTransportInitialMaxDataDraft,
-
-    /// A reserved setting identifier of the form `31 * N + 33`.
-    Grease,
-
-    /// An unsupported setting retained for analysis.
-    Other,
+        /// Draft initial WebTransport session data limit (`0x2b61`) used since draft 12.
+        ///
+        /// See [draft-ietf-webtrans-http3-16, Section 9.2](https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3-16#section-9.2).
+        WebTransportInitialMaxDataDraft => 0x2b61,
+    }
 }
 
 /// A decoded HTTP field preserving its QPACK field-section position.
@@ -238,50 +275,44 @@ pub enum Frame {
     Opaque(OpaqueFrame),
 }
 
-/// Semantic HTTP/3 frame types represented by [`Frame`].
-///
-/// Registered values follow the [IANA HTTP/3 Frame Types registry](https://www.iana.org/assignments/http3-parameters/http3-parameters.xhtml#http3-parameters-1).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub enum FrameType {
-    /// DATA (0x00).
-    Data,
+h3_registry_enum! {
+    /// Semantic HTTP/3 frame types represented by [`Frame`].
+    ///
+    /// Registered values follow the [IANA HTTP/3 Frame Types registry](https://www.iana.org/assignments/http3-parameters/http3-parameters.xhtml#http3-parameters-1).
+    pub enum FrameType {
+        /// DATA (`0x00`).
+        Data => 0x00,
 
-    /// HEADERS (`0x01`).
-    Headers,
+        /// HEADERS (`0x01`).
+        Headers => 0x01,
 
-    /// An HTTP/2 frame type reserved by HTTP/3 (0x02, 0x06, 0x08, or 0x09).
-    Http2Reserved,
+        /// An HTTP/2 frame type reserved by HTTP/3 (`0x02`, `0x06`, `0x08`, or `0x09`).
+        Http2Reserved => 0x02 | 0x06 | 0x08 | 0x09,
 
-    /// CANCEL_PUSH (0x03).
-    CancelPush,
+        /// CANCEL_PUSH (`0x03`).
+        CancelPush => 0x03,
 
-    /// SETTINGS (`0x04`).
-    Settings,
+        /// SETTINGS (`0x04`).
+        Settings => 0x04,
 
-    /// PUSH_PROMISE (0x05).
-    PushPromise,
+        /// PUSH_PROMISE (`0x05`).
+        PushPromise => 0x05,
 
-    /// GOAWAY (0x07).
-    GoAway,
+        /// GOAWAY (`0x07`).
+        GoAway => 0x07,
 
-    /// ORIGIN (0x0c).
-    Origin,
+        /// ORIGIN (`0x0c`).
+        Origin => 0x0c,
 
-    /// MAX_PUSH_ID (0x0d).
-    MaxPushId,
+        /// MAX_PUSH_ID (`0x0d`).
+        MaxPushId => 0x0d,
 
-    /// Request-stream PRIORITY_UPDATE (0x0f0700).
-    PriorityUpdateRequest,
+        /// Request-stream PRIORITY_UPDATE (`0x0f0700`).
+        PriorityUpdateRequest => 0x0f_0700,
 
-    /// Push-stream PRIORITY_UPDATE (0x0f0701).
-    PriorityUpdatePush,
-
-    /// A reserved frame type of the form 31 * N + 33.
-    Grease,
-
-    /// An unregistered frame type.
-    Other,
+        /// Push-stream PRIORITY_UPDATE (`0x0f0701`).
+        PriorityUpdatePush => 0x0f_0701,
+    }
 }
 
 /// Protocol errors found in a complete HTTP/3 frame payload.
@@ -416,12 +447,18 @@ impl<'de> Deserialize<'de> for Frame {
     }
 }
 
+impl From<u64> for StreamType {
+    fn from(id: u64) -> Self {
+        Self::from_id(id)
+    }
+}
+
 impl StreamType {
     /// Creates a stream type from its wire identifier.
     pub const fn from_id(id: u64) -> Self {
         Self {
             id,
-            name: StreamTypeName::from_id(id),
+            name: StreamTypeName::from_wire_id(id),
         }
     }
 
@@ -435,7 +472,7 @@ impl TryFrom<StreamTypeRepr> for StreamType {
     type Error = &'static str;
 
     fn try_from(repr: StreamTypeRepr) -> Result<Self, Self::Error> {
-        if repr.name != StreamTypeName::from_id(repr.id) {
+        if repr.name != StreamTypeName::from(repr.id) {
             return Err("HTTP/3 stream type name does not match its identifier");
         }
 
@@ -446,32 +483,7 @@ impl TryFrom<StreamTypeRepr> for StreamType {
     }
 }
 
-impl StreamTypeName {
-    /// Returns the semantic name assigned to a stream type identifier.
-    pub const fn from_id(id: u64) -> Self {
-        match id {
-            0x00 => Self::Control,
-            0x01 => Self::Push,
-            0x02 => Self::QpackEncoder,
-            0x03 => Self::QpackDecoder,
-            0x54 => Self::WebTransport,
-            value if is_grease_id(value) => Self::Grease,
-            _ => Self::Other,
-        }
-    }
-}
-
 impl Setting {
-    /// Creates a setting after its wire value has been validated.
-    const fn from_validated_wire(id: u64, value: u64) -> Self {
-        let name = SettingName::from_id(id);
-        Self {
-            id,
-            name,
-            value: SettingValue::from_wire(name, value),
-        }
-    }
-
     /// Validates a wire value and creates its canonical setting representation.
     ///
     /// # Errors
@@ -479,11 +491,16 @@ impl Setting {
     /// Returns [`Http3FrameError::InvalidBooleanSetting`] when a boolean setting uses a value
     /// other than zero or one.
     pub fn try_from_wire(id: u64, value: u64) -> Result<Self, Http3FrameError> {
-        if SettingName::from_id(id).uses_boolean_value() && value > 1 {
+        let name = SettingName::from(id);
+        if name.uses_boolean_value() && value > 1 {
             return Err(Http3FrameError::InvalidBooleanSetting { id, value });
         }
 
-        Ok(Self::from_validated_wire(id, value))
+        Ok(Self {
+            id,
+            name,
+            value: SettingValue::from_wire(name, value),
+        })
     }
 
     /// Returns the original numeric value used by the HTTP/3 wire format.
@@ -501,7 +518,7 @@ impl TryFrom<SettingRepr> for Setting {
     type Error = &'static str;
 
     fn try_from(repr: SettingRepr) -> Result<Self, Self::Error> {
-        if repr.name != SettingName::from_id(repr.id) {
+        if repr.name != SettingName::from(repr.id) {
             return Err("HTTP/3 setting name does not match its identifier");
         }
         if repr.name.uses_boolean_value() != matches!(repr.value, SettingValue::Bool(_)) {
@@ -535,29 +552,6 @@ impl SettingValue {
 }
 
 impl SettingName {
-    /// Returns the semantic name assigned to a SETTINGS identifier.
-    pub const fn from_id(id: u64) -> Self {
-        match id {
-            0x01 => Self::QpackMaxTableCapacity,
-            0x06 => Self::MaxFieldSectionSize,
-            0x07 => Self::QpackBlockedStreams,
-            0x08 => Self::EnableConnectProtocol,
-            0x33 => Self::H3Datagram,
-            0xff_d277 => Self::H3DatagramDraft,
-            0x4d44 => Self::EnableMetadata,
-            0x2b60_3742 => Self::EnableWebTransportDraft,
-            0x2b60_3743 | 0x3c48_d522 | 0xc671_706a | 0x14e9_cd29 => {
-                Self::WebTransportMaxSessionsDraft
-            }
-            0x2c7c_f000 => Self::WebTransportEnabledDraft,
-            0x2b64 => Self::WebTransportInitialMaxStreamsUniDraft,
-            0x2b65 => Self::WebTransportInitialMaxStreamsBidiDraft,
-            0x2b61 => Self::WebTransportInitialMaxDataDraft,
-            value if is_grease_id(value) => Self::Grease,
-            _ => Self::Other,
-        }
-    }
-
     /// Returns whether this setting uses the RFC-defined Boolean value form.
     pub const fn uses_boolean_value(self) -> bool {
         matches!(
@@ -568,25 +562,6 @@ impl SettingName {
 }
 
 impl FrameType {
-    /// Returns the semantic frame type assigned to a wire identifier.
-    pub const fn from_id(id: u64) -> Self {
-        match id {
-            0x00 => Self::Data,
-            0x01 => Self::Headers,
-            0x02 | 0x06 | 0x08 | 0x09 => Self::Http2Reserved,
-            0x03 => Self::CancelPush,
-            0x04 => Self::Settings,
-            0x05 => Self::PushPromise,
-            0x07 => Self::GoAway,
-            0x0c => Self::Origin,
-            0x0d => Self::MaxPushId,
-            0x0f_0700 => Self::PriorityUpdateRequest,
-            0x0f_0701 => Self::PriorityUpdatePush,
-            value if is_grease_id(value) => Self::Grease,
-            _ => Self::Other,
-        }
-    }
-
     /// Returns whether RFC 9114 reserves this HTTP/2 frame identifier.
     pub const fn is_http2_reserved(self) -> bool {
         matches!(self, Self::Http2Reserved)
@@ -650,7 +625,7 @@ impl TryFrom<OpaqueFrameRepr> for OpaqueFrame {
     type Error = &'static str;
 
     fn try_from(repr: OpaqueFrameRepr) -> Result<Self, Self::Error> {
-        let expected = FrameType::from_id(repr.type_id);
+        let expected = FrameType::from(repr.type_id);
         if matches!(expected, FrameType::Headers | FrameType::Settings) {
             return Err("a decoded HTTP/3 frame type cannot use OpaqueFrame");
         }
@@ -792,9 +767,30 @@ mod tests {
 
     use super::{
         parse_settings, FrameType, HeaderField, Http3FrameError, OpaqueFrame, Setting,
-        SettingValue, SettingsFrame, StreamType,
+        SettingValue, SettingsFrame, StreamType, StreamTypeName,
     };
     use crate::quic::varint;
+
+    #[test]
+    fn stream_types_cover_registered_grease_and_other_ids() {
+        const CONTROL_STREAM: StreamType = StreamType::from_id(0x00);
+
+        assert_eq!(CONTROL_STREAM.name, StreamTypeName::Control);
+        let cases = [
+            (0x00, StreamTypeName::Control),
+            (0x01, StreamTypeName::Push),
+            (0x02, StreamTypeName::QpackEncoder),
+            (0x03, StreamTypeName::QpackDecoder),
+            (0x54, StreamTypeName::WebTransport),
+            (0x21, StreamTypeName::Grease),
+            (0x05, StreamTypeName::Other),
+        ];
+
+        for (id, expected) in cases {
+            assert_eq!(StreamTypeName::from(id), expected, "stream type {id:#x}");
+        }
+    }
+
     #[test]
     fn setting_names_cover_registered_and_draft_ids() {
         use super::SettingName;
@@ -819,7 +815,7 @@ mod tests {
         ];
 
         for (id, expected) in cases {
-            assert_eq!(SettingName::from_id(id), expected, "setting {id:#x}");
+            assert_eq!(SettingName::from(id), expected, "setting {id:#x}");
         }
     }
 
@@ -894,8 +890,7 @@ mod tests {
     }
 
     #[test]
-    fn stream_and_setting_names_are_derived_from_ids() {
-        assert!(StreamType::from_id(33).is_grease());
+    fn stream_type_json_rejects_a_mismatched_name() {
         assert!(serde_json::from_value::<StreamType>(json!({
             "id": 0,
             "name": "QpackEncoder"
@@ -969,7 +964,7 @@ mod tests {
         ];
 
         for (id, expected) in cases {
-            assert_eq!(FrameType::from_id(id), expected, "frame {id:#x}");
+            assert_eq!(FrameType::from(id), expected, "frame {id:#x}");
         }
     }
 
@@ -1004,7 +999,7 @@ mod tests {
     fn h3_wire_varints_roundtrip_as_lossless_json_strings() {
         const UNSAFE_INTEGER: u64 = 9_007_199_254_740_992;
 
-        let stream_type = StreamType::from_id(UNSAFE_INTEGER);
+        let stream_type = StreamType::from(UNSAFE_INTEGER);
         let stream_json = serde_json::to_value(stream_type).unwrap();
         assert_eq!(stream_json["id"], json!(UNSAFE_INTEGER.to_string()));
         assert_eq!(
