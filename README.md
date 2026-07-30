@@ -6,8 +6,7 @@
 
 > 🚀 Help me work seamlessly with open source sharing by [sponsoring me on GitHub](https://github.com/0x676e67/0x676e67/blob/main/SPONSOR.md)
 
-**Pingly** parses captured TLS, HTTP, QUIC, and TCP wire data. Run it as a server with JSON
-endpoints and a Web UI, or use its Rust parsers with saved captures.
+**Pingly** inspects TLS, HTTP, QUIC, and TCP traffic as a server or Rust library.
 
 ## Features
 
