@@ -6,54 +6,6 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{quic::varint, tls::HexBytes};
 
-macro_rules! h3_registry_enum {
-    (
-        $(#[$enum_meta:meta])*
-        $visibility:vis enum $enum_name:ident {
-            $(
-                $(#[$variant_meta:meta])*
-                $variant:ident => $id:literal $(| $alias:literal)*
-            ),* $(,)?
-        }
-    ) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-        $(#[$enum_meta])*
-        #[non_exhaustive]
-        $visibility enum $enum_name {
-            $(
-                $(#[$variant_meta])*
-                $variant,
-            )*
-
-            /// An identifier reserved by HTTP/3's `31 * N + 33` registry pattern.
-            ///
-            /// See [RFC 9114, Section 11.2](https://www.rfc-editor.org/rfc/rfc9114#section-11.2).
-            Grease,
-
-            /// An unregistered or unsupported identifier.
-            Other,
-        }
-
-        impl $enum_name {
-            const fn from_wire_id(id: u64) -> Self {
-                match id {
-                    // Named entries take priority because provisional 0x4d44 also matches the
-                    // reserved formula: <https://www.iana.org/assignments/http3-parameters/>.
-                    $($id $(| $alias)* => Self::$variant,)*
-                    id if is_grease_id(id) => Self::Grease,
-                    _ => Self::Other,
-                }
-            }
-        }
-
-        impl From<u64> for $enum_name {
-            fn from(id: u64) -> Self {
-                Self::from_wire_id(id)
-            }
-        }
-    };
-}
-
 /// A client-initiated HTTP/3 unidirectional stream type.
 ///
 /// The stream type is the first QUIC varint on every unidirectional stream. See
@@ -69,10 +21,11 @@ pub struct StreamType {
     pub name: StreamTypeName,
 }
 
-h3_registry_enum! {
+registry_enum! {
     /// Semantic name of an HTTP/3 unidirectional stream type.
     #[serde(rename_all = "PascalCase")]
-    pub enum StreamTypeName {
+    #[non_exhaustive]
+    pub enum StreamTypeName: u64 {
         /// The HTTP/3 control stream (`0x00`).
         Control => 0x00,
 
@@ -88,6 +41,20 @@ h3_registry_enum! {
         /// A WebTransport unidirectional stream (`0x54`).
         WebTransport => 0x54,
     }
+
+    fallback(id) {
+        /// An identifier reserved by HTTP/3's `31 * N + 33` registry pattern.
+        ///
+        /// See [RFC 9114, Section 11.2](https://www.rfc-editor.org/rfc/rfc9114#section-11.2).
+        Grease,
+
+        /// An unregistered or unsupported identifier.
+        Other,
+    } => if is_grease_id(id) {
+        Self::Grease
+    } else {
+        Self::Other
+    };
 }
 
 /// One HTTP/3 SETTINGS parameter in its original wire order.
@@ -125,10 +92,11 @@ pub enum SettingValue {
     Bool(bool),
 }
 
-h3_registry_enum! {
+registry_enum! {
     /// Semantic name of an HTTP/3 SETTINGS identifier.
     #[serde(rename_all = "PascalCase")]
-    pub enum SettingName {
+    #[non_exhaustive]
+    pub enum SettingName: u64 {
         /// `SETTINGS_QPACK_MAX_TABLE_CAPACITY` (`0x01`).
         QpackMaxTableCapacity => 0x01,
 
@@ -194,6 +162,20 @@ h3_registry_enum! {
         /// See [draft-ietf-webtrans-http3-16, Section 9.2](https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3-16#section-9.2).
         WebTransportInitialMaxDataDraft => 0x2b61,
     }
+
+    fallback(id) {
+        /// An identifier reserved by HTTP/3's `31 * N + 33` registry pattern.
+        ///
+        /// See [RFC 9114, Section 11.2](https://www.rfc-editor.org/rfc/rfc9114#section-11.2).
+        Grease,
+
+        /// An unregistered or unsupported identifier.
+        Other,
+    } => if is_grease_id(id) {
+        Self::Grease
+    } else {
+        Self::Other
+    };
 }
 
 /// A decoded HTTP field preserving its QPACK field-section position.
@@ -275,11 +257,12 @@ pub enum Frame {
     Opaque(OpaqueFrame),
 }
 
-h3_registry_enum! {
+registry_enum! {
     /// Semantic HTTP/3 frame types represented by [`Frame`].
     ///
     /// Registered values follow the [IANA HTTP/3 Frame Types registry](https://www.iana.org/assignments/http3-parameters/http3-parameters.xhtml#http3-parameters-1).
-    pub enum FrameType {
+    #[non_exhaustive]
+    pub enum FrameType: u64 {
         /// DATA (`0x00`).
         Data => 0x00,
 
@@ -313,6 +296,20 @@ h3_registry_enum! {
         /// Push-stream PRIORITY_UPDATE (`0x0f0701`).
         PriorityUpdatePush => 0x0f_0701,
     }
+
+    fallback(id) {
+        /// An identifier reserved by HTTP/3's `31 * N + 33` registry pattern.
+        ///
+        /// See [RFC 9114, Section 11.2](https://www.rfc-editor.org/rfc/rfc9114#section-11.2).
+        Grease,
+
+        /// An unregistered or unsupported identifier.
+        Other,
+    } => if is_grease_id(id) {
+        Self::Grease
+    } else {
+        Self::Other
+    };
 }
 
 /// Protocol errors found in a complete HTTP/3 frame payload.

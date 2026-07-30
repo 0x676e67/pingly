@@ -98,6 +98,9 @@
 #![warn(clippy::missing_errors_doc)]
 #![cfg_attr(test, deny(warnings))]
 
+#[macro_use]
+mod macros;
+
 pub mod h1;
 pub mod h2;
 pub mod h3;
