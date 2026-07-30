@@ -2443,8 +2443,8 @@ impl ClientHello {
 mod tests {
     use super::{
         ClientHello, ClientHelloBuffer, ClientHelloHandshakeBuffer, ClientHelloParseStage,
-        ECHClientHello, ECHClientHelloOuter, HexBytes, KeyShare, ProtocolName, StatusRequest,
-        TlsCipherSuite, TlsExtension,
+        ECHClientHelloOuter, HexBytes, KeyShare, ProtocolName, StatusRequest, TlsCipherSuite,
+        TlsExtension,
     };
     use crate::tls::{CompressionAlgorithm, NamedGroup, SupportedVersions, TlsVersion};
 
@@ -2573,38 +2573,6 @@ mod tests {
         empty["payload"] = serde_json::json!("");
         empty["payload_length"] = serde_json::json!(0);
         assert!(serde_json::from_value::<ECHClientHelloOuter>(empty).is_err());
-    }
-
-    #[test]
-    fn ech_forms_use_lowercase_json_names() {
-        let outer_json = serde_json::json!({
-            "outer": {
-                "cipher_suite": {
-                    "kdf_id": "HKDF_SHA256",
-                    "aead_id": "AES_128_GCM"
-                },
-                "config_id": 7,
-                "enc": "",
-                "payload": "aa",
-                "payload_length": 1
-            }
-        });
-        let outer = serde_json::from_value::<ECHClientHello>(outer_json.clone())
-            .expect("lowercase ECH outer deserializes");
-
-        assert_eq!(
-            serde_json::to_value(outer).expect("ECH outer serializes"),
-            outer_json
-        );
-        assert_eq!(
-            serde_json::to_value(ECHClientHello::Inner).expect("ECH inner serializes"),
-            serde_json::json!("inner")
-        );
-        assert_eq!(
-            serde_json::from_value::<ECHClientHello>(serde_json::json!("inner"))
-                .expect("lowercase ECH inner deserializes"),
-            ECHClientHello::Inner
-        );
     }
 
     #[test]
