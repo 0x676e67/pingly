@@ -1,5 +1,7 @@
 //! Request handlers for the protocol analysis endpoints.
 
+mod ws;
+
 #[cfg(target_os = "linux")]
 use std::time::{Duration, Instant};
 use std::{net::SocketAddr, sync::LazyLock};
@@ -31,6 +33,7 @@ const TLS_PATH: &str = "/api/tls";
 const HTTP1_PATH: &str = "/api/http1";
 const HTTP2_PATH: &str = "/api/http2";
 const HTTP3_PATH: &str = "/api/http3";
+const WEBSOCKET_PATH: &str = "/api/websocket";
 const TCP_PATH: &str = "/api/tcp";
 const LATENCY_PATH: &str = "/api/latency";
 
@@ -103,6 +106,12 @@ const PUBLIC_ROUTES: &[PublicRoute] = &[
         availability: ALWAYS_AVAILABLE,
     },
     PublicRoute {
+        method: "WS",
+        path: WEBSOCKET_PATH,
+        purpose: "WebSocket TLS and message inspector",
+        availability: ALWAYS_AVAILABLE,
+    },
+    PublicRoute {
         method: ANY_METHOD,
         path: TCP_PATH,
         purpose: "TCP packet capture",
@@ -132,14 +141,21 @@ static UI_ETAG_VALUE: LazyLock<HeaderValue> = LazyLock::new(|| {
 });
 
 /// Builds the public routes and enables optional platform routes.
-pub(crate) fn router(#[cfg(target_os = "linux")] tcp_capture: Option<&TcpCapture>) -> Router {
+pub(crate) fn router(
+    concurrent_limit: usize,
+    #[cfg(target_os = "linux")] tcp_capture: Option<&TcpCapture>,
+) -> Router {
     let router = Router::new()
         .route(INDEX_PATH, get(index))
         .route(ALL_PATH, any(track))
         .route(TLS_PATH, any(tls_track))
         .route(HTTP1_PATH, any(http1_track))
         .route(HTTP2_PATH, any(http2_track))
-        .route(HTTP3_PATH, any(http3_track));
+        .route(HTTP3_PATH, any(http3_track))
+        .route(
+            WEBSOCKET_PATH,
+            any(ws::analyze).layer(Extension(ws::Sessions::new(concurrent_limit))),
+        );
 
     #[cfg(target_os = "linux")]
     let router = if let Some(capture) = tcp_capture {

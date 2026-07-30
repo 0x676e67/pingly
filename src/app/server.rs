@@ -1441,9 +1441,9 @@ mod tests {
 
     fn test_router() -> axum::Router {
         #[cfg(target_os = "linux")]
-        return routes::router(None);
+        return routes::router(1, None);
 
         #[cfg(not(target_os = "linux"))]
-        routes::router()
+        routes::router(1)
     }
 }

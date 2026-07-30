@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
-    <meta name="description" content="Inspect TLS, HTTP, QUIC, and TCP request fingerprints">
+    <meta name="description" content="Inspect TLS, HTTP, WebSocket, QUIC, and TCP request fingerprints">
     <title>Pingly Protocol Inspector</title>
     <script>
         (() => {
@@ -1164,6 +1164,272 @@
             background: var(--pingly-violet);
         }
 
+        .websocket-control {
+            margin-bottom: 1rem;
+            padding: 1rem;
+            border: 1px solid var(--pingly-border);
+            border-radius: var(--pingly-radius);
+            background: var(--pingly-surface-raised);
+            box-shadow: var(--pingly-shadow-small);
+        }
+
+        .websocket-control-row {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .websocket-endpoint {
+            min-width: 0;
+        }
+
+        .websocket-endpoint-label {
+            display: block;
+            margin-bottom: 0.25rem;
+            color: var(--pingly-text-muted);
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        .websocket-url {
+            display: block;
+            overflow: hidden;
+            color: var(--pingly-blue);
+            font-size: 0.8125rem;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .websocket-connection-actions {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .websocket-status {
+            display: inline-flex;
+            min-height: 1.75rem;
+            align-items: center;
+            gap: 0.375rem;
+            padding: 0 0.625rem;
+            border: 1px solid var(--pingly-border);
+            border-radius: 999px;
+            color: var(--pingly-text-muted);
+            background: var(--pingly-surface);
+            font-size: 0.75rem;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        .websocket-status[data-state="connecting"],
+        .websocket-status[data-state="analyzing"] {
+            border-color: var(--pingly-blue-border);
+            color: var(--pingly-blue);
+            background: var(--pingly-blue-muted);
+        }
+
+        .websocket-status[data-state="open"] {
+            border-color: var(--pingly-green-border);
+            color: var(--pingly-green);
+            background: var(--pingly-green-muted);
+        }
+
+        .websocket-status[data-state="error"] {
+            border-color: var(--pingly-danger-border);
+            color: var(--pingly-danger);
+            background: var(--pingly-danger-muted);
+        }
+
+        .websocket-status .status-dot {
+            background: currentColor;
+        }
+
+        .websocket-debug-grid {
+            display: grid;
+            grid-template-columns: minmax(17rem, 0.8fr) minmax(22rem, 1.2fr);
+            align-items: start;
+            gap: 1rem;
+        }
+
+        .websocket-tool {
+            min-width: 0;
+            overflow: hidden;
+            border: 1px solid var(--pingly-border);
+            border-radius: var(--pingly-radius);
+            background: var(--pingly-surface-raised);
+            box-shadow: var(--pingly-shadow-small);
+        }
+
+        .websocket-tool-header {
+            display: flex;
+            min-height: 3rem;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            padding: 0.625rem 0.75rem;
+            border-bottom: 1px solid var(--pingly-border);
+            background: var(--pingly-surface-subtle);
+        }
+
+        .websocket-tool-header h3 {
+            margin: 0;
+            font-size: 0.875rem;
+            font-weight: 650;
+        }
+
+        .websocket-composer {
+            padding: 0.75rem;
+        }
+
+        .websocket-mode {
+            display: inline-flex;
+            margin-bottom: 0.75rem;
+            padding: 0.1875rem;
+            border: 1px solid var(--pingly-border);
+            border-radius: var(--pingly-radius);
+            background: var(--pingly-surface-subtle);
+        }
+
+        .websocket-mode-button {
+            min-height: 1.75rem;
+            padding: 0.25rem 0.625rem;
+            border: 0;
+            border-radius: var(--pingly-radius-small);
+            color: var(--pingly-text-muted);
+            background: transparent;
+            font-size: 0.75rem;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .websocket-mode-button:hover {
+            color: var(--pingly-text);
+        }
+
+        .websocket-mode-button.active {
+            color: var(--pingly-brand-text);
+            background: var(--pingly-brand);
+            box-shadow: var(--pingly-shadow-small);
+        }
+
+        .websocket-input-label {
+            display: block;
+            margin-bottom: 0.375rem;
+            color: var(--pingly-text-muted);
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        .websocket-input {
+            display: block;
+            width: 100%;
+            min-height: 11rem;
+            max-height: 28rem;
+            padding: 0.75rem;
+            resize: vertical;
+            border: 1px solid var(--pingly-border-strong);
+            border-radius: var(--pingly-radius);
+            color: var(--pingly-text);
+            background: var(--pingly-surface);
+            font-family: var(--pingly-font-mono);
+            font-size: 0.8125rem;
+            line-height: 1.55;
+        }
+
+        .websocket-input:focus {
+            border-color: var(--pingly-accent);
+        }
+
+        .websocket-send-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            margin-top: 0.75rem;
+        }
+
+        .websocket-size {
+            color: var(--pingly-text-muted);
+            font-family: var(--pingly-font-mono);
+            font-size: 0.6875rem;
+        }
+
+        .websocket-log {
+            min-height: 18rem;
+            max-height: 32rem;
+            overflow-y: auto;
+            color: var(--pingly-code-text);
+            background: var(--pingly-code);
+            scrollbar-color: var(--pingly-border-strong) var(--pingly-code);
+        }
+
+        .websocket-log-empty {
+            display: grid;
+            min-height: 18rem;
+            place-items: center;
+            padding: 2rem;
+            color: var(--pingly-code-muted);
+            font-size: 0.8125rem;
+            text-align: center;
+        }
+
+        .websocket-message {
+            padding: 0.75rem;
+            border-bottom: 1px solid rgb(255 255 255 / 0.09);
+        }
+
+        .websocket-message:last-child {
+            border-bottom: 0;
+        }
+
+        .websocket-message[data-direction="inbound"] {
+            border-left: 2px solid var(--pingly-blue);
+        }
+
+        .websocket-message[data-direction="outbound"] {
+            border-left: 2px solid var(--pingly-accent);
+        }
+
+        .websocket-message[data-direction="system"] {
+            border-left: 2px solid var(--pingly-text-subtle);
+        }
+
+        .websocket-message-header {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.375rem;
+            color: var(--pingly-code-muted);
+            font-size: 0.6875rem;
+        }
+
+        .websocket-message-direction {
+            color: var(--pingly-code-text);
+            font-weight: 600;
+        }
+
+        .websocket-message-time {
+            margin-left: auto;
+        }
+
+        .websocket-message pre {
+            margin: 0;
+            overflow-wrap: anywhere;
+            color: var(--pingly-code-text);
+            font-size: 0.75rem;
+            line-height: 1.55;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .websocket-message-note {
+            display: block;
+            margin-top: 0.375rem;
+            color: var(--pingly-code-muted);
+            font-size: 0.6875rem;
+        }
+
         .json-panel {
             overflow: hidden;
             border: 1px solid var(--pingly-border);
@@ -1663,6 +1929,10 @@
                 grid-template-columns: repeat(2, minmax(0, 1fr));
             }
 
+            .websocket-debug-grid {
+                grid-template-columns: minmax(0, 1fr);
+            }
+
             .summary-item:nth-child(3),
             .summary-item:nth-child(4),
             .loading-summary > div:nth-child(3),
@@ -1787,6 +2057,14 @@
             .proxy-chart-track {
                 grid-column: 1 / -1;
                 grid-row: 2;
+            }
+
+            .websocket-control-row {
+                grid-template-columns: minmax(0, 1fr);
+            }
+
+            .websocket-connection-actions {
+                justify-content: space-between;
             }
 
             .flex-lg-row {
@@ -2008,6 +2286,18 @@
                         type="button"
                         role="tab"
                         aria-selected="false"
+                        aria-controls="panel-websocket"
+                        data-view="websocket"
+                    >
+                        <i data-lucide="messages-square" aria-hidden="true"></i>
+                        <span>WebSocket</span>
+                        <span class="nav-count" id="websocket-count">0</span>
+                    </button>
+                    <button
+                        class="sidebar-item"
+                        type="button"
+                        role="tab"
+                        aria-selected="false"
                         aria-controls="panel-tcp"
                         data-view="tcp"
                     >
@@ -2140,6 +2430,155 @@
                         </section>
                         <section id="panel-h3" role="tabpanel" data-panel="h3" hidden>
                             <div id="h3-content"></div>
+                        </section>
+                        <section
+                            id="panel-websocket"
+                            role="tabpanel"
+                            data-panel="websocket"
+                            hidden
+                        >
+                            <section class="analysis-section">
+                                <div class="section-heading">
+                                    <div>
+                                        <p class="page-pretitle">Live connection</p>
+                                        <h2>WebSocket session</h2>
+                                    </div>
+                                </div>
+                                <div class="websocket-control">
+                                    <div class="websocket-control-row">
+                                        <div class="websocket-endpoint">
+                                            <span class="websocket-endpoint-label">Endpoint</span>
+                                            <code class="websocket-url" id="websocket-url"></code>
+                                        </div>
+                                        <div class="websocket-connection-actions">
+                                            <span
+                                                class="websocket-status"
+                                                id="websocket-status"
+                                                data-state="idle"
+                                                role="status"
+                                                aria-live="polite"
+                                            >
+                                                <span
+                                                    class="status-dot"
+                                                    id="websocket-status-dot"
+                                                    aria-hidden="true"
+                                                ></span>
+                                                <span id="websocket-status-label">Ready</span>
+                                            </span>
+                                            <button
+                                                class="btn btn-primary"
+                                                id="websocket-connect-button"
+                                                type="button"
+                                            >
+                                                <i data-lucide="plug" aria-hidden="true"></i>
+                                                <span>Connect</span>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+
+                            <div id="websocket-tls-content"></div>
+
+                            <section class="analysis-section">
+                                <div class="section-heading">
+                                    <div>
+                                        <p class="page-pretitle">Messages</p>
+                                        <h2>Message debugger</h2>
+                                    </div>
+                                    <span class="text-secondary small" id="websocket-message-count">
+                                        0 messages
+                                    </span>
+                                </div>
+                                <div class="websocket-debug-grid">
+                                    <div class="websocket-tool">
+                                        <div class="websocket-tool-header">
+                                            <h3>Send message</h3>
+                                            <div
+                                                class="websocket-mode"
+                                                role="group"
+                                                aria-label="Message type"
+                                            >
+                                                <button
+                                                    class="websocket-mode-button active"
+                                                    type="button"
+                                                    data-websocket-mode="text"
+                                                    aria-pressed="true"
+                                                >
+                                                    Text
+                                                </button>
+                                                <button
+                                                    class="websocket-mode-button"
+                                                    type="button"
+                                                    data-websocket-mode="binary"
+                                                    aria-pressed="false"
+                                                >
+                                                    Binary
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div class="websocket-composer">
+                                            <label
+                                                class="websocket-input-label"
+                                                for="websocket-message-input"
+                                            >
+                                                Message
+                                            </label>
+                                            <textarea
+                                                class="websocket-input"
+                                                id="websocket-message-input"
+                                                maxlength="262144"
+                                                placeholder="Message text"
+                                                spellcheck="false"
+                                            ></textarea>
+                                            <div class="websocket-send-row">
+                                                <span
+                                                    class="websocket-size"
+                                                    id="websocket-message-size"
+                                                >
+                                                    0 B
+                                                </span>
+                                                <button
+                                                    class="btn btn-primary"
+                                                    id="websocket-send-button"
+                                                    type="button"
+                                                    disabled
+                                                >
+                                                    <i data-lucide="send" aria-hidden="true"></i>
+                                                    Send
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div class="websocket-tool">
+                                        <div class="websocket-tool-header">
+                                            <h3>Session log</h3>
+                                            <button
+                                                class="btn icon-button"
+                                                id="websocket-clear-button"
+                                                type="button"
+                                                title="Clear messages"
+                                                aria-label="Clear messages"
+                                                disabled
+                                            >
+                                                <i data-lucide="trash-2" aria-hidden="true"></i>
+                                            </button>
+                                        </div>
+                                        <div
+                                            class="websocket-log"
+                                            id="websocket-message-log"
+                                            role="log"
+                                            aria-live="polite"
+                                            aria-relevant="additions"
+                                        >
+                                            <div class="websocket-log-empty">
+                                                No messages
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
                         </section>
                         <section id="panel-tcp" role="tabpanel" data-panel="tcp" hidden>
                             <div id="tcp-content"></div>

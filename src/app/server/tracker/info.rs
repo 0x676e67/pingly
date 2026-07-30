@@ -332,6 +332,11 @@ where
 }
 
 impl ConnectionTrack {
+    /// Consumes this capture and computes its TLS analysis, when the ClientHello is complete.
+    pub(in crate::server) fn into_tls_info(self) -> Option<TlsTrackInfo> {
+        protocol_track_info(Track::Tls, self).tls
+    }
+
     /// Records the TLS version negotiated during the handshake.
     #[inline]
     pub fn set_tls_version_negotiated(&mut self, version: Option<ProtocolVersion>) {
