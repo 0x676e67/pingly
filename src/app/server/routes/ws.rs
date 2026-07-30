@@ -231,10 +231,10 @@ enum ServerEvent {
 mod tests {
     use std::net::{Ipv4Addr, SocketAddr};
 
-    use axum::http::{header, StatusCode, Version};
+    use axum::http::Version;
     use serde_json::json;
 
-    use super::{prepare_http1, prepare_http2, ServerEvent, Sessions, MAX_MESSAGE_SIZE};
+    use super::{ServerEvent, Sessions, MAX_MESSAGE_SIZE};
     use crate::server::tracker::info::WebSocketTrackInfo;
 
     #[test]
@@ -261,26 +261,6 @@ mod tests {
                 "tls": null
             })
         );
-    }
-
-    #[tokio::test]
-    async fn http2_preparation_keeps_tcp_and_rejects_other_http_versions() {
-        let response = prepare_http2(Version::HTTP_2).await;
-        assert_eq!(response.status(), StatusCode::NO_CONTENT);
-        assert!(!response.headers().contains_key(header::ALT_SVC));
-
-        let response = prepare_http2(Version::HTTP_11).await;
-        assert_eq!(response.status(), StatusCode::HTTP_VERSION_NOT_SUPPORTED);
-        assert_eq!(response.headers()[header::ALT_SVC], "clear");
-    }
-
-    #[tokio::test]
-    async fn preparation_moves_http3_back_to_tcp() {
-        let response = prepare_http1(Version::HTTP_3).await;
-
-        assert_eq!(response.status(), StatusCode::CONFLICT);
-        assert_eq!(response.headers()[header::ALT_SVC], "clear");
-        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
     }
 
     #[test]

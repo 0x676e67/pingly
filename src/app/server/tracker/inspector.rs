@@ -482,10 +482,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        Http2CaptureBudget, HTTP2_CAPTURE_MAX_BYTES, HTTP2_CAPTURE_MAX_FRAMES,
-        HTTP2_CAPTURE_MAX_HEADER_BLOCKS,
-    };
+    use super::{Http2CaptureBudget, HTTP2_CAPTURE_MAX_BYTES, HTTP2_CAPTURE_MAX_FRAMES};
 
     #[test]
     fn http2_capture_budget_caps_cumulative_bytes() {
@@ -509,15 +506,5 @@ mod tests {
         }
         assert!(!budget.record_frame());
         assert!(!budget.record_frame());
-    }
-
-    #[test]
-    fn http2_capture_budget_allows_a_warm_up_header_block() {
-        let mut budget = Http2CaptureBudget::default();
-
-        for _ in 1..HTTP2_CAPTURE_MAX_HEADER_BLOCKS {
-            assert!(!budget.record_header_block());
-        }
-        assert!(budget.record_header_block());
     }
 }

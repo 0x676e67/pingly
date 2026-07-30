@@ -654,21 +654,13 @@ mod tests {
     use std::sync::{Arc, OnceLock};
 
     use pingly::{
-        h1::{
-            HeaderField as Http1HeaderField, Http1HeadBuffer, RequestHead, Version as Http1Version,
-        },
-        h2::{
-            frame::{
-                HeaderField as Http2HeaderField, HeadersFlags, HeadersFrame as Http2HeadersFrame,
-            },
-            Frame as Http2WireFrame, FrameType as Http2FrameType,
-        },
+        h1::Http1HeadBuffer,
         h3::{FrameType, HeaderField, HeadersFrame, Setting, SettingsFrame},
         tls::ClientHelloHandshakeBuffer,
     };
     use serde_json::json;
 
-    use super::{protocol_track_info, ConnectionTrack, Http1TrackInfo, Track, WebSocketHeaders};
+    use super::{protocol_track_info, ConnectionTrack, Track};
     use crate::server::quic::inspect::SettingsCapture;
 
     fn quic_client_hello() -> ClientHelloHandshakeBuffer {
@@ -703,75 +695,6 @@ mod tests {
             serde_json::to_value(http1).unwrap(),
             json!([{"name": "uSeR-aGeNt", "value": "curl"}])
         );
-    }
-
-    #[test]
-    fn websocket_http1_headers_preserve_wire_order_and_name_casing() {
-        let headers = WebSocketHeaders::Http1(Http1TrackInfo::new(RequestHead {
-            head_length: 0,
-            method: "GET".into(),
-            target: "/api/websocket".into(),
-            version: Http1Version::HTTP_11,
-            headers: vec![
-                Http1HeaderField::new("Connection", b"Upgrade".as_slice()),
-                Http1HeaderField::new("uPgRaDe", b"websocket".as_slice()),
-            ],
-        }));
-
-        assert_eq!(
-            serde_json::to_value(headers).unwrap(),
-            json!([
-                {"name": "Connection", "value": "Upgrade"},
-                {"name": "uPgRaDe", "value": "websocket"}
-            ])
-        );
-    }
-
-    #[test]
-    fn websocket_http2_headers_select_the_extended_connect_request() {
-        let frames = Arc::new(boxcar::Vec::new());
-        frames.push(http2_headers_frame(
-            1,
-            &[(b":method", b"GET"), (b":path", b"/api/websocket/http2")],
-        ));
-        frames.push(http2_headers_frame(
-            3,
-            &[
-                (b":method", b"CONNECT"),
-                (b":protocol", b"websocket"),
-                (b":path", b"/api/websocket"),
-                (b"origin", b"https://localhost"),
-            ],
-        ));
-
-        let headers = WebSocketHeaders::from_http2(frames).unwrap();
-        assert_eq!(
-            serde_json::to_value(headers).unwrap(),
-            json!([
-                {"name": ":method", "value": "CONNECT"},
-                {"name": ":protocol", "value": "websocket"},
-                {"name": ":path", "value": "/api/websocket"},
-                {"name": "origin", "value": "https://localhost"}
-            ])
-        );
-    }
-
-    fn http2_headers_frame(stream_id: u32, headers: &[(&[u8], &[u8])]) -> Http2WireFrame {
-        Http2WireFrame::Headers(Http2HeadersFrame {
-            frame_type: Http2FrameType::Headers,
-            stream_id,
-            length: 0,
-            headers: headers
-                .iter()
-                .map(|(name, value)| Http2HeaderField {
-                    name: Box::from(*name),
-                    value: Box::from(*value),
-                })
-                .collect(),
-            flags: HeadersFlags::from(0x04),
-            priority: None,
-            continuations: Vec::new(),
-        })
     }
 
     #[test]

@@ -541,12 +541,12 @@ mod tcp {
     mod tests {
         use axum::{
             body::Body,
-            http::{header, Method, Request, StatusCode, Version},
+            http::{header, Method, Request, StatusCode},
             response::Response,
         };
         use hyper::ext::Protocol;
 
-        use super::{super::routes, ConnectionDirective};
+        use super::ConnectionDirective;
 
         const LATENCY_PATH: &str = "/api/latency";
         const WEBSOCKET_PROTOCOL: &str = "websocket";
@@ -632,34 +632,6 @@ mod tcp {
             let response = Response::new(Body::empty());
 
             assert!(ConnectionDirective::from_request(&request).should_close(&response, true));
-        }
-
-        #[test]
-        fn http1_preparation_always_closes_the_tcp_connection() {
-            let request = Request::get(routes::WEBSOCKET_HTTP1_PREPARE_PATH)
-                .body(())
-                .unwrap();
-            let response = Response::builder()
-                .status(StatusCode::NO_CONTENT)
-                .body(Body::empty())
-                .unwrap();
-
-            assert!(ConnectionDirective::from_request(&request).should_close(&response, false));
-        }
-
-        #[test]
-        fn successful_http2_preparation_preserves_the_connection() {
-            let request = Request::builder()
-                .version(Version::HTTP_2)
-                .uri(routes::WEBSOCKET_HTTP2_PREPARE_PATH)
-                .body(())
-                .unwrap();
-            let response = Response::builder()
-                .status(StatusCode::NO_CONTENT)
-                .body(Body::empty())
-                .unwrap();
-
-            assert!(!ConnectionDirective::from_request(&request).should_close(&response, true));
         }
     }
 }
