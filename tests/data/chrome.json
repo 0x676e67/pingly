@@ -244,7 +244,7 @@
                 "encrypted_client_hello": {
                     "value": 65037,
                     "data": {
-                        "Outer": {
+                        "outer": {
                             "cipher_suite": {
                                 "kdf_id": "HKDF_SHA256",
                                 "aead_id": "AES_128_GCM"
