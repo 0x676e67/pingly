@@ -4,7 +4,7 @@
 [![Crates.io License](https://img.shields.io/crates/l/pingly)](./LICENSE)
 [![crates.io](https://img.shields.io/crates/v/pingly.svg?logo=rust)](https://crates.io/crates/pingly)
 
-> [Sponsor the project on GitHub](https://github.com/0x676e67/0x676e67/blob/main/SPONSOR.md) to support its maintenance.
+> 🚀 Help me work seamlessly with open source sharing by [sponsoring me on GitHub](https://github.com/0x676e67/0x676e67/blob/main/SPONSOR.md)
 
 **Pingly** parses captured TLS, HTTP, QUIC, and TCP wire data. Run it as a server with JSON
 endpoints and a Web UI, or use its Rust parsers with saved captures.
