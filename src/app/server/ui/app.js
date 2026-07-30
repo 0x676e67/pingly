@@ -16,6 +16,15 @@ const SERVER_ROUTES = /* PINGLY_ROUTES */ [];
 const DEFAULT_JSON_ROUTE = "/api/all";
 const LATENCY_PATH = "/api/latency";
 const WEBSOCKET_PATH = "/api/websocket";
+const WEBSOCKET_PREPARE_PATHS = {
+    http1: "/api/websocket/http1",
+    http2: "/api/websocket/http2",
+};
+const WEBSOCKET_TRANSPORT_LABELS = {
+    http1: "HTTP/1.1",
+    http2: "HTTP/2",
+};
+const WEBSOCKET_PREPARE_RETRY_STATUS = 409;
 const UNAVAILABLE_LABEL = "Unavailable";
 const JSON_ROUTE_FEEDBACK_MS = 300;
 const PRIORITY_PROBE_TIMEOUT_MS = 10_000;
@@ -109,13 +118,17 @@ const state = {
         address: "",
         closeRequested: false,
         error: "",
+        headers: [],
+        httpVersion: "",
         maxMessageSize: WEBSOCKET_DEFAULT_MAX_MESSAGE_SIZE,
         messages: [],
         mode: "text",
+        prepareController: null,
         receivedConnectionInfo: false,
         socket: null,
         status: "idle",
         tls: null,
+        transport: "http1",
     },
     activeView: "overview",
     controller: null,
@@ -159,9 +172,12 @@ function init() {
     refs.websocketStatusLabel = document.getElementById("websocket-status-label");
     refs.websocketUrl = document.getElementById("websocket-url");
     refs.websocketConnectButton = document.getElementById("websocket-connect-button");
-    refs.websocketTls = document.getElementById("websocket-tls-content");
+    refs.websocketAnalysis = document.getElementById("websocket-analysis-content");
     refs.websocketModeButtons = Array.from(
         document.querySelectorAll("[data-websocket-mode]")
+    );
+    refs.websocketTransportButtons = Array.from(
+        document.querySelectorAll("[data-websocket-transport]")
     );
     refs.websocketInput = document.getElementById("websocket-message-input");
     refs.websocketInputSize = document.getElementById("websocket-message-size");
@@ -268,6 +284,11 @@ function bindEvents() {
     refs.websocketModeButtons.forEach(function (button) {
         button.addEventListener("click", function () {
             setWebSocketMode(button.dataset.websocketMode);
+        });
+    });
+    refs.websocketTransportButtons.forEach(function (button) {
+        button.addEventListener("click", function () {
+            setWebSocketTransport(button.dataset.websocketTransport);
         });
     });
 }
@@ -493,7 +514,7 @@ function renderJsonRouteOptions() {
     const fragment = document.createDocumentFragment();
 
     SERVER_ROUTES.filter(function (route) {
-        return route.path.startsWith("/api/") && route.method !== "WS";
+        return route.path.startsWith("/api/") && route.method === "ANY";
     }).forEach(function (route) {
         const button = create("button", "nav-link flex-shrink-0 px-2");
         const spinner = create(
@@ -565,7 +586,7 @@ async function selectJsonRoute(path) {
     const knownRoute = SERVER_ROUTES.some(function (route) {
         return route.path === path &&
             route.path.startsWith("/api/") &&
-            route.method !== "WS";
+            route.method === "ANY";
     });
     if (!knownRoute) {
         return;
@@ -1943,6 +1964,11 @@ function websocketUrl() {
 }
 
 function toggleWebSocket() {
+    if (state.websocket.prepareController) {
+        cancelWebSocketPreparation();
+        return;
+    }
+
     const socket = state.websocket.socket;
     if (socket &&
         [WebSocket.CONNECTING, WebSocket.OPEN].includes(socket.readyState)) {
@@ -1951,27 +1977,60 @@ function toggleWebSocket() {
     }
 
     if (!socket || socket.readyState === WebSocket.CLOSED) {
-        connectWebSocket();
+        void connectWebSocket();
     }
 }
 
-function connectWebSocket() {
+async function connectWebSocket() {
     const inspector = state.websocket;
     const current = inspector.socket;
-    if (current && current.readyState !== WebSocket.CLOSED) {
+    if (inspector.prepareController ||
+        (current && current.readyState !== WebSocket.CLOSED)) {
         return;
     }
 
     inspector.address = "";
     inspector.closeRequested = false;
     inspector.error = "";
+    inspector.headers = [];
+    inspector.httpVersion = "";
     inspector.maxMessageSize = WEBSOCKET_DEFAULT_MAX_MESSAGE_SIZE;
     inspector.messages = [];
     inspector.receivedConnectionInfo = false;
     inspector.socket = null;
-    inspector.status = "connecting";
     inspector.tls = null;
+
+    const controller = new AbortController();
+    inspector.prepareController = controller;
+    inspector.status = "preparing";
     renderWebSocket();
+    appendWebSocketSystemMessage(
+        "Preparing " + WEBSOCKET_TRANSPORT_LABELS[inspector.transport]
+    );
+
+    try {
+        await prepareWebSocketTransport(inspector.transport, controller.signal);
+    } catch (error) {
+        if (inspector.prepareController !== controller) {
+            return;
+        }
+
+        inspector.prepareController = null;
+        inspector.error = error instanceof Error
+            ? error.message
+            : "Connection preparation failed";
+        inspector.status = "error";
+        renderWebSocketState();
+        renderWebSocketComposer();
+        appendWebSocketSystemMessage(inspector.error);
+        return;
+    }
+
+    if (inspector.prepareController !== controller || controller.signal.aborted) {
+        return;
+    }
+    inspector.prepareController = null;
+    inspector.status = "connecting";
 
     let socket;
     try {
@@ -2037,6 +2096,49 @@ function connectWebSocket() {
         const reason = event.reason ? ": " + event.reason : "";
         appendWebSocketSystemMessage("Connection closed" + code + reason);
     });
+}
+
+async function prepareWebSocketTransport(transport, signal) {
+    const path = WEBSOCKET_PREPARE_PATHS[transport];
+    if (!path) {
+        throw new Error("Unknown WebSocket HTTP version");
+    }
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        const response = await fetch(path, {
+            cache: "no-store",
+            signal: signal,
+        });
+        await response.arrayBuffer();
+
+        if (response.status === WEBSOCKET_PREPARE_RETRY_STATUS && attempt === 0) {
+            continue;
+        }
+        if (response.ok) {
+            return;
+        }
+
+        const label = WEBSOCKET_TRANSPORT_LABELS[transport];
+        throw new Error(
+            label + " WebSocket preparation failed (HTTP " + response.status + ")"
+        );
+    }
+
+    throw new Error("Could not move the WebSocket connection from HTTP/3 to TCP");
+}
+
+function cancelWebSocketPreparation() {
+    const controller = state.websocket.prepareController;
+    if (!controller) {
+        return;
+    }
+
+    state.websocket.prepareController = null;
+    state.websocket.status = "closed";
+    controller.abort();
+    renderWebSocketState();
+    renderWebSocketComposer();
+    appendWebSocketSystemMessage("Connection canceled");
 }
 
 function disconnectWebSocket() {
@@ -2120,6 +2222,12 @@ function receiveWebSocketConnectionInfo(value) {
 
     const maxMessageSize = Number(event.max_message_size);
     state.websocket.address = typeof event.address === "string" ? event.address : "";
+    state.websocket.headers = Array.isArray(event.headers)
+        ? normalizeHeaders(event.headers)
+        : [];
+    state.websocket.httpVersion = typeof event.http_version === "string"
+        ? event.http_version
+        : "";
     state.websocket.maxMessageSize = Number.isSafeInteger(maxMessageSize) &&
         maxMessageSize > 0
         ? maxMessageSize
@@ -2129,8 +2237,12 @@ function receiveWebSocketConnectionInfo(value) {
     state.websocket.tls = isObject(event.tls) ? event.tls : null;
     renderWebSocketState();
     renderWebSocketComposer();
-    renderWebSocketTls();
-    appendWebSocketSystemMessage("Connection ready");
+    renderWebSocketAnalysis();
+    appendWebSocketSystemMessage(
+        state.websocket.httpVersion
+            ? "Connected over " + state.websocket.httpVersion
+            : "Connection ready"
+    );
     return true;
 }
 
@@ -2201,6 +2313,28 @@ function setWebSocketMode(mode) {
     refs.websocketInput.focus();
 }
 
+function setWebSocketTransport(transport) {
+    const inspector = state.websocket;
+    const socket = inspector.socket;
+    const active = inspector.prepareController ||
+        (socket && socket.readyState !== WebSocket.CLOSED);
+    if (!(transport in WEBSOCKET_TRANSPORT_LABELS) ||
+        inspector.transport === transport ||
+        active) {
+        return;
+    }
+
+    inspector.error = "";
+    inspector.headers = [];
+    inspector.httpVersion = "";
+    inspector.receivedConnectionInfo = false;
+    inspector.status = "idle";
+    inspector.tls = null;
+    inspector.transport = transport;
+    renderWebSocketState();
+    renderWebSocketAnalysis();
+}
+
 function clearWebSocketMessages() {
     state.websocket.messages = [];
     renderWebSocketMessages();
@@ -2266,34 +2400,42 @@ function renderWebSocket() {
     renderWebSocketState();
     renderWebSocketComposer();
     renderWebSocketMessages();
-    renderWebSocketTls();
+    renderWebSocketAnalysis();
 }
 
 function renderWebSocketState() {
     const inspector = state.websocket;
     const labels = {
-        analyzing: "Analyzing TLS",
+        analyzing: "Analyzing connection",
         closed: "Closed",
         closing: "Closing",
         connecting: "Connecting",
         error: "Failed",
         idle: "Ready",
         open: "Connected",
+        preparing: "Preparing " + WEBSOCKET_TRANSPORT_LABELS[inspector.transport],
     };
     refs.websocketStatus.dataset.state = inspector.status;
     refs.websocketStatusLabel.textContent = labels[inspector.status] || "Ready";
     refs.websocketStatus.title = inspector.error;
     refs.websocketStatusDot.classList.toggle(
         "status-dot-animated",
-        ["analyzing", "connecting", "closing"].includes(inspector.status)
+        ["analyzing", "connecting", "closing", "preparing"].includes(inspector.status)
     );
 
     const socket = inspector.socket;
+    const preparing = Boolean(inspector.prepareController);
     const connecting = socket && socket.readyState === WebSocket.CONNECTING;
     const open = socket && socket.readyState === WebSocket.OPEN;
     const closing = socket && socket.readyState === WebSocket.CLOSING;
-    const label = closing ? "Closing" : connecting ? "Cancel" : open ? "Disconnect" : "Connect";
-    const iconName = connecting ? "x" : open || closing ? "unplug" : "plug";
+    const label = closing
+        ? "Closing"
+        : preparing || connecting
+            ? "Cancel"
+            : open
+                ? "Disconnect"
+                : "Connect";
+    const iconName = preparing || connecting ? "x" : open || closing ? "unplug" : "plug";
     const icon = document.createElement("i");
     icon.dataset.lucide = iconName;
     icon.setAttribute("aria-hidden", "true");
@@ -2305,6 +2447,15 @@ function renderWebSocketState() {
         icon,
         create("span", "", label)
     );
+    refs.websocketUrl.textContent = websocketUrl();
+    refs.websocketTransportButtons.forEach(function (button) {
+        const active = button.dataset.websocketTransport === inspector.transport;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-pressed", String(active));
+        button.disabled = Boolean(
+            preparing || connecting || open || closing
+        );
+    });
     paintIcons();
 }
 
@@ -2408,7 +2559,7 @@ function webSocketDataMessageCount() {
     }).length;
 }
 
-function renderWebSocketTls() {
+function renderWebSocketAnalysis() {
     const inspector = state.websocket;
     if (!isObject(inspector.tls)) {
         const section = createSection("Handshake", "WebSocket TLS", "");
@@ -2418,20 +2569,55 @@ function renderWebSocketTls() {
                 ? "Waiting for TLS analysis"
                 : "Waiting for connection";
         section.append(create("p", "text-secondary mb-0", message));
-        refs.websocketTls.replaceChildren(section);
+        const sections = inspector.receivedConnectionInfo
+            ? [
+                createWebSocketConnectionSection(),
+                createWebSocketHeadersSection(),
+                section,
+            ]
+            : [section];
+        refs.websocketAnalysis.replaceChildren(...sections);
+        paintIcons();
         return;
     }
 
-    const tls = inspector.tls;
-    const connection = createSection("WebSocket", "Connection details", "");
-    connection.append(
+    refs.websocketAnalysis.replaceChildren(
+        createWebSocketConnectionSection(),
+        createWebSocketHeadersSection(),
+        ...createTlsSections(inspector.tls)
+    );
+    paintIcons();
+}
+
+function createWebSocketConnectionSection() {
+    const inspector = state.websocket;
+    const section = createSection("WebSocket", "Connection details", "");
+    section.append(
         createDetailGrid([
             ["Remote address", valueOr(inspector.address, UNAVAILABLE_LABEL), true],
+            ["HTTP version", valueOr(inspector.httpVersion, UNAVAILABLE_LABEL), true],
             ["Message limit", formatByteSize(inspector.maxMessageSize), true],
         ])
     );
-    refs.websocketTls.replaceChildren(connection, ...createTlsSections(tls));
-    paintIcons();
+    return section;
+}
+
+function createWebSocketHeadersSection() {
+    const inspector = state.websocket;
+    const isHttp2 = inspector.httpVersion.startsWith("HTTP/2");
+    const section = createSection(
+        "Opening handshake",
+        isHttp2 ? "Extended CONNECT headers" : "Upgrade request headers",
+        inspector.headers.length + " entries"
+    );
+
+    if (inspector.headers.length === 0) {
+        section.append(createEmptyState("No handshake headers were captured", "rows-3"));
+    } else {
+        section.append(renderHeaderTable(inspector.headers));
+    }
+
+    return section;
 }
 
 function formatByteSize(bytes) {

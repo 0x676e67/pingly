@@ -53,6 +53,25 @@ pub struct HeadersFrame {
     pub continuations: Vec<ContinuationFrame>,
 }
 
+impl HeadersFrame {
+    /// Returns whether this field section opens an Extended CONNECT tunnel for `protocol`.
+    ///
+    /// Extended CONNECT uses `:method = CONNECT` and a `:protocol` pseudo-field. See
+    /// [RFC 8441, Section 4](https://www.rfc-editor.org/rfc/rfc8441.html#section-4).
+    pub fn is_extended_connect(&self, protocol: &[u8]) -> bool {
+        let method = self
+            .headers
+            .iter()
+            .any(|field| field.name.as_ref() == b":method" && field.value.as_ref() == b"CONNECT");
+        let protocol_matches = self.headers.iter().any(|field| {
+            field.name.as_ref() == b":protocol"
+                && field.value.as_ref().eq_ignore_ascii_case(protocol)
+        });
+
+        method && protocol_matches
+    }
+}
+
 /// Deserialization shape used to validate a saved HEADERS frame and its continuations.
 #[derive(Deserialize)]
 struct HeadersFrameRepr {

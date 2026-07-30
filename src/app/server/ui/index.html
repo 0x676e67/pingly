@@ -1175,7 +1175,7 @@
 
         .websocket-control-row {
             display: grid;
-            grid-template-columns: minmax(0, 1fr) auto;
+            grid-template-columns: minmax(0, 1fr) auto auto;
             align-items: center;
             gap: 1rem;
         }
@@ -1207,6 +1207,16 @@
             gap: 0.75rem;
         }
 
+        .websocket-transport {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .websocket-transport .websocket-endpoint-label {
+            margin-bottom: 0;
+        }
+
         .websocket-status {
             display: inline-flex;
             min-height: 1.75rem;
@@ -1223,7 +1233,8 @@
         }
 
         .websocket-status[data-state="connecting"],
-        .websocket-status[data-state="analyzing"] {
+        .websocket-status[data-state="analyzing"],
+        .websocket-status[data-state="preparing"] {
             border-color: var(--pingly-blue-border);
             color: var(--pingly-blue);
             background: var(--pingly-blue-muted);
@@ -1305,6 +1316,11 @@
 
         .websocket-mode-button:hover {
             color: var(--pingly-text);
+        }
+
+        .websocket-mode-button:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
         }
 
         .websocket-mode-button.active {
@@ -2065,6 +2081,10 @@
                 grid-template-columns: minmax(0, 1fr);
             }
 
+            .websocket-transport {
+                justify-content: space-between;
+            }
+
             .websocket-connection-actions {
                 justify-content: space-between;
             }
@@ -2452,6 +2472,33 @@
                                             <span class="websocket-endpoint-label">Endpoint</span>
                                             <code class="websocket-url" id="websocket-url"></code>
                                         </div>
+                                        <div class="websocket-transport">
+                                            <span class="websocket-endpoint-label">
+                                                HTTP version
+                                            </span>
+                                            <div
+                                                class="websocket-mode"
+                                                role="group"
+                                                aria-label="WebSocket HTTP version"
+                                            >
+                                                <button
+                                                    class="websocket-mode-button active"
+                                                    type="button"
+                                                    data-websocket-transport="http1"
+                                                    aria-pressed="true"
+                                                >
+                                                    HTTP/1.1
+                                                </button>
+                                                <button
+                                                    class="websocket-mode-button"
+                                                    type="button"
+                                                    data-websocket-transport="http2"
+                                                    aria-pressed="false"
+                                                >
+                                                    HTTP/2
+                                                </button>
+                                            </div>
+                                        </div>
                                         <div class="websocket-connection-actions">
                                             <span
                                                 class="websocket-status"
@@ -2580,7 +2627,7 @@
                                 </div>
                             </section>
 
-                            <div id="websocket-tls-content"></div>
+                            <div id="websocket-analysis-content"></div>
                         </section>
                         <section id="panel-tcp" role="tabpanel" data-panel="tcp" hidden>
                             <div id="tcp-content"></div>

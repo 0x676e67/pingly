@@ -238,7 +238,7 @@ mod tcp {
     use axum::{
         body::Body,
         extract::ConnectInfo,
-        http::{header, Method, Request, StatusCode},
+        http::{header, Method, Request, StatusCode, Version},
         middleware::AddExtension,
         response::Response,
         Router,
@@ -261,7 +261,7 @@ mod tcp {
 
     use super::{
         accept::{Accept, AcceptOutcome},
-        Handle, ACCEPT_ERROR_BACKOFF, MAX_HEADER_LIST_SIZE,
+        routes, Handle, ACCEPT_ERROR_BACKOFF, MAX_HEADER_LIST_SIZE,
     };
 
     const CONNECTION_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -287,6 +287,10 @@ mod tcp {
         http2
             .timer(TokioTimer::new())
             .auto_date_header(true)
+            // RFC 8441, Section 3 uses SETTINGS_ENABLE_CONNECT_PROTOCOL to opt into
+            // WebSocket extended CONNECT:
+            // <https://www.rfc-editor.org/rfc/rfc8441#section-3>
+            .enable_connect_protocol()
             .max_header_list_size(MAX_HEADER_LIST_SIZE as _);
 
         if close_after_first_request {
@@ -418,24 +422,16 @@ mod tcp {
         S: Service<Request<Body>, Response = Response, Error = Infallible> + Clone + Send + 'static,
         S::Future: Send + 'static,
     {
-        let (close_tx, mut close_rx) = if close_after_first_request {
-            let (sender, receiver) = watch::channel(false);
-            (Some(sender), Some(receiver))
-        } else {
-            (None, None)
-        };
+        let (close_tx, mut close_rx) = watch::channel(false);
         let service = tower::service_fn(move |request: Request<Incoming>| {
             let service = service.clone();
             let close_tx = close_tx.clone();
             async move {
-                let protocol_switch = ProtocolSwitch::from_request(&request);
+                let connection_directive = ConnectionDirective::from_request(&request);
                 let response = service.oneshot(request.map(Body::new)).await?;
 
-                if let Some(sender) = close_tx
-                    .as_ref()
-                    .filter(|_| !protocol_switch.succeeded(&response))
-                {
-                    sender.send_replace(true);
+                if connection_directive.should_close(&response, close_after_first_request) {
+                    close_tx.send_replace(true);
                 }
 
                 Ok::<_, Infallible>(response)
@@ -455,9 +451,7 @@ mod tcp {
                     shutting_down = true;
                     connection.as_mut().graceful_shutdown();
                 }
-                _ = wait_for_close_signal(&mut close_rx),
-                    if close_after_first_request && !shutting_down =>
-                {
+                _ = wait_for_close_signal(&mut close_rx), if !shutting_down => {
                     shutting_down = true;
                     connection.as_mut().graceful_shutdown();
                 }
@@ -465,12 +459,7 @@ mod tcp {
         }
     }
 
-    async fn wait_for_close_signal(receiver: &mut Option<watch::Receiver<bool>>) {
-        let Some(receiver) = receiver.as_mut() else {
-            std::future::pending::<()>().await;
-            return;
-        };
-
+    async fn wait_for_close_signal(receiver: &mut watch::Receiver<bool>) {
         let close_requested = *receiver.borrow_and_update();
         if !close_requested {
             let _ = receiver.changed().await;
@@ -478,14 +467,28 @@ mod tcp {
     }
 
     #[derive(Clone, Copy)]
-    enum ProtocolSwitch {
-        None,
+    enum ConnectionDirective {
+        Default,
+        Close,
+        PreserveIfSuccessful,
         Http1Upgrade,
         ExtendedConnect,
     }
 
-    impl ProtocolSwitch {
+    impl ConnectionDirective {
         fn from_request<B>(request: &Request<B>) -> Self {
+            let path = request.uri().path();
+            if path == routes::WEBSOCKET_HTTP1_PREPARE_PATH {
+                return Self::Close;
+            }
+            if path == routes::WEBSOCKET_HTTP2_PREPARE_PATH {
+                return if request.version() == Version::HTTP_2 {
+                    Self::PreserveIfSuccessful
+                } else {
+                    Self::Close
+                };
+            }
+
             if request.method() == Method::CONNECT
                 && request.extensions().get::<Protocol>().is_some()
             {
@@ -503,15 +506,19 @@ mod tcp {
             if connection_upgrade && request.headers().contains_key(header::UPGRADE) {
                 Self::Http1Upgrade
             } else {
-                Self::None
+                Self::Default
             }
         }
 
-        fn succeeded(self, response: &Response) -> bool {
+        fn should_close(self, response: &Response, close_by_default: bool) -> bool {
             match self {
-                Self::Http1Upgrade => response.status() == StatusCode::SWITCHING_PROTOCOLS,
-                Self::ExtendedConnect => response.status().is_success(),
-                Self::None => false,
+                Self::Close => true,
+                Self::PreserveIfSuccessful => !response.status().is_success(),
+                Self::Http1Upgrade => {
+                    close_by_default && response.status() != StatusCode::SWITCHING_PROTOCOLS
+                }
+                Self::ExtendedConnect => close_by_default && !response.status().is_success(),
+                Self::Default => close_by_default,
             }
         }
     }
@@ -534,12 +541,12 @@ mod tcp {
     mod tests {
         use axum::{
             body::Body,
-            http::{header, Method, Request, StatusCode},
+            http::{header, Method, Request, StatusCode, Version},
             response::Response,
         };
         use hyper::ext::Protocol;
 
-        use super::ProtocolSwitch;
+        use super::{super::routes, ConnectionDirective};
 
         const LATENCY_PATH: &str = "/api/latency";
         const WEBSOCKET_PROTOCOL: &str = "websocket";
@@ -549,7 +556,7 @@ mod tcp {
             let request = Request::get("/").body(()).unwrap();
             let response = Response::new(Body::empty());
 
-            assert!(!ProtocolSwitch::from_request(&request).succeeded(&response));
+            assert!(ConnectionDirective::from_request(&request).should_close(&response, true));
         }
 
         #[test]
@@ -564,7 +571,7 @@ mod tcp {
                 .body(Body::empty())
                 .unwrap();
 
-            assert!(ProtocolSwitch::from_request(&request).succeeded(&response));
+            assert!(!ConnectionDirective::from_request(&request).should_close(&response, true));
         }
 
         #[test]
@@ -579,7 +586,7 @@ mod tcp {
                 .body(Body::empty())
                 .unwrap();
 
-            assert!(!ProtocolSwitch::from_request(&request).succeeded(&response));
+            assert!(ConnectionDirective::from_request(&request).should_close(&response, true));
         }
 
         #[test]
@@ -594,7 +601,7 @@ mod tcp {
                 .insert(Protocol::from_static(WEBSOCKET_PROTOCOL));
             let response = Response::new(Body::empty());
 
-            assert!(ProtocolSwitch::from_request(&request).succeeded(&response));
+            assert!(!ConnectionDirective::from_request(&request).should_close(&response, true));
         }
 
         #[test]
@@ -612,7 +619,7 @@ mod tcp {
                 .body(Body::empty())
                 .unwrap();
 
-            assert!(!ProtocolSwitch::from_request(&request).succeeded(&response));
+            assert!(ConnectionDirective::from_request(&request).should_close(&response, true));
         }
 
         #[test]
@@ -624,7 +631,35 @@ mod tcp {
                 .unwrap();
             let response = Response::new(Body::empty());
 
-            assert!(!ProtocolSwitch::from_request(&request).succeeded(&response));
+            assert!(ConnectionDirective::from_request(&request).should_close(&response, true));
+        }
+
+        #[test]
+        fn http1_preparation_always_closes_the_tcp_connection() {
+            let request = Request::get(routes::WEBSOCKET_HTTP1_PREPARE_PATH)
+                .body(())
+                .unwrap();
+            let response = Response::builder()
+                .status(StatusCode::NO_CONTENT)
+                .body(Body::empty())
+                .unwrap();
+
+            assert!(ConnectionDirective::from_request(&request).should_close(&response, false));
+        }
+
+        #[test]
+        fn successful_http2_preparation_preserves_the_connection() {
+            let request = Request::builder()
+                .version(Version::HTTP_2)
+                .uri(routes::WEBSOCKET_HTTP2_PREPARE_PATH)
+                .body(())
+                .unwrap();
+            let response = Response::builder()
+                .status(StatusCode::NO_CONTENT)
+                .body(Body::empty())
+                .unwrap();
+
+            assert!(!ConnectionDirective::from_request(&request).should_close(&response, true));
         }
     }
 }
@@ -666,7 +701,7 @@ mod quic {
         crypto::HandshakeData,
         inspect::{Http3Capture, InspectedBidiStream, InspectedConnection},
     };
-    use super::{tracker::info::ConnectionTrack, Handle, MAX_HEADER_LIST_SIZE};
+    use super::{routes, tracker::info::ConnectionTrack, Handle, MAX_HEADER_LIST_SIZE};
     use crate::Result;
 
     type Http3Connection = h3::server::Connection<InspectedConnection, Bytes>;
@@ -1002,7 +1037,14 @@ mod quic {
                 }
                 finished = requests.join_next(), if !requests.is_empty() => {
                     if let Some(result) = finished {
-                        log_request_task(result, remote_addr);
+                        match result {
+                            Ok(true) => {
+                                begin_connection_shutdown(&mut connection, remote_addr).await;
+                                break true;
+                            }
+                            Ok(false) => {}
+                            Err(error) => log_request_task(Err(error), remote_addr),
+                        }
                     }
                 }
                 accepted = connection.accept() => {
@@ -1069,7 +1111,7 @@ mod quic {
 
     async fn drain_requests_while_driving(
         connection: &mut Http3Connection,
-        requests: &mut JoinSet<()>,
+        requests: &mut JoinSet<bool>,
         remote_addr: SocketAddr,
     ) {
         while !requests.is_empty() {
@@ -1138,18 +1180,22 @@ mod quic {
         service: S,
         capture: Http3Capture,
         client_hello: Option<Arc<OnceLock<ClientHelloHandshakeBuffer>>>,
-    ) where
+    ) -> bool
+    where
         S: Service<Request<Body>, Response = Response<Body>, Error = Infallible> + Send + 'static,
         S::Future: Send,
     {
-        if timeout(
+        match timeout(
             REQUEST_TIMEOUT,
             serve_request_inner(resolver, remote_addr, service, capture, client_hello),
         )
         .await
-        .is_err()
         {
-            tracing::debug!(%remote_addr, "HTTP/3 request timed out");
+            Ok(close_after_response) => close_after_response,
+            Err(_) => {
+                tracing::debug!(%remote_addr, "HTTP/3 request timed out");
+                false
+            }
         }
     }
 
@@ -1159,7 +1205,8 @@ mod quic {
         service: S,
         capture: Http3Capture,
         client_hello: Option<Arc<OnceLock<ClientHelloHandshakeBuffer>>>,
-    ) where
+    ) -> bool
+    where
         S: Service<Request<Body>, Response = Response<Body>, Error = Infallible> + Send + 'static,
         S::Future: Send,
     {
@@ -1167,9 +1214,10 @@ mod quic {
             Ok(request) => request,
             Err(error) => {
                 tracing::debug!(%error, %remote_addr, "failed to resolve HTTP/3 request");
-                return;
+                return false;
             }
         };
+        let close_after_response = routes::is_websocket_transport_preparation(request.uri().path());
 
         let mut track = ConnectionTrack::default();
         track.set_tls_version_negotiated(Some(ProtocolVersion::TLSv1_3));
@@ -1203,6 +1251,8 @@ mod quic {
         if let Err(error) = send_response(stream, response).await {
             tracing::debug!(%error, %remote_addr, "failed to serve HTTP/3 response");
         }
+
+        close_after_response
     }
 
     async fn send_response(
@@ -1240,7 +1290,7 @@ mod quic {
         }
     }
 
-    async fn drain_request_tasks(requests: &mut JoinSet<()>, remote_addr: SocketAddr) {
+    async fn drain_request_tasks(requests: &mut JoinSet<bool>, remote_addr: SocketAddr) {
         while let Some(result) = requests.join_next().await {
             log_request_task(result, remote_addr);
         }
@@ -1254,7 +1304,7 @@ mod quic {
         }
     }
 
-    fn log_request_task(result: std::result::Result<(), JoinError>, remote_addr: SocketAddr) {
+    fn log_request_task(result: std::result::Result<bool, JoinError>, remote_addr: SocketAddr) {
         if let Err(error) = result {
             if !error.is_cancelled() {
                 tracing::debug!(%error, %remote_addr, "HTTP/3 request task failed");

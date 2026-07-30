@@ -12,7 +12,7 @@ use axum::{
 };
 use pingly::{
     h1::{Http1Head, RequestHead},
-    h2::AkamaiFingerprint,
+    h2::{AkamaiFingerprint, Frame},
     h3::Http3Fingerprint,
     tls::{ClientHelloHandshakeBuffer, ClientHelloParseError, TlsVersion},
 };
@@ -44,6 +44,31 @@ pub struct TlsTrackInfo {
     /// Parsed ClientHello fields flattened into the TLS response object.
     #[serde(flatten)]
     client_hello: ClientHello,
+}
+
+/// TLS and opening-handshake fields collected for a WebSocket connection.
+#[derive(Serialize)]
+pub(in crate::server) struct WebSocketTrackInfo {
+    /// ClientHello analysis for the upgraded connection.
+    pub(in crate::server) tls: Option<TlsTrackInfo>,
+
+    /// Request fields that opened the WebSocket connection.
+    pub(in crate::server) headers: Option<WebSocketHeaders>,
+}
+
+/// Ordered WebSocket opening-handshake fields from HTTP/1 or HTTP/2.
+pub(in crate::server) enum WebSocketHeaders {
+    /// HTTP/1.1 Upgrade request fields.
+    Http1(Http1TrackInfo),
+
+    /// HTTP/2 Extended CONNECT fields retained in the captured frame list.
+    Http2 {
+        /// Shared HTTP/2 frame capture.
+        frames: Http2Frame,
+
+        /// Index of the Extended CONNECT HEADERS frame.
+        frame_index: usize,
+    },
 }
 
 /// HTTP/1.x request header tracking information.
@@ -265,6 +290,43 @@ impl Serialize for Http1TrackInfo {
     }
 }
 
+impl WebSocketHeaders {
+    fn from_http2(frames: Http2Frame) -> Option<Self> {
+        let frame_index = frames
+            .iter()
+            .filter_map(|(index, frame)| match frame {
+                Frame::Headers(headers) if headers.is_extended_connect(b"websocket") => Some(index),
+                _ => None,
+            })
+            .last()?;
+
+        Some(Self::Http2 {
+            frames,
+            frame_index,
+        })
+    }
+}
+
+impl Serialize for WebSocketHeaders {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Http1(info) => info.serialize(serializer),
+            Self::Http2 {
+                frames,
+                frame_index,
+            } => match frames.get(*frame_index) {
+                Some(Frame::Headers(frame)) => frame.headers.serialize(serializer),
+                _ => Err(serde::ser::Error::custom(
+                    "HTTP/2 WebSocket HEADERS frame is no longer available",
+                )),
+            },
+        }
+    }
+}
+
 impl Http2TrackInfo {
     /// Builds HTTP/2 analysis when the captured frames contain fingerprint input.
     pub fn new(sent_frames: Http2Frame) -> Option<Http2TrackInfo> {
@@ -332,9 +394,26 @@ where
 }
 
 impl ConnectionTrack {
-    /// Consumes this capture and computes its TLS analysis, when the ClientHello is complete.
-    pub(in crate::server) fn into_tls_info(self) -> Option<TlsTrackInfo> {
-        protocol_track_info(Track::Tls, self).tls
+    /// Consumes this capture and builds WebSocket TLS and opening-handshake analysis.
+    pub(in crate::server) fn into_websocket_info(self) -> WebSocketTrackInfo {
+        let Self {
+            tls_version_negotiated,
+            tls_handshake_duration: _,
+            client_hello,
+            http1_capture,
+            http2_frames,
+            http3_capture: _,
+        } = self;
+
+        let headers = http1_capture
+            .and_then(http1_track_info)
+            .map(WebSocketHeaders::Http1)
+            .or_else(|| http2_frames.and_then(WebSocketHeaders::from_http2));
+
+        WebSocketTrackInfo {
+            tls: tls_track_info(client_hello, tls_version_negotiated),
+            headers,
+        }
     }
 
     /// Records the TLS version negotiated during the handshake.
@@ -404,18 +483,8 @@ fn protocol_track_info(track: Track, connection_track: ConnectionTrack) -> Proto
         http3_capture,
     } = connection_track;
 
-    let mut client_hello = if track.includes_tls() {
-        client_hello.and_then(|capture| match capture.parse() {
-            Some(Ok(client_hello)) => Some(client_hello),
-            Some(Err(error)) => {
-                tracing::debug!(?error, "failed to parse captured ClientHello");
-                None
-            }
-            None => {
-                tracing::debug!("ClientHello capture was not complete before analysis");
-                None
-            }
-        })
+    let tls = if track.includes_tls() {
+        tls_track_info(client_hello, tls_version_negotiated)
     } else {
         None
     };
@@ -432,30 +501,8 @@ fn protocol_track_info(track: Track, connection_track: ConnectionTrack) -> Proto
         None
     };
 
-    let mut tls = track
-        .includes_tls()
-        .then(|| client_hello.take())
-        .flatten()
-        .map(TlsTrackInfo::new);
-    if let Some(tls) = tls.as_mut() {
-        tls.set_tls_version_negotiated(tls_version_negotiated);
-    }
-
     let http1 = if track.includes_http1() {
-        http1_capture.and_then(|capture| {
-            let buffer = capture.get()?;
-            match buffer.parse() {
-                Ok(Http1Head::Request(request)) => Some(Http1TrackInfo::new(request)),
-                Ok(Http1Head::Response(_)) => {
-                    tracing::debug!("request capture unexpectedly contained an HTTP/1 response");
-                    None
-                }
-                Err(error) => {
-                    tracing::debug!(?error, "failed to parse captured HTTP/1 request head");
-                    None
-                }
-            }
-        })
+        http1_capture.and_then(http1_track_info)
     } else {
         None
     };
@@ -470,6 +517,43 @@ fn protocol_track_info(track: Track, connection_track: ConnectionTrack) -> Proto
         http1,
         http2,
         http3,
+    }
+}
+
+fn tls_track_info(
+    client_hello: Option<ClientHelloCapture>,
+    tls_version_negotiated: Option<ProtocolVersion>,
+) -> Option<TlsTrackInfo> {
+    let client_hello = match client_hello?.parse() {
+        Some(client_hello) => client_hello,
+        None => {
+            tracing::debug!("ClientHello capture was not complete before analysis");
+            return None;
+        }
+    };
+    let mut tls = match client_hello {
+        Ok(client_hello) => TlsTrackInfo::new(client_hello),
+        Err(error) => {
+            tracing::debug!(?error, "failed to parse captured ClientHello");
+            return None;
+        }
+    };
+    tls.set_tls_version_negotiated(tls_version_negotiated);
+    Some(tls)
+}
+
+fn http1_track_info(capture: Http1RequestCapture) -> Option<Http1TrackInfo> {
+    let buffer = capture.get()?;
+    match buffer.parse() {
+        Ok(Http1Head::Request(request)) => Some(Http1TrackInfo::new(request)),
+        Ok(Http1Head::Response(_)) => {
+            tracing::debug!("request capture unexpectedly contained an HTTP/1 response");
+            None
+        }
+        Err(error) => {
+            tracing::debug!(?error, "failed to parse captured HTTP/1 request head");
+            None
+        }
     }
 }
 
@@ -570,13 +654,21 @@ mod tests {
     use std::sync::{Arc, OnceLock};
 
     use pingly::{
-        h1::Http1HeadBuffer,
+        h1::{
+            HeaderField as Http1HeaderField, Http1HeadBuffer, RequestHead, Version as Http1Version,
+        },
+        h2::{
+            frame::{
+                HeaderField as Http2HeaderField, HeadersFlags, HeadersFrame as Http2HeadersFrame,
+            },
+            Frame as Http2WireFrame, FrameType as Http2FrameType,
+        },
         h3::{FrameType, HeaderField, HeadersFrame, Setting, SettingsFrame},
         tls::ClientHelloHandshakeBuffer,
     };
     use serde_json::json;
 
-    use super::{protocol_track_info, ConnectionTrack, Track};
+    use super::{protocol_track_info, ConnectionTrack, Http1TrackInfo, Track, WebSocketHeaders};
     use crate::server::quic::inspect::SettingsCapture;
 
     fn quic_client_hello() -> ClientHelloHandshakeBuffer {
@@ -611,6 +703,75 @@ mod tests {
             serde_json::to_value(http1).unwrap(),
             json!([{"name": "uSeR-aGeNt", "value": "curl"}])
         );
+    }
+
+    #[test]
+    fn websocket_http1_headers_preserve_wire_order_and_name_casing() {
+        let headers = WebSocketHeaders::Http1(Http1TrackInfo::new(RequestHead {
+            head_length: 0,
+            method: "GET".into(),
+            target: "/api/websocket".into(),
+            version: Http1Version::HTTP_11,
+            headers: vec![
+                Http1HeaderField::new("Connection", b"Upgrade".as_slice()),
+                Http1HeaderField::new("uPgRaDe", b"websocket".as_slice()),
+            ],
+        }));
+
+        assert_eq!(
+            serde_json::to_value(headers).unwrap(),
+            json!([
+                {"name": "Connection", "value": "Upgrade"},
+                {"name": "uPgRaDe", "value": "websocket"}
+            ])
+        );
+    }
+
+    #[test]
+    fn websocket_http2_headers_select_the_extended_connect_request() {
+        let frames = Arc::new(boxcar::Vec::new());
+        frames.push(http2_headers_frame(
+            1,
+            &[(b":method", b"GET"), (b":path", b"/api/websocket/http2")],
+        ));
+        frames.push(http2_headers_frame(
+            3,
+            &[
+                (b":method", b"CONNECT"),
+                (b":protocol", b"websocket"),
+                (b":path", b"/api/websocket"),
+                (b"origin", b"https://localhost"),
+            ],
+        ));
+
+        let headers = WebSocketHeaders::from_http2(frames).unwrap();
+        assert_eq!(
+            serde_json::to_value(headers).unwrap(),
+            json!([
+                {"name": ":method", "value": "CONNECT"},
+                {"name": ":protocol", "value": "websocket"},
+                {"name": ":path", "value": "/api/websocket"},
+                {"name": "origin", "value": "https://localhost"}
+            ])
+        );
+    }
+
+    fn http2_headers_frame(stream_id: u32, headers: &[(&[u8], &[u8])]) -> Http2WireFrame {
+        Http2WireFrame::Headers(Http2HeadersFrame {
+            frame_type: Http2FrameType::Headers,
+            stream_id,
+            length: 0,
+            headers: headers
+                .iter()
+                .map(|(name, value)| Http2HeaderField {
+                    name: Box::from(*name),
+                    value: Box::from(*value),
+                })
+                .collect(),
+            flags: HeadersFlags::from(0x04),
+            priority: None,
+            continuations: Vec::new(),
+        })
     }
 
     #[test]
