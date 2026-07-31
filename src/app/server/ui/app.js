@@ -2099,11 +2099,21 @@ async function connectWebSocket() {
 }
 
 async function prepareWebSocketTransport(transport, signal) {
-    const path = WEBSOCKET_PREPARE_PATHS[transport];
-    if (!path) {
+    if (!WEBSOCKET_PREPARE_PATHS[transport]) {
         throw new Error("Unknown WebSocket HTTP version");
     }
 
+    if (transport === "http2") {
+        // HTTP/2 can carry many streams on one connection. Close a reusable connection first so
+        // the next capture belongs to this WebSocket handshake.
+        // https://www.rfc-editor.org/rfc/rfc8441#section-1
+        await requestWebSocketPreparation("http1", signal);
+    }
+    await requestWebSocketPreparation(transport, signal);
+}
+
+async function requestWebSocketPreparation(transport, signal) {
+    const path = WEBSOCKET_PREPARE_PATHS[transport];
     for (let attempt = 0; attempt < 2; attempt += 1) {
         const response = await fetch(path, {
             cache: "no-store",

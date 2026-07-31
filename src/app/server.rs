@@ -472,7 +472,6 @@ mod tcp {
         Close,
         PreserveIfSuccessful,
         Http1Upgrade,
-        ExtendedConnect,
     }
 
     impl ConnectionDirective {
@@ -492,7 +491,11 @@ mod tcp {
             if request.method() == Method::CONNECT
                 && request.extensions().get::<Protocol>().is_some()
             {
-                return Self::ExtendedConnect;
+                // An HTTP/2 WebSocket occupies one stream, so graceful shutdown can let that
+                // stream finish while preventing later handshakes from reusing its capture.
+                // See RFC 8441, Section 1:
+                // <https://www.rfc-editor.org/rfc/rfc8441#section-1>
+                return Self::Close;
             }
 
             let connection_upgrade = request
@@ -517,7 +520,6 @@ mod tcp {
                 Self::Http1Upgrade => {
                     close_by_default && response.status() != StatusCode::SWITCHING_PROTOCOLS
                 }
-                Self::ExtendedConnect => close_by_default && !response.status().is_success(),
                 Self::Default => close_by_default,
             }
         }
@@ -590,7 +592,7 @@ mod tcp {
         }
 
         #[test]
-        fn extended_connect_streams_remain_open() {
+        fn extended_connect_drains_the_connection_after_upgrade() {
             let mut request = Request::builder()
                 .method(Method::CONNECT)
                 .uri(LATENCY_PATH)
@@ -601,7 +603,7 @@ mod tcp {
                 .insert(Protocol::from_static(WEBSOCKET_PROTOCOL));
             let response = Response::new(Body::empty());
 
-            assert!(!ConnectionDirective::from_request(&request).should_close(&response, true));
+            assert!(ConnectionDirective::from_request(&request).should_close(&response, true));
         }
 
         #[test]
