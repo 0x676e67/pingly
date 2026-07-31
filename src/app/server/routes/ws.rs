@@ -1,6 +1,11 @@
 //! WebSocket connection analysis and bounded message echo sessions.
 
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    net::{IpAddr, SocketAddr},
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use axum::{
     extract::{
@@ -13,32 +18,91 @@ use axum::{
 };
 use futures_util::SinkExt;
 use serde::Serialize;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::{
+    sync::{OwnedSemaphorePermit, Semaphore},
+    time::timeout,
+};
 
 use super::spawn_blocking_analysis;
 use crate::server::tracker::info::{ConnectionTrack, WebSocketTrackInfo};
 
 const MAX_SESSIONS: usize = 64;
+const MAX_SESSIONS_PER_IP: usize = 8;
 const READ_BUFFER_SIZE: usize = 16 * 1024;
 const WRITE_BUFFER_SIZE: usize = 16 * 1024;
 const MAX_WRITE_BUFFER_SIZE: usize = 512 * 1024;
 const MAX_MESSAGE_SIZE: usize = 256 * 1024;
-const MAX_FRAME_SIZE: usize = 64 * 1024;
+const SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const SESSION_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 const PREPARE_RETRY_STATUS: StatusCode = StatusCode::CONFLICT;
 
 /// Limits upgraded sessions independently from the request concurrency layer.
 #[derive(Clone)]
-pub(super) struct Sessions(Arc<Semaphore>);
+pub(super) struct Sessions(Arc<SessionLimits>);
+
+struct SessionLimits {
+    /// Global permits for active WebSocket sessions.
+    global: Arc<Semaphore>,
+
+    /// Active session counts grouped by remote IP address.
+    peers: Mutex<HashMap<IpAddr, usize>>,
+}
+
+struct SessionPermit {
+    /// Releases one global session slot when this guard is dropped.
+    _global: OwnedSemaphorePermit,
+
+    /// Remote IP address charged for this session.
+    peer: IpAddr,
+
+    /// Shared counters updated when this guard is dropped.
+    limits: Arc<SessionLimits>,
+}
 
 impl Sessions {
     pub(super) fn new(concurrent_limit: usize) -> Self {
-        Self(Arc::new(Semaphore::new(
-            concurrent_limit.clamp(1, MAX_SESSIONS),
-        )))
+        Self(Arc::new(SessionLimits {
+            global: Arc::new(Semaphore::new(concurrent_limit.clamp(1, MAX_SESSIONS))),
+            peers: Mutex::new(HashMap::new()),
+        }))
     }
 
-    fn try_acquire(&self) -> Option<OwnedSemaphorePermit> {
-        self.0.clone().try_acquire_owned().ok()
+    fn try_acquire(&self, peer: IpAddr) -> Option<SessionPermit> {
+        let global = self.0.global.clone().try_acquire_owned().ok()?;
+        let mut peers = self
+            .0
+            .peers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let active = peers.entry(peer).or_default();
+        if *active >= MAX_SESSIONS_PER_IP {
+            return None;
+        }
+        *active += 1;
+        drop(peers);
+
+        Some(SessionPermit {
+            _global: global,
+            peer,
+            limits: self.0.clone(),
+        })
+    }
+}
+
+impl Drop for SessionPermit {
+    fn drop(&mut self) {
+        let mut peers = self
+            .limits
+            .peers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Entry::Occupied(mut entry) = peers.entry(self.peer) {
+            if *entry.get() > 1 {
+                *entry.get_mut() -= 1;
+            } else {
+                entry.remove();
+            }
+        }
     }
 }
 
@@ -58,7 +122,7 @@ pub(super) async fn analyze(
             .into_response();
     }
 
-    let Some(permit) = sessions.try_acquire() else {
+    let Some(permit) = sessions.try_acquire(address.ip()) else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             "WebSocket session limit reached",
@@ -73,7 +137,7 @@ pub(super) async fn analyze(
         .write_buffer_size(WRITE_BUFFER_SIZE)
         .max_write_buffer_size(MAX_WRITE_BUFFER_SIZE)
         .max_message_size(MAX_MESSAGE_SIZE)
-        .max_frame_size(MAX_FRAME_SIZE)
+        .max_frame_size(MAX_MESSAGE_SIZE)
         .on_upgrade(move |socket| run(socket, address, version, track, permit))
 }
 
@@ -119,7 +183,7 @@ async fn run(
     address: SocketAddr,
     version: Version,
     track: ConnectionTrack,
-    _permit: OwnedSemaphorePermit,
+    _permit: SessionPermit,
 ) {
     let analysis = match spawn_blocking_analysis(move || track.into_websocket_info()).await {
         Ok(analysis) => analysis,
@@ -134,10 +198,27 @@ async fn run(
         return;
     }
 
-    while let Some(message) = socket.recv().await {
+    loop {
+        let message = match timeout(SESSION_IDLE_TIMEOUT, socket.recv()).await {
+            Ok(Some(message)) => message,
+            Ok(None) => return,
+            Err(_) => {
+                tracing::debug!(%address, "WebSocket session reached its idle timeout");
+                let _ = send_bounded(
+                    &mut socket,
+                    Message::Close(Some(CloseFrame {
+                        code: close_code::AWAY,
+                        reason: "Idle timeout".into(),
+                    })),
+                )
+                .await;
+                return;
+            }
+        };
+
         match message {
             Ok(message @ (Message::Text(_) | Message::Binary(_))) => {
-                if socket.send(message).await.is_err() {
+                if !send_bounded(&mut socket, message).await {
                     tracing::debug!(%address, "WebSocket closed while echoing a message");
                     return;
                 }
@@ -155,7 +236,10 @@ async fn run(
                 // Tungstenite queues the peer's Close reply while reading it. Flush that reply
                 // before dropping the stream, as required by RFC 6455, Section 7.1.2:
                 // <https://www.rfc-editor.org/rfc/rfc6455#section-7.1.2>
-                if SinkExt::close(&mut socket).await.is_err() {
+                if !matches!(
+                    timeout(SESSION_WRITE_TIMEOUT, SinkExt::close(&mut socket)).await,
+                    Ok(Ok(()))
+                ) {
                     tracing::debug!(%address, "WebSocket closing handshake failed");
                 }
                 return;
@@ -190,7 +274,7 @@ async fn send_connection_info(
         }
     };
 
-    if socket.send(Message::Text(payload.into())).await.is_err() {
+    if !send_bounded(socket, Message::Text(payload.into())).await {
         tracing::debug!(%address, "WebSocket closed before connection analysis delivery");
         return false;
     }
@@ -198,13 +282,22 @@ async fn send_connection_info(
     true
 }
 
+async fn send_bounded(socket: &mut WebSocket, message: Message) -> bool {
+    matches!(
+        timeout(SESSION_WRITE_TIMEOUT, socket.send(message)).await,
+        Ok(Ok(()))
+    )
+}
+
 async fn close_with_internal_error(socket: &mut WebSocket) {
-    let _ = socket
-        .send(Message::Close(Some(CloseFrame {
+    let _ = send_bounded(
+        socket,
+        Message::Close(Some(CloseFrame {
             code: close_code::ERROR,
             reason: "Connection analysis failed".into(),
-        })))
-        .await;
+        })),
+    )
+    .await;
 }
 
 #[derive(Serialize)]
@@ -234,7 +327,7 @@ mod tests {
     use axum::http::Version;
     use serde_json::json;
 
-    use super::{ServerEvent, Sessions, MAX_MESSAGE_SIZE};
+    use super::{ServerEvent, Sessions, MAX_MESSAGE_SIZE, MAX_SESSIONS_PER_IP};
     use crate::server::tracker::info::WebSocketTrackInfo;
 
     #[test]
@@ -266,10 +359,28 @@ mod tests {
     #[test]
     fn session_permit_is_released_when_the_session_ends() {
         let sessions = Sessions::new(1);
-        let permit = sessions.try_acquire().unwrap();
+        let peer = Ipv4Addr::LOCALHOST.into();
+        let permit = sessions.try_acquire(peer).unwrap();
 
-        assert!(sessions.try_acquire().is_none());
+        assert!(sessions.try_acquire(peer).is_none());
         drop(permit);
-        assert!(sessions.try_acquire().is_some());
+        assert!(sessions.try_acquire(peer).is_some());
+    }
+
+    #[test]
+    fn one_peer_cannot_exhaust_the_global_session_limit() {
+        let sessions = Sessions::new(MAX_SESSIONS_PER_IP + 1);
+        let peer = Ipv4Addr::LOCALHOST.into();
+        let permits = (0..MAX_SESSIONS_PER_IP)
+            .map(|_| sessions.try_acquire(peer).unwrap())
+            .collect::<Vec<_>>();
+
+        assert!(sessions.try_acquire(peer).is_none());
+        assert!(sessions
+            .try_acquire(Ipv4Addr::new(192, 0, 2, 1).into())
+            .is_some());
+
+        drop(permits);
+        assert!(sessions.try_acquire(peer).is_some());
     }
 }
