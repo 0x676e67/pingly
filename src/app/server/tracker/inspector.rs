@@ -27,6 +27,7 @@ pub type Http2Frame = Arc<boxcar::Vec<Frame>>;
 
 const HTTP2_CAPTURE_MAX_BYTES: usize = 1024 * 1024;
 const HTTP2_CAPTURE_MAX_FRAMES: usize = 128;
+const HTTP2_CAPTURE_MAX_HEADER_BLOCKS: usize = 2;
 
 #[derive(Default)]
 struct Http2CaptureBudget {
@@ -35,6 +36,9 @@ struct Http2CaptureBudget {
 
     /// Number of complete wire frames observed.
     frames: usize,
+
+    /// Number of complete HEADERS field sections observed.
+    header_blocks: usize,
 
     /// Whether this connection no longer needs inspection.
     stopped: bool,
@@ -67,6 +71,14 @@ impl Http2CaptureBudget {
             self.frames += 1;
         }
         self.frames < HTTP2_CAPTURE_MAX_FRAMES
+    }
+
+    /// Allows the UI warm-up request before the WebSocket Extended CONNECT field section.
+    ///
+    /// The warm-up gives the browser an HTTP/2 connection to reuse for the WebSocket stream.
+    fn record_header_block(&mut self) -> bool {
+        self.header_blocks = self.header_blocks.saturating_add(1);
+        self.header_blocks >= HTTP2_CAPTURE_MAX_HEADER_BLOCKS
     }
 
     #[inline]
@@ -324,8 +336,8 @@ where
 pin_project! {
     /// TLS stream wrapper that captures the initial HTTP/2 client frame sequence.
     ///
-    /// Capture stops after the first complete HEADERS block or when its byte or frame budget is
-    /// exhausted. Reads and writes continue normally after capture stops.
+    /// Capture stops after an Extended CONNECT or the second complete HEADERS block. Byte and
+    /// frame limits provide the remaining bounds. Reads and writes continue normally afterward.
     pub struct Http2Inspector<I> {
         // TLS stream forwarded to Hyper.
         #[pin]
@@ -412,7 +424,13 @@ where
                         stop_capture = true;
                     }
 
-                    let headers_complete = matches!(frame, Some(Frame::Headers(_)));
+                    let headers_complete = match frame.as_ref() {
+                        Some(Frame::Headers(headers)) => {
+                            let limit_reached = this.capture_budget.record_header_block();
+                            headers.is_extended_connect(b"websocket") || limit_reached
+                        }
+                        _ => false,
+                    };
                     if let Some(frame) = frame {
                         frames.push(frame);
                     }

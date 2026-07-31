@@ -35,6 +35,8 @@ const HTTP1_PATH: &str = "/api/http1";
 const HTTP2_PATH: &str = "/api/http2";
 const HTTP3_PATH: &str = "/api/http3";
 const WEBSOCKET_PATH: &str = "/api/websocket";
+pub(super) const WEBSOCKET_HTTP1_PREPARE_PATH: &str = "/api/websocket/http1";
+pub(super) const WEBSOCKET_HTTP2_PREPARE_PATH: &str = "/api/websocket/http2";
 const TCP_PATH: &str = "/api/tcp";
 const LATENCY_PATH: &str = "/api/latency";
 
@@ -114,7 +116,19 @@ const PUBLIC_ROUTES: &[PublicRoute] = &[
     PublicRoute {
         method: "WS",
         path: WEBSOCKET_PATH,
-        purpose: "WebSocket TLS and message inspector",
+        purpose: "WebSocket handshake and message inspector",
+        availability: ALWAYS_AVAILABLE,
+    },
+    PublicRoute {
+        method: "GET",
+        path: WEBSOCKET_HTTP1_PREPARE_PATH,
+        purpose: "Prepare an HTTP/1.1 WebSocket connection",
+        availability: ALWAYS_AVAILABLE,
+    },
+    PublicRoute {
+        method: "GET",
+        path: WEBSOCKET_HTTP2_PREPARE_PATH,
+        purpose: "Prepare an HTTP/2 WebSocket connection",
         availability: ALWAYS_AVAILABLE,
     },
     PublicRoute {
@@ -132,6 +146,10 @@ const PUBLIC_ROUTES: &[PublicRoute] = &[
 ];
 
 static UI_DOCUMENT: LazyLock<Box<str>> = LazyLock::new(build_ui_document);
+
+pub(super) fn is_websocket_transport_preparation(path: &str) -> bool {
+    path == WEBSOCKET_HTTP1_PREPARE_PATH || path == WEBSOCKET_HTTP2_PREPARE_PATH
+}
 
 // Compression can change the transfer bytes without changing the UI document, so the
 // validator is weak across content codings. See RFC 9110, Section 8.8.3:
@@ -161,7 +179,9 @@ pub(crate) fn router(
         .route(
             WEBSOCKET_PATH,
             any(ws::analyze).layer(Extension(ws::Sessions::new(concurrent_limit))),
-        );
+        )
+        .route(WEBSOCKET_HTTP1_PREPARE_PATH, get(ws::prepare_http1))
+        .route(WEBSOCKET_HTTP2_PREPARE_PATH, get(ws::prepare_http2));
 
     #[cfg(target_os = "linux")]
     let router = if let Some(capture) = tcp_capture {
