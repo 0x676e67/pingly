@@ -357,18 +357,7 @@ mod tests {
     }
 
     #[test]
-    fn session_permit_is_released_when_the_session_ends() {
-        let sessions = Sessions::new(1);
-        let peer = Ipv4Addr::LOCALHOST.into();
-        let permit = sessions.try_acquire(peer).unwrap();
-
-        assert!(sessions.try_acquire(peer).is_none());
-        drop(permit);
-        assert!(sessions.try_acquire(peer).is_some());
-    }
-
-    #[test]
-    fn one_peer_cannot_exhaust_the_global_session_limit() {
+    fn session_limits_isolate_peers_and_release_capacity() {
         let sessions = Sessions::new(MAX_SESSIONS_PER_IP + 1);
         let peer = Ipv4Addr::LOCALHOST.into();
         let permits = (0..MAX_SESSIONS_PER_IP)
@@ -376,11 +365,15 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(sessions.try_acquire(peer).is_none());
-        assert!(sessions
+        let other_peer_permit = sessions
             .try_acquire(Ipv4Addr::new(192, 0, 2, 1).into())
-            .is_some());
+            .unwrap();
+        assert!(sessions
+            .try_acquire(Ipv4Addr::new(192, 0, 2, 2).into())
+            .is_none());
 
         drop(permits);
         assert!(sessions.try_acquire(peer).is_some());
+        drop(other_peer_permit);
     }
 }

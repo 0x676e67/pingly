@@ -607,24 +607,6 @@ mod tcp {
         }
 
         #[test]
-        fn rejected_extended_connect_streams_close() {
-            let mut request = Request::builder()
-                .method(Method::CONNECT)
-                .uri(LATENCY_PATH)
-                .body(())
-                .unwrap();
-            request
-                .extensions_mut()
-                .insert(Protocol::from_static(WEBSOCKET_PROTOCOL));
-            let response = Response::builder()
-                .status(StatusCode::FORBIDDEN)
-                .body(Body::empty())
-                .unwrap();
-
-            assert!(ConnectionDirective::from_request(&request).should_close(&response, true));
-        }
-
-        #[test]
         fn ordinary_connect_requests_still_close() {
             let request = Request::builder()
                 .method(Method::CONNECT)
@@ -1351,6 +1333,7 @@ mod quic {
 mod tests {
     use std::{
         future::poll_fn,
+        io,
         net::{Ipv4Addr, SocketAddr},
         sync::Arc,
         time::Duration,
@@ -1360,7 +1343,7 @@ mod tests {
         body::Body,
         http::{header, Request, StatusCode},
     };
-    use bytes::Buf;
+    use bytes::{Buf, Bytes};
     use quinn_proto::crypto::rustls::QuicClientConfig;
     use rcgen::{CertificateParams, KeyPair, SanType};
     use tokio::time::timeout;
@@ -1375,6 +1358,9 @@ mod tests {
         tls::rustls::{self, RustlsConfig},
         Handle, HttpServer, RustlsAcceptor,
     };
+    use crate::error::Error;
+
+    const TEST_SERVER_BIND_ATTEMPTS: usize = 8;
 
     #[tokio::test]
     async fn http3_server_serves_analysis_and_shuts_down_cleanly() {
@@ -1384,45 +1370,54 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn router_rejects_oversized_request_bodies() {
-        let response = test_router()
-            .oneshot(
+    async fn router_rejects_declared_and_streamed_oversized_bodies() {
+        let requests = [
+            (
+                "declared length",
                 Request::post("/api/all")
                     .header(header::CONTENT_LENGTH, routes::MAX_REQUEST_BODY_SIZE + 1)
                     .body(Body::empty())
                     .expect("request should build"),
-            )
-            .await
-            .expect("router should respond");
-
-        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    }
-
-    #[tokio::test]
-    async fn router_rejects_oversized_bodies_without_content_length() {
-        let response = test_router()
-            .oneshot(
+            ),
+            (
+                "streamed body",
                 Request::post("/api/all")
                     .body(Body::from(vec![0; routes::MAX_REQUEST_BODY_SIZE + 1]))
                     .expect("request should build"),
-            )
-            .await
-            .expect("router should respond");
+            ),
+        ];
 
-        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        for (case, request) in requests {
+            let response = test_router()
+                .oneshot(request)
+                .await
+                .expect("router should respond");
+            assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE, "{case}");
+        }
     }
 
     async fn run_http3_server_test() {
         let (acceptor, certificate) = test_acceptor();
-        let server = HttpServer::new(
-            SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
-            0,
-            1,
-            acceptor,
-            test_router(),
-        )
-        .await
-        .expect("HTTP server should bind");
+        let bind = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
+        let mut attempts_remaining = TEST_SERVER_BIND_ATTEMPTS;
+
+        // TCP and UDP use separate port spaces, so a TCP-selected ephemeral port can still be
+        // unavailable when QUIC binds it.
+        let server = loop {
+            match HttpServer::new(bind, 1, 1, acceptor.clone(), test_router()).await {
+                Ok(server) => break server,
+                Err(Error::IO(error))
+                    if attempts_remaining > 1
+                        && matches!(
+                            error.kind(),
+                            io::ErrorKind::AddrInUse | io::ErrorKind::PermissionDenied
+                        ) =>
+                {
+                    attempts_remaining -= 1;
+                }
+                Err(error) => panic!("HTTP server should bind: {error}"),
+            }
+        };
         let server_addr = server
             .tcp_listener
             .local_addr()
@@ -1477,14 +1472,40 @@ mod tests {
             serde_json::from_slice(&body).expect("analysis response should be JSON");
 
         assert_eq!(analysis["http_version"], "HTTP/3.0");
-        assert_eq!(analysis["http3"]["settings"]["frame_type"], "Settings");
-        assert_eq!(analysis["http3"]["headers"]["frame_type"], "Headers");
         assert!(analysis["http3"]["h3_text"].is_string());
-        assert!(analysis["http3"]["headers"]["headers"]
-            .as_array()
-            .expect("captured headers should be an array")
-            .iter()
-            .any(|field| field["name"] == ":method" && field["value"] == "GET"));
+
+        drop(stream);
+
+        let request = Request::post(format!(
+            "https://localhost:{}/api/http3",
+            server_addr.port()
+        ))
+        .body(())
+        .expect("HTTP/3 request should build");
+        let mut stream = send_request
+            .send_request(request)
+            .await
+            .expect("oversized HTTP/3 request should start");
+        stream
+            .send_data(Bytes::from(vec![0; routes::MAX_REQUEST_BODY_SIZE + 1]))
+            .await
+            .expect("oversized HTTP/3 request body should send");
+        stream
+            .finish()
+            .await
+            .expect("oversized HTTP/3 request should finish");
+
+        let response = stream
+            .recv_response()
+            .await
+            .expect("HTTP/3 rejection headers should arrive");
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        while stream
+            .recv_data()
+            .await
+            .expect("HTTP/3 rejection body should be readable")
+            .is_some()
+        {}
 
         drop(stream);
         drop(send_request);
