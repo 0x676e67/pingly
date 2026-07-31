@@ -656,7 +656,7 @@ mod quic {
         http::{Request, Response},
         Router,
     };
-    use bytes::Bytes;
+    use bytes::{Buf, Bytes};
     use h3::error::Code;
     use http_body_util::BodyExt;
     use pingly::tls::ClientHelloHandshakeBuffer;
@@ -1182,7 +1182,7 @@ mod quic {
         S: Service<Request<Body>, Response = Response<Body>, Error = Infallible> + Send + 'static,
         S::Future: Send,
     {
-        let (request, stream) = match resolver.resolve_request().await {
+        let (request, mut stream) = match resolver.resolve_request().await {
             Ok(request) => request,
             Err(error) => {
                 tracing::debug!(%error, %remote_addr, "failed to resolve HTTP/3 request");
@@ -1190,6 +1190,34 @@ mod quic {
             }
         };
         let close_after_response = routes::is_websocket_transport_preparation(request.uri().path());
+        let body_response = if routes::limits_request_body(request.uri().path()) {
+            if routes::request_body_length_exceeds(request.headers()) {
+                Some(routes::request_body_too_large())
+            } else {
+                match timeout(
+                    routes::REQUEST_BODY_READ_TIMEOUT,
+                    h3_body_within_limit(&mut stream),
+                )
+                .await
+                {
+                    Ok(Ok(true)) => None,
+                    Ok(Ok(false)) => Some(routes::request_body_too_large()),
+                    Ok(Err(error)) => {
+                        tracing::debug!(%error, %remote_addr, "failed to read HTTP/3 request body");
+                        Some(routes::request_body_read_failed())
+                    }
+                    Err(_) => Some(routes::request_body_timed_out()),
+                }
+            }
+        } else {
+            None
+        };
+        if let Some(response) = body_response {
+            if let Err(error) = send_response(stream, response).await {
+                tracing::debug!(%error, %remote_addr, "failed to serve HTTP/3 response");
+            }
+            return close_after_response;
+        }
 
         let mut track = ConnectionTrack::default();
         track.set_tls_version_negotiated(Some(ProtocolVersion::TLSv1_3));
@@ -1227,11 +1255,28 @@ mod quic {
         close_after_response
     }
 
+    async fn h3_body_within_limit(
+        stream: &mut RequestStream,
+    ) -> std::result::Result<bool, BoxError> {
+        let mut received = 0usize;
+        while let Some(data) = stream.recv_data().await? {
+            let Some(total) = received.checked_add(data.remaining()) else {
+                return Ok(false);
+            };
+            if total > routes::MAX_REQUEST_BODY_SIZE {
+                return Ok(false);
+            }
+            received = total;
+        }
+
+        Ok(true)
+    }
+
     async fn send_response(
         mut stream: RequestStream,
         response: Response<Body>,
     ) -> std::result::Result<(), BoxError> {
-        // Analysis routes do not consume request bodies.
+        // No handler reads the request body after dispatch, so stop any unread request stream.
         stream.stop_sending(Code::H3_NO_ERROR);
 
         let (parts, body) = response.into_parts();
@@ -1343,6 +1388,20 @@ mod tests {
                 Request::post("/api/all")
                     .header(header::CONTENT_LENGTH, routes::MAX_REQUEST_BODY_SIZE + 1)
                     .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn router_rejects_oversized_bodies_without_content_length() {
+        let response = test_router()
+            .oneshot(
+                Request::post("/api/all")
+                    .body(Body::from(vec![0; routes::MAX_REQUEST_BODY_SIZE + 1]))
                     .expect("request should build"),
             )
             .await
