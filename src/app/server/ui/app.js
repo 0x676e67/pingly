@@ -6,6 +6,7 @@ const VIEW_META = {
     http: ["Header order", "HTTP request"],
     h2: ["Frame sequence", "HTTP/2 analysis"],
     h3: ["Transport parameters", "HTTP/3 analysis"],
+    ws: ["Live connection", "WebSocket debugger"],
     tcp: ["Packet capture", "TCP analysis"],
     proxy: ["Cross-layer latency", "Latency analysis"],
     json: ["Serialized response", "Raw JSON"],
@@ -14,10 +15,25 @@ const VIEW_ORDER = Object.keys(VIEW_META);
 const SERVER_ROUTES = /* PINGLY_ROUTES */ [];
 const DEFAULT_JSON_ROUTE = "/api/all";
 const LATENCY_PATH = "/api/latency";
+const WEBSOCKET_PATH = "/api/websocket";
+const WEBSOCKET_PREPARE_PATHS = {
+    http1: "/api/websocket/http1",
+    http2: "/api/websocket/http2",
+};
+const WEBSOCKET_TRANSPORT_LABELS = {
+    http1: "HTTP/1.1",
+    http2: "HTTP/2",
+};
+const WEBSOCKET_PREPARE_RETRY_STATUS = 409;
 const UNAVAILABLE_LABEL = "Unavailable";
 const JSON_ROUTE_FEEDBACK_MS = 300;
 const PRIORITY_PROBE_TIMEOUT_MS = 10_000;
 const PRIORITY_PROBE_SETTLE_MS = 250;
+const WEBSOCKET_DEFAULT_MAX_MESSAGE_SIZE = 256 * 1024;
+const WEBSOCKET_HISTORY_LIMIT = 100;
+const WEBSOCKET_TEXT_PREVIEW_LIMIT = 4096;
+const WEBSOCKET_BINARY_PREVIEW_LIMIT = 512;
+const UTF8_ENCODER = new TextEncoder();
 const PRIORITY_PROBES = [
     {
         id: "navigation",
@@ -98,6 +114,22 @@ const state = {
     proxySamplesTotal: 0,
     proxySocket: null,
     proxyTimer: null,
+    websocket: {
+        address: "",
+        closeRequested: false,
+        error: "",
+        headers: [],
+        httpVersion: "",
+        maxMessageSize: WEBSOCKET_DEFAULT_MAX_MESSAGE_SIZE,
+        messages: [],
+        mode: "text",
+        prepareController: null,
+        receivedConnectionInfo: false,
+        socket: null,
+        status: "idle",
+        tls: null,
+        transport: "http1",
+    },
     activeView: "overview",
     controller: null,
     jsonController: null,
@@ -135,10 +167,30 @@ function init() {
     refs.sidebarBackdrop = document.getElementById("analysis-sidebar-backdrop");
     refs.navItems = Array.from(document.querySelectorAll("[data-view]"));
     refs.panels = Array.from(document.querySelectorAll("[data-panel]"));
+    refs.websocketStatus = document.getElementById("websocket-status");
+    refs.websocketStatusDot = document.getElementById("websocket-status-dot");
+    refs.websocketStatusLabel = document.getElementById("websocket-status-label");
+    refs.websocketUrl = document.getElementById("websocket-url");
+    refs.websocketConnectButton = document.getElementById("websocket-connect-button");
+    refs.websocketAnalysis = document.getElementById("websocket-analysis-content");
+    refs.websocketModeButtons = Array.from(
+        document.querySelectorAll("[data-websocket-mode]")
+    );
+    refs.websocketTransportButtons = Array.from(
+        document.querySelectorAll("[data-websocket-transport]")
+    );
+    refs.websocketInput = document.getElementById("websocket-message-input");
+    refs.websocketInputSize = document.getElementById("websocket-message-size");
+    refs.websocketSendButton = document.getElementById("websocket-send-button");
+    refs.websocketClearButton = document.getElementById("websocket-clear-button");
+    refs.websocketMessageLog = document.getElementById("websocket-message-log");
+    refs.websocketMessageCount = document.getElementById("websocket-message-count");
 
     renderJsonRouteOptions();
     bindEvents();
     restoreTheme();
+    refs.websocketUrl.textContent = websocketUrl();
+    renderWebSocket();
 
     const initialView = window.location.hash.slice(1);
     if (VIEW_ORDER.includes(initialView)) {
@@ -217,6 +269,28 @@ function bindEvents() {
     desktopLayout.addEventListener("change", syncSidebarLayout);
     window.addEventListener("resize", syncSidebarLayout, { passive: true });
     window.addEventListener("load", syncSidebarLayout, { once: true });
+    window.addEventListener("beforeunload", closeWebSocketForUnload);
+
+    refs.websocketConnectButton.addEventListener("click", toggleWebSocket);
+    refs.websocketSendButton.addEventListener("click", sendWebSocketMessage);
+    refs.websocketClearButton.addEventListener("click", clearWebSocketMessages);
+    refs.websocketInput.addEventListener("input", renderWebSocketComposer);
+    refs.websocketInput.addEventListener("keydown", function (event) {
+        if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+            event.preventDefault();
+            sendWebSocketMessage();
+        }
+    });
+    refs.websocketModeButtons.forEach(function (button) {
+        button.addEventListener("click", function () {
+            setWebSocketMode(button.dataset.websocketMode);
+        });
+    });
+    refs.websocketTransportButtons.forEach(function (button) {
+        button.addEventListener("click", function () {
+            setWebSocketTransport(button.dataset.websocketTransport);
+        });
+    });
 }
 
 function syncSidebarLayout() {
@@ -440,7 +514,7 @@ function renderJsonRouteOptions() {
     const fragment = document.createDocumentFragment();
 
     SERVER_ROUTES.filter(function (route) {
-        return route.path.startsWith("/api/") && route.method !== "WS";
+        return route.path.startsWith("/api/") && route.method === "ANY";
     }).forEach(function (route) {
         const button = create("button", "nav-link flex-shrink-0 px-2");
         const spinner = create(
@@ -512,7 +586,7 @@ async function selectJsonRoute(path) {
     const knownRoute = SERVER_ROUTES.some(function (route) {
         return route.path === path &&
             route.path.startsWith("/api/") &&
-            route.method !== "WS";
+            route.method === "ANY";
     });
     if (!knownRoute) {
         return;
@@ -612,6 +686,7 @@ function renderNavigationCounts(data) {
     setText("http-count", String(headers.length));
     setText("h2-count", String(frames.length));
     setText("h3-count", String(http3Settings.length));
+    setText("websocket-count", String(webSocketDataMessageCount()));
     setText("tcp-count", String(packets.length));
 }
 
@@ -846,6 +921,10 @@ function renderTls(tls) {
         return;
     }
 
+    root.replaceChildren(...createTlsSections(tls));
+}
+
+function createTlsSections(tls) {
     const handshake = createSection("TLS", "Handshake", "");
     handshake.append(
         createDetailGrid([
@@ -912,7 +991,7 @@ function renderTls(tls) {
         extensionSection.append(renderProtocolItems(extensions, "extension"));
     }
 
-    root.replaceChildren(handshake, fingerprints, cipherSection, extensionSection);
+    return [handshake, fingerprints, cipherSection, extensionSection];
 }
 
 function renderProtocolItems(items, kind) {
@@ -1877,6 +1956,688 @@ function formatMtu(value) {
 
     const mtu = Number(value);
     return mtu > 0 ? mtu + " bytes" : UNAVAILABLE_LABEL;
+}
+
+function websocketUrl() {
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    return protocol + "//" + window.location.host + WEBSOCKET_PATH;
+}
+
+function toggleWebSocket() {
+    if (state.websocket.prepareController) {
+        cancelWebSocketPreparation();
+        return;
+    }
+
+    const socket = state.websocket.socket;
+    if (socket &&
+        [WebSocket.CONNECTING, WebSocket.OPEN].includes(socket.readyState)) {
+        disconnectWebSocket();
+        return;
+    }
+
+    if (!socket || socket.readyState === WebSocket.CLOSED) {
+        void connectWebSocket();
+    }
+}
+
+async function connectWebSocket() {
+    const inspector = state.websocket;
+    const current = inspector.socket;
+    if (inspector.prepareController ||
+        (current && current.readyState !== WebSocket.CLOSED)) {
+        return;
+    }
+
+    inspector.address = "";
+    inspector.closeRequested = false;
+    inspector.error = "";
+    inspector.headers = [];
+    inspector.httpVersion = "";
+    inspector.maxMessageSize = WEBSOCKET_DEFAULT_MAX_MESSAGE_SIZE;
+    inspector.messages = [];
+    inspector.receivedConnectionInfo = false;
+    inspector.socket = null;
+    inspector.tls = null;
+
+    const controller = new AbortController();
+    inspector.prepareController = controller;
+    inspector.status = "preparing";
+    renderWebSocket();
+    appendWebSocketSystemMessage(
+        "Preparing " + WEBSOCKET_TRANSPORT_LABELS[inspector.transport]
+    );
+
+    try {
+        await prepareWebSocketTransport(inspector.transport, controller.signal);
+    } catch (error) {
+        if (inspector.prepareController !== controller) {
+            return;
+        }
+
+        inspector.prepareController = null;
+        inspector.error = error instanceof Error
+            ? error.message
+            : "Connection preparation failed";
+        inspector.status = "error";
+        renderWebSocketState();
+        renderWebSocketComposer();
+        appendWebSocketSystemMessage(inspector.error);
+        return;
+    }
+
+    if (inspector.prepareController !== controller || controller.signal.aborted) {
+        return;
+    }
+    inspector.prepareController = null;
+    inspector.status = "connecting";
+
+    let socket;
+    try {
+        socket = new WebSocket(websocketUrl());
+    } catch (error) {
+        inspector.error = error instanceof Error ? error.message : "Connection failed";
+        inspector.status = "error";
+        renderWebSocketState();
+        renderWebSocketComposer();
+        appendWebSocketSystemMessage("Connection failed");
+        return;
+    }
+
+    inspector.socket = socket;
+    socket.binaryType = "arraybuffer";
+    renderWebSocketState();
+    renderWebSocketComposer();
+
+    socket.addEventListener("open", function () {
+        if (inspector.socket !== socket) {
+            return;
+        }
+
+        inspector.status = "analyzing";
+        renderWebSocketState();
+        renderWebSocketComposer();
+        appendWebSocketSystemMessage("Connection opened");
+    });
+    socket.addEventListener("message", function (event) {
+        void receiveWebSocketMessage(socket, event);
+    });
+    socket.addEventListener("error", function () {
+        if (inspector.socket !== socket) {
+            return;
+        }
+        if (inspector.closeRequested) {
+            return;
+        }
+
+        inspector.error = "Connection failed";
+        inspector.status = "error";
+        renderWebSocketState();
+        renderWebSocketComposer();
+        appendWebSocketSystemMessage("Connection error");
+    });
+    socket.addEventListener("close", function (event) {
+        if (inspector.socket !== socket) {
+            return;
+        }
+
+        const closedNormally = inspector.closeRequested ||
+            (event.wasClean && [1000, 1001].includes(event.code));
+        inspector.socket = null;
+        inspector.closeRequested = false;
+        inspector.status = closedNormally ? "closed" : "error";
+        inspector.error = closedNormally
+            ? ""
+            : event.reason || "Connection closed unexpectedly";
+        renderWebSocketState();
+        renderWebSocketComposer();
+
+        const code = event.code ? " (" + event.code + ")" : "";
+        const reason = event.reason ? ": " + event.reason : "";
+        appendWebSocketSystemMessage("Connection closed" + code + reason);
+    });
+}
+
+async function prepareWebSocketTransport(transport, signal) {
+    if (!WEBSOCKET_PREPARE_PATHS[transport]) {
+        throw new Error("Unknown WebSocket HTTP version");
+    }
+
+    if (transport === "http2") {
+        // HTTP/2 can carry many streams on one connection. Close a reusable connection first so
+        // the next capture belongs to this WebSocket handshake.
+        // https://www.rfc-editor.org/rfc/rfc8441#section-1
+        await requestWebSocketPreparation("http1", signal);
+    }
+    await requestWebSocketPreparation(transport, signal);
+}
+
+async function requestWebSocketPreparation(transport, signal) {
+    const path = WEBSOCKET_PREPARE_PATHS[transport];
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        const response = await fetch(path, {
+            cache: "no-store",
+            signal: signal,
+        });
+        await response.arrayBuffer();
+
+        if (response.status === WEBSOCKET_PREPARE_RETRY_STATUS && attempt === 0) {
+            continue;
+        }
+        if (response.ok) {
+            return;
+        }
+
+        const label = WEBSOCKET_TRANSPORT_LABELS[transport];
+        throw new Error(
+            label + " WebSocket preparation failed (HTTP " + response.status + ")"
+        );
+    }
+
+    throw new Error("Could not move the WebSocket connection from HTTP/3 to TCP");
+}
+
+function cancelWebSocketPreparation() {
+    const controller = state.websocket.prepareController;
+    if (!controller) {
+        return;
+    }
+
+    state.websocket.prepareController = null;
+    state.websocket.status = "closed";
+    controller.abort();
+    renderWebSocketState();
+    renderWebSocketComposer();
+    appendWebSocketSystemMessage("Connection canceled");
+}
+
+function disconnectWebSocket() {
+    const socket = state.websocket.socket;
+    if (!socket ||
+        ![WebSocket.CONNECTING, WebSocket.OPEN].includes(socket.readyState)) {
+        return;
+    }
+
+    state.websocket.closeRequested = true;
+    state.websocket.status = "closing";
+    renderWebSocketState();
+    renderWebSocketComposer();
+
+    try {
+        socket.close(1000, "Inspector closed");
+    } catch (_) {
+        state.websocket.socket = null;
+        state.websocket.closeRequested = false;
+        state.websocket.status = "closed";
+        renderWebSocketState();
+        renderWebSocketComposer();
+    }
+}
+
+function closeWebSocketForUnload() {
+    const socket = state.websocket.socket;
+    if (!socket || socket.readyState === WebSocket.CLOSED) {
+        return;
+    }
+
+    try {
+        socket.close(1001, "Page closed");
+    } catch (_) {
+        // The page is already leaving, so no recovery is needed.
+    }
+}
+
+async function receiveWebSocketMessage(socket, event) {
+    if (state.websocket.socket !== socket) {
+        return;
+    }
+
+    if (typeof event.data === "string") {
+        if (receiveWebSocketConnectionInfo(event.data)) {
+            return;
+        }
+
+        appendWebSocketTextMessage("inbound", event.data);
+        return;
+    }
+
+    let data = event.data;
+    if (data instanceof Blob) {
+        data = await data.arrayBuffer();
+        if (state.websocket.socket !== socket) {
+            return;
+        }
+    }
+
+    if (data instanceof ArrayBuffer) {
+        appendWebSocketBinaryMessage("inbound", new Uint8Array(data));
+    }
+}
+
+function receiveWebSocketConnectionInfo(value) {
+    if (state.websocket.receivedConnectionInfo) {
+        return false;
+    }
+
+    let event;
+    try {
+        event = JSON.parse(value);
+    } catch (_) {
+        return false;
+    }
+
+    if (!isObject(event) || event.type !== "connected") {
+        return false;
+    }
+
+    const maxMessageSize = Number(event.max_message_size);
+    state.websocket.address = typeof event.address === "string" ? event.address : "";
+    state.websocket.headers = Array.isArray(event.headers)
+        ? normalizeHeaders(event.headers)
+        : [];
+    state.websocket.httpVersion = typeof event.http_version === "string"
+        ? event.http_version
+        : "";
+    state.websocket.maxMessageSize = Number.isSafeInteger(maxMessageSize) &&
+        maxMessageSize > 0
+        ? maxMessageSize
+        : WEBSOCKET_DEFAULT_MAX_MESSAGE_SIZE;
+    state.websocket.receivedConnectionInfo = true;
+    state.websocket.status = "open";
+    state.websocket.tls = isObject(event.tls) ? event.tls : null;
+    renderWebSocketState();
+    renderWebSocketComposer();
+    renderWebSocketAnalysis();
+    appendWebSocketSystemMessage(
+        state.websocket.httpVersion
+            ? "Connected over " + state.websocket.httpVersion
+            : "Connection ready"
+    );
+    return true;
+}
+
+function sendWebSocketMessage() {
+    const socket = state.websocket.socket;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+        return;
+    }
+
+    let payload;
+    try {
+        payload = createWebSocketPayload();
+        socket.send(payload.data);
+    } catch (error) {
+        showToast(error instanceof Error ? error.message : "Message could not be sent");
+        return;
+    }
+
+    if (payload.kind === "text") {
+        appendWebSocketTextMessage("outbound", payload.data, payload.bytes);
+    } else {
+        appendWebSocketBinaryMessage("outbound", payload.data);
+    }
+}
+
+function createWebSocketPayload() {
+    const value = refs.websocketInput.value;
+    if (state.websocket.mode === "text") {
+        const bytes = UTF8_ENCODER.encode(value).byteLength;
+        validateWebSocketMessageSize(bytes);
+        return { data: value, bytes: bytes, kind: "text" };
+    }
+
+    const compact = value.replace(/\s+/g, "");
+    if (!/^[0-9a-f]*$/i.test(compact)) {
+        throw new Error("Binary messages require hexadecimal bytes");
+    }
+    if (compact.length % 2 !== 0) {
+        throw new Error("Hexadecimal input needs complete byte pairs");
+    }
+
+    const length = compact.length / 2;
+    validateWebSocketMessageSize(length);
+    const bytes = new Uint8Array(length);
+    for (let index = 0; index < length; index += 1) {
+        bytes[index] = Number.parseInt(compact.slice(index * 2, index * 2 + 2), 16);
+    }
+    return { data: bytes, bytes: bytes.byteLength, kind: "binary" };
+}
+
+function validateWebSocketMessageSize(bytes) {
+    if (bytes > state.websocket.maxMessageSize) {
+        throw new Error(
+            "Message exceeds the " +
+            formatByteSize(state.websocket.maxMessageSize) +
+            " limit"
+        );
+    }
+}
+
+function setWebSocketMode(mode) {
+    if (!["text", "binary"].includes(mode) || state.websocket.mode === mode) {
+        return;
+    }
+
+    state.websocket.mode = mode;
+    renderWebSocketComposer();
+    refs.websocketInput.focus();
+}
+
+function setWebSocketTransport(transport) {
+    const inspector = state.websocket;
+    const socket = inspector.socket;
+    const active = inspector.prepareController ||
+        (socket && socket.readyState !== WebSocket.CLOSED);
+    if (!(transport in WEBSOCKET_TRANSPORT_LABELS) ||
+        inspector.transport === transport ||
+        active) {
+        return;
+    }
+
+    inspector.error = "";
+    inspector.headers = [];
+    inspector.httpVersion = "";
+    inspector.receivedConnectionInfo = false;
+    inspector.status = "idle";
+    inspector.tls = null;
+    inspector.transport = transport;
+    renderWebSocketState();
+    renderWebSocketAnalysis();
+}
+
+function clearWebSocketMessages() {
+    state.websocket.messages = [];
+    renderWebSocketMessages();
+}
+
+function appendWebSocketTextMessage(direction, value, knownBytes) {
+    const bytes = knownBytes ?? UTF8_ENCODER.encode(value).byteLength;
+    const truncated = value.length > WEBSOCKET_TEXT_PREVIEW_LIMIT;
+    appendWebSocketMessage({
+        bytes: bytes,
+        direction: direction,
+        kind: "Text",
+        preview: truncated ? value.slice(0, WEBSOCKET_TEXT_PREVIEW_LIMIT) : value,
+        truncated: truncated,
+    });
+}
+
+function appendWebSocketBinaryMessage(direction, value) {
+    const limit = Math.min(value.byteLength, WEBSOCKET_BINARY_PREVIEW_LIMIT);
+    let preview = "";
+    for (let index = 0; index < limit; index += 1) {
+        if (index > 0) {
+            preview += " ";
+        }
+        preview += value[index].toString(16).padStart(2, "0");
+    }
+
+    appendWebSocketMessage({
+        bytes: value.byteLength,
+        direction: direction,
+        kind: "Binary",
+        preview: preview,
+        truncated: value.byteLength > WEBSOCKET_BINARY_PREVIEW_LIMIT,
+    });
+}
+
+function appendWebSocketSystemMessage(value) {
+    appendWebSocketMessage({
+        bytes: null,
+        direction: "system",
+        kind: "Event",
+        preview: value,
+        truncated: false,
+    });
+}
+
+function appendWebSocketMessage(message) {
+    state.websocket.messages.push({
+        ...message,
+        timestamp: Date.now(),
+    });
+
+    if (state.websocket.messages.length > WEBSOCKET_HISTORY_LIMIT) {
+        state.websocket.messages.splice(
+            0,
+            state.websocket.messages.length - WEBSOCKET_HISTORY_LIMIT
+        );
+    }
+    renderWebSocketMessages();
+}
+
+function renderWebSocket() {
+    renderWebSocketState();
+    renderWebSocketComposer();
+    renderWebSocketMessages();
+    renderWebSocketAnalysis();
+}
+
+function renderWebSocketState() {
+    const inspector = state.websocket;
+    const labels = {
+        analyzing: "Analyzing connection",
+        closed: "Closed",
+        closing: "Closing",
+        connecting: "Connecting",
+        error: "Failed",
+        idle: "Ready",
+        open: "Connected",
+        preparing: "Preparing " + WEBSOCKET_TRANSPORT_LABELS[inspector.transport],
+    };
+    refs.websocketStatus.dataset.state = inspector.status;
+    refs.websocketStatusLabel.textContent = labels[inspector.status] || "Ready";
+    refs.websocketStatus.title = inspector.error;
+    refs.websocketStatusDot.classList.toggle(
+        "status-dot-animated",
+        ["analyzing", "connecting", "closing", "preparing"].includes(inspector.status)
+    );
+
+    const socket = inspector.socket;
+    const preparing = Boolean(inspector.prepareController);
+    const connecting = socket && socket.readyState === WebSocket.CONNECTING;
+    const open = socket && socket.readyState === WebSocket.OPEN;
+    const closing = socket && socket.readyState === WebSocket.CLOSING;
+    const label = closing
+        ? "Closing"
+        : preparing || connecting
+            ? "Cancel"
+            : open
+                ? "Disconnect"
+                : "Connect";
+    const iconName = preparing || connecting ? "x" : open || closing ? "unplug" : "plug";
+    const icon = document.createElement("i");
+    icon.dataset.lucide = iconName;
+    icon.setAttribute("aria-hidden", "true");
+    refs.websocketConnectButton.className = open || connecting
+        ? "btn btn-outline-secondary"
+        : "btn btn-primary";
+    refs.websocketConnectButton.disabled = Boolean(closing);
+    refs.websocketConnectButton.replaceChildren(
+        icon,
+        create("span", "", label)
+    );
+    refs.websocketUrl.textContent = websocketUrl();
+    refs.websocketTransportButtons.forEach(function (button) {
+        const active = button.dataset.websocketTransport === inspector.transport;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-pressed", String(active));
+        button.disabled = Boolean(
+            preparing || connecting || open || closing
+        );
+    });
+    paintIcons();
+}
+
+function renderWebSocketComposer() {
+    refs.websocketModeButtons.forEach(function (button) {
+        const active = button.dataset.websocketMode === state.websocket.mode;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-pressed", String(active));
+    });
+
+    refs.websocketInput.placeholder = state.websocket.mode === "binary"
+        ? "Hex bytes"
+        : "Message text";
+    refs.websocketInput.maxLength = state.websocket.mode === "binary"
+        ? state.websocket.maxMessageSize * 3
+        : state.websocket.maxMessageSize;
+
+    const metrics = websocketInputMetrics();
+    refs.websocketInputSize.textContent = metrics.error
+        ? metrics.error
+        : formatByteSize(metrics.bytes) +
+            " / " +
+            formatByteSize(state.websocket.maxMessageSize);
+
+    const socket = state.websocket.socket;
+    refs.websocketSendButton.disabled = !socket ||
+        socket.readyState !== WebSocket.OPEN ||
+        Boolean(metrics.error) ||
+        metrics.bytes > state.websocket.maxMessageSize;
+}
+
+function websocketInputMetrics() {
+    const value = refs.websocketInput.value;
+    if (state.websocket.mode === "text") {
+        return { bytes: UTF8_ENCODER.encode(value).byteLength, error: "" };
+    }
+
+    const compact = value.replace(/\s+/g, "");
+    if (!/^[0-9a-f]*$/i.test(compact)) {
+        return { bytes: 0, error: "Invalid hex" };
+    }
+    if (compact.length % 2 !== 0) {
+        return { bytes: 0, error: "Incomplete byte" };
+    }
+    return { bytes: compact.length / 2, error: "" };
+}
+
+function renderWebSocketMessages() {
+    const messages = state.websocket.messages;
+    const count = webSocketDataMessageCount();
+    setText("websocket-count", String(count));
+    refs.websocketMessageCount.textContent =
+        count + (count === 1 ? " message" : " messages");
+    refs.websocketClearButton.disabled = messages.length === 0;
+
+    if (messages.length === 0) {
+        refs.websocketMessageLog.replaceChildren(
+            create("div", "websocket-log-empty", "No messages")
+        );
+        return;
+    }
+
+    const fragment = document.createDocumentFragment();
+    messages.forEach(function (message) {
+        const item = create("article", "websocket-message");
+        item.dataset.direction = message.direction;
+        const header = create("div", "websocket-message-header");
+        const direction = message.direction === "inbound"
+            ? "Received"
+            : message.direction === "outbound"
+                ? "Sent"
+                : "Session";
+        header.append(
+            create("span", "websocket-message-direction", direction),
+            create("span", "", message.kind)
+        );
+        if (message.bytes !== null) {
+            header.append(create("span", "", formatByteSize(message.bytes)));
+        }
+        header.append(
+            create(
+                "time",
+                "websocket-message-time",
+                new Date(message.timestamp).toLocaleTimeString()
+            )
+        );
+        item.append(header, create("pre", "", message.preview || "(empty message)"));
+        if (message.truncated) {
+            item.append(create("span", "websocket-message-note", "Preview truncated"));
+        }
+        fragment.append(item);
+    });
+
+    refs.websocketMessageLog.replaceChildren(fragment);
+    refs.websocketMessageLog.scrollTop = refs.websocketMessageLog.scrollHeight;
+}
+
+function webSocketDataMessageCount() {
+    return state.websocket.messages.filter(function (message) {
+        return message.direction !== "system";
+    }).length;
+}
+
+function renderWebSocketAnalysis() {
+    const inspector = state.websocket;
+    if (!isObject(inspector.tls)) {
+        const section = createSection("Handshake", "WebSocket TLS", "");
+        const message = inspector.receivedConnectionInfo
+            ? "No ClientHello captured"
+            : ["connecting", "analyzing"].includes(inspector.status)
+                ? "Waiting for TLS analysis"
+                : "Waiting for connection";
+        section.append(create("p", "text-secondary mb-0", message));
+        const sections = inspector.receivedConnectionInfo
+            ? [
+                createWebSocketConnectionSection(),
+                createWebSocketHeadersSection(),
+                section,
+            ]
+            : [section];
+        refs.websocketAnalysis.replaceChildren(...sections);
+        paintIcons();
+        return;
+    }
+
+    refs.websocketAnalysis.replaceChildren(
+        createWebSocketConnectionSection(),
+        createWebSocketHeadersSection(),
+        ...createTlsSections(inspector.tls)
+    );
+    paintIcons();
+}
+
+function createWebSocketConnectionSection() {
+    const inspector = state.websocket;
+    const section = createSection("WebSocket", "Connection details", "");
+    section.append(
+        createDetailGrid([
+            ["Remote address", valueOr(inspector.address, UNAVAILABLE_LABEL), true],
+            ["HTTP version", valueOr(inspector.httpVersion, UNAVAILABLE_LABEL), true],
+            ["Message limit", formatByteSize(inspector.maxMessageSize), true],
+        ])
+    );
+    return section;
+}
+
+function createWebSocketHeadersSection() {
+    const inspector = state.websocket;
+    const isHttp2 = inspector.httpVersion.startsWith("HTTP/2");
+    const section = createSection(
+        "Opening handshake",
+        isHttp2 ? "Extended CONNECT headers" : "Upgrade request headers",
+        inspector.headers.length + " entries"
+    );
+
+    if (inspector.headers.length === 0) {
+        section.append(createEmptyState("No handshake headers were captured", "rows-3"));
+    } else {
+        section.append(renderHeaderTable(inspector.headers));
+    }
+
+    return section;
+}
+
+function formatByteSize(bytes) {
+    if (bytes < 1024) {
+        return bytes + " B";
+    }
+    if (bytes < 1024 * 1024) {
+        return (bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0) + " KiB";
+    }
+    return (bytes / (1024 * 1024)).toFixed(1) + " MiB";
 }
 
 function renderProxy() {

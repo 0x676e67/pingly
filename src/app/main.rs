@@ -152,6 +152,7 @@ pub(crate) fn run(mut args: ServerArgs) -> Result<()> {
             .and_then(Result::ok);
 
         let router = routes::router(
+            args.concurrent.get(),
             #[cfg(target_os = "linux")]
             tcp_capture_track.as_ref(),
         );

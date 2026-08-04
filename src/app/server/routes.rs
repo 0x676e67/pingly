@@ -1,8 +1,10 @@
 //! Request handlers for the protocol analysis endpoints.
 
+mod ws;
+
 #[cfg(target_os = "linux")]
-use std::time::{Duration, Instant};
-use std::{net::SocketAddr, sync::LazyLock};
+use std::time::Instant;
+use std::{net::SocketAddr, sync::LazyLock, time::Duration};
 
 #[cfg(target_os = "linux")]
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -10,6 +12,7 @@ use axum::{
     body::Body,
     extract::ConnectInfo,
     http::{header, HeaderMap, HeaderValue, Request, StatusCode},
+    middleware::{self, Next},
     response::{Html, IntoResponse, Response},
     routing::{any, get},
     Extension, Router,
@@ -17,6 +20,7 @@ use axum::{
 use axum_extra::response::ErasedJson;
 #[cfg(target_os = "linux")]
 use futures_util::StreamExt;
+use http_body_util::BodyExt;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -31,8 +35,17 @@ const TLS_PATH: &str = "/api/tls";
 const HTTP1_PATH: &str = "/api/http1";
 const HTTP2_PATH: &str = "/api/http2";
 const HTTP3_PATH: &str = "/api/http3";
+const WEBSOCKET_PATH: &str = "/api/websocket";
+pub(super) const WEBSOCKET_HTTP1_PREPARE_PATH: &str = "/api/websocket/http1";
+pub(super) const WEBSOCKET_HTTP2_PREPARE_PATH: &str = "/api/websocket/http2";
 const TCP_PATH: &str = "/api/tcp";
 const LATENCY_PATH: &str = "/api/latency";
+
+// Analysis endpoints do not inspect request bodies. Reject oversized payloads with the status
+// defined by RFC 9110, Section 15.5.14:
+// <https://www.rfc-editor.org/rfc/rfc9110.html#name-413-content-too-large>
+pub(super) const MAX_REQUEST_BODY_SIZE: usize = 256 * 1024;
+pub(super) const REQUEST_BODY_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[cfg(target_os = "linux")]
 const LATENCY_PROBE_SAMPLES: u8 = 8;
@@ -103,6 +116,24 @@ const PUBLIC_ROUTES: &[PublicRoute] = &[
         availability: ALWAYS_AVAILABLE,
     },
     PublicRoute {
+        method: "WS",
+        path: WEBSOCKET_PATH,
+        purpose: "WebSocket handshake and message inspector",
+        availability: ALWAYS_AVAILABLE,
+    },
+    PublicRoute {
+        method: "GET",
+        path: WEBSOCKET_HTTP1_PREPARE_PATH,
+        purpose: "Prepare an HTTP/1.1 WebSocket connection",
+        availability: ALWAYS_AVAILABLE,
+    },
+    PublicRoute {
+        method: "GET",
+        path: WEBSOCKET_HTTP2_PREPARE_PATH,
+        purpose: "Prepare an HTTP/2 WebSocket connection",
+        availability: ALWAYS_AVAILABLE,
+    },
+    PublicRoute {
         method: ANY_METHOD,
         path: TCP_PATH,
         purpose: "TCP packet capture",
@@ -118,6 +149,17 @@ const PUBLIC_ROUTES: &[PublicRoute] = &[
 
 static UI_DOCUMENT: LazyLock<Box<str>> = LazyLock::new(build_ui_document);
 
+pub(super) fn is_websocket_transport_preparation(path: &str) -> bool {
+    path == WEBSOCKET_HTTP1_PREPARE_PATH || path == WEBSOCKET_HTTP2_PREPARE_PATH
+}
+
+pub(super) fn limits_request_body(path: &str) -> bool {
+    matches!(
+        path,
+        ALL_PATH | TLS_PATH | HTTP1_PATH | HTTP2_PATH | HTTP3_PATH | TCP_PATH
+    )
+}
+
 // Compression can change the transfer bytes without changing the UI document, so the
 // validator is weak across content codings. See RFC 9110, Section 8.8.3:
 // <https://www.rfc-editor.org/rfc/rfc9110.html#name-entity-tag>
@@ -132,9 +174,11 @@ static UI_ETAG_VALUE: LazyLock<HeaderValue> = LazyLock::new(|| {
 });
 
 /// Builds the public routes and enables optional platform routes.
-pub(crate) fn router(#[cfg(target_os = "linux")] tcp_capture: Option<&TcpCapture>) -> Router {
-    let router = Router::new()
-        .route(INDEX_PATH, get(index))
+pub(crate) fn router(
+    concurrent_limit: usize,
+    #[cfg(target_os = "linux")] tcp_capture: Option<&TcpCapture>,
+) -> Router {
+    let analysis = Router::new()
         .route(ALL_PATH, any(track))
         .route(TLS_PATH, any(tls_track))
         .route(HTTP1_PATH, any(http1_track))
@@ -142,9 +186,26 @@ pub(crate) fn router(#[cfg(target_os = "linux")] tcp_capture: Option<&TcpCapture
         .route(HTTP3_PATH, any(http3_track));
 
     #[cfg(target_os = "linux")]
+    let analysis = if tcp_capture.is_some() {
+        analysis.route(TCP_PATH, any(tcp_track))
+    } else {
+        analysis
+    };
+
+    let analysis = analysis.layer(middleware::from_fn(enforce_request_body_limit));
+    let router = Router::new()
+        .route(INDEX_PATH, get(index))
+        .route(
+            WEBSOCKET_PATH,
+            any(ws::analyze).layer(Extension(ws::Sessions::new(concurrent_limit))),
+        )
+        .route(WEBSOCKET_HTTP1_PREPARE_PATH, get(ws::prepare_http1))
+        .route(WEBSOCKET_HTTP2_PREPARE_PATH, get(ws::prepare_http2))
+        .merge(analysis);
+
+    #[cfg(target_os = "linux")]
     let router = if let Some(capture) = tcp_capture {
         router
-            .route(TCP_PATH, any(tcp_track))
             .route(LATENCY_PATH, any(latency_probe))
             .layer(Extension(capture.clone()))
     } else {
@@ -152,6 +213,72 @@ pub(crate) fn router(#[cfg(target_os = "linux")] tcp_capture: Option<&TcpCapture
     };
 
     router
+}
+
+async fn enforce_request_body_limit(request: Request<Body>, next: Next) -> Response {
+    if request_body_length_exceeds(request.headers()) {
+        return request_body_too_large();
+    }
+
+    let (parts, body) = request.into_parts();
+    match tokio::time::timeout(REQUEST_BODY_READ_TIMEOUT, body_within_limit(body)).await {
+        Ok(Ok(true)) => next.run(Request::from_parts(parts, Body::empty())).await,
+        Ok(Ok(false)) => request_body_too_large(),
+        Ok(Err(error)) => {
+            tracing::debug!(%error, "failed to read request body");
+            request_body_read_failed()
+        }
+        Err(_) => request_body_timed_out(),
+    }
+}
+
+pub(super) fn request_body_length_exceeds(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .is_some_and(|length| length > MAX_REQUEST_BODY_SIZE as u64)
+}
+
+async fn body_within_limit(mut body: Body) -> std::result::Result<bool, axum::Error> {
+    let mut received = 0usize;
+    while let Some(frame) = body.frame().await {
+        let frame = frame?;
+        let Ok(data) = frame.into_data() else {
+            continue;
+        };
+        let Some(total) = received.checked_add(data.len()) else {
+            return Ok(false);
+        };
+        if total > MAX_REQUEST_BODY_SIZE {
+            return Ok(false);
+        }
+        received = total;
+    }
+
+    Ok(true)
+}
+
+pub(super) fn request_body_too_large() -> Response {
+    (
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "Request body exceeds the 256 KiB limit",
+    )
+        .into_response()
+}
+
+pub(super) fn request_body_read_failed() -> Response {
+    (StatusCode::BAD_REQUEST, "Failed to read request body").into_response()
+}
+
+pub(super) fn request_body_timed_out() -> Response {
+    // RFC 9110, Section 15.5.9 defines 408 for an incomplete request:
+    // <https://www.rfc-editor.org/rfc/rfc9110.html#name-408-request-timeout>
+    (
+        StatusCode::REQUEST_TIMEOUT,
+        "Request body was not received in time",
+    )
+        .into_response()
 }
 
 fn build_ui_document() -> Box<str> {

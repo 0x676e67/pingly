@@ -238,7 +238,7 @@ mod tcp {
     use axum::{
         body::Body,
         extract::ConnectInfo,
-        http::{header, Method, Request, StatusCode},
+        http::{header, Method, Request, StatusCode, Version},
         middleware::AddExtension,
         response::Response,
         Router,
@@ -261,7 +261,7 @@ mod tcp {
 
     use super::{
         accept::{Accept, AcceptOutcome},
-        Handle, ACCEPT_ERROR_BACKOFF, MAX_HEADER_LIST_SIZE,
+        routes, Handle, ACCEPT_ERROR_BACKOFF, MAX_HEADER_LIST_SIZE,
     };
 
     const CONNECTION_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -287,6 +287,10 @@ mod tcp {
         http2
             .timer(TokioTimer::new())
             .auto_date_header(true)
+            // RFC 8441, Section 3 uses SETTINGS_ENABLE_CONNECT_PROTOCOL to opt into
+            // WebSocket extended CONNECT:
+            // <https://www.rfc-editor.org/rfc/rfc8441#section-3>
+            .enable_connect_protocol()
             .max_header_list_size(MAX_HEADER_LIST_SIZE as _);
 
         if close_after_first_request {
@@ -418,24 +422,16 @@ mod tcp {
         S: Service<Request<Body>, Response = Response, Error = Infallible> + Clone + Send + 'static,
         S::Future: Send + 'static,
     {
-        let (close_tx, mut close_rx) = if close_after_first_request {
-            let (sender, receiver) = watch::channel(false);
-            (Some(sender), Some(receiver))
-        } else {
-            (None, None)
-        };
+        let (close_tx, mut close_rx) = watch::channel(false);
         let service = tower::service_fn(move |request: Request<Incoming>| {
             let service = service.clone();
             let close_tx = close_tx.clone();
             async move {
-                let protocol_switch = ProtocolSwitch::from_request(&request);
+                let connection_directive = ConnectionDirective::from_request(&request);
                 let response = service.oneshot(request.map(Body::new)).await?;
 
-                if let Some(sender) = close_tx
-                    .as_ref()
-                    .filter(|_| !protocol_switch.succeeded(&response))
-                {
-                    sender.send_replace(true);
+                if connection_directive.should_close(&response, close_after_first_request) {
+                    close_tx.send_replace(true);
                 }
 
                 Ok::<_, Infallible>(response)
@@ -455,9 +451,7 @@ mod tcp {
                     shutting_down = true;
                     connection.as_mut().graceful_shutdown();
                 }
-                _ = wait_for_close_signal(&mut close_rx),
-                    if close_after_first_request && !shutting_down =>
-                {
+                _ = wait_for_close_signal(&mut close_rx), if !shutting_down => {
                     shutting_down = true;
                     connection.as_mut().graceful_shutdown();
                 }
@@ -465,12 +459,7 @@ mod tcp {
         }
     }
 
-    async fn wait_for_close_signal(receiver: &mut Option<watch::Receiver<bool>>) {
-        let Some(receiver) = receiver.as_mut() else {
-            std::future::pending::<()>().await;
-            return;
-        };
-
+    async fn wait_for_close_signal(receiver: &mut watch::Receiver<bool>) {
         let close_requested = *receiver.borrow_and_update();
         if !close_requested {
             let _ = receiver.changed().await;
@@ -478,18 +467,35 @@ mod tcp {
     }
 
     #[derive(Clone, Copy)]
-    enum ProtocolSwitch {
-        None,
+    enum ConnectionDirective {
+        Default,
+        Close,
+        PreserveIfSuccessful,
         Http1Upgrade,
-        ExtendedConnect,
     }
 
-    impl ProtocolSwitch {
+    impl ConnectionDirective {
         fn from_request<B>(request: &Request<B>) -> Self {
+            let path = request.uri().path();
+            if path == routes::WEBSOCKET_HTTP1_PREPARE_PATH {
+                return Self::Close;
+            }
+            if path == routes::WEBSOCKET_HTTP2_PREPARE_PATH {
+                return if request.version() == Version::HTTP_2 {
+                    Self::PreserveIfSuccessful
+                } else {
+                    Self::Close
+                };
+            }
+
             if request.method() == Method::CONNECT
                 && request.extensions().get::<Protocol>().is_some()
             {
-                return Self::ExtendedConnect;
+                // An HTTP/2 WebSocket occupies one stream, so graceful shutdown can let that
+                // stream finish while preventing later handshakes from reusing its capture.
+                // See RFC 8441, Section 1:
+                // <https://www.rfc-editor.org/rfc/rfc8441#section-1>
+                return Self::Close;
             }
 
             let connection_upgrade = request
@@ -503,15 +509,18 @@ mod tcp {
             if connection_upgrade && request.headers().contains_key(header::UPGRADE) {
                 Self::Http1Upgrade
             } else {
-                Self::None
+                Self::Default
             }
         }
 
-        fn succeeded(self, response: &Response) -> bool {
+        fn should_close(self, response: &Response, close_by_default: bool) -> bool {
             match self {
-                Self::Http1Upgrade => response.status() == StatusCode::SWITCHING_PROTOCOLS,
-                Self::ExtendedConnect => response.status().is_success(),
-                Self::None => false,
+                Self::Close => true,
+                Self::PreserveIfSuccessful => !response.status().is_success(),
+                Self::Http1Upgrade => {
+                    close_by_default && response.status() != StatusCode::SWITCHING_PROTOCOLS
+                }
+                Self::Default => close_by_default,
             }
         }
     }
@@ -539,7 +548,7 @@ mod tcp {
         };
         use hyper::ext::Protocol;
 
-        use super::ProtocolSwitch;
+        use super::ConnectionDirective;
 
         const LATENCY_PATH: &str = "/api/latency";
         const WEBSOCKET_PROTOCOL: &str = "websocket";
@@ -549,7 +558,7 @@ mod tcp {
             let request = Request::get("/").body(()).unwrap();
             let response = Response::new(Body::empty());
 
-            assert!(!ProtocolSwitch::from_request(&request).succeeded(&response));
+            assert!(ConnectionDirective::from_request(&request).should_close(&response, true));
         }
 
         #[test]
@@ -564,7 +573,7 @@ mod tcp {
                 .body(Body::empty())
                 .unwrap();
 
-            assert!(ProtocolSwitch::from_request(&request).succeeded(&response));
+            assert!(!ConnectionDirective::from_request(&request).should_close(&response, true));
         }
 
         #[test]
@@ -579,11 +588,11 @@ mod tcp {
                 .body(Body::empty())
                 .unwrap();
 
-            assert!(!ProtocolSwitch::from_request(&request).succeeded(&response));
+            assert!(ConnectionDirective::from_request(&request).should_close(&response, true));
         }
 
         #[test]
-        fn extended_connect_streams_remain_open() {
+        fn extended_connect_drains_the_connection_after_upgrade() {
             let mut request = Request::builder()
                 .method(Method::CONNECT)
                 .uri(LATENCY_PATH)
@@ -594,25 +603,7 @@ mod tcp {
                 .insert(Protocol::from_static(WEBSOCKET_PROTOCOL));
             let response = Response::new(Body::empty());
 
-            assert!(ProtocolSwitch::from_request(&request).succeeded(&response));
-        }
-
-        #[test]
-        fn rejected_extended_connect_streams_close() {
-            let mut request = Request::builder()
-                .method(Method::CONNECT)
-                .uri(LATENCY_PATH)
-                .body(())
-                .unwrap();
-            request
-                .extensions_mut()
-                .insert(Protocol::from_static(WEBSOCKET_PROTOCOL));
-            let response = Response::builder()
-                .status(StatusCode::FORBIDDEN)
-                .body(Body::empty())
-                .unwrap();
-
-            assert!(!ProtocolSwitch::from_request(&request).succeeded(&response));
+            assert!(ConnectionDirective::from_request(&request).should_close(&response, true));
         }
 
         #[test]
@@ -624,7 +615,7 @@ mod tcp {
                 .unwrap();
             let response = Response::new(Body::empty());
 
-            assert!(!ProtocolSwitch::from_request(&request).succeeded(&response));
+            assert!(ConnectionDirective::from_request(&request).should_close(&response, true));
         }
     }
 }
@@ -649,7 +640,7 @@ mod quic {
         http::{Request, Response},
         Router,
     };
-    use bytes::Bytes;
+    use bytes::{Buf, Bytes};
     use h3::error::Code;
     use http_body_util::BodyExt;
     use pingly::tls::ClientHelloHandshakeBuffer;
@@ -666,7 +657,7 @@ mod quic {
         crypto::HandshakeData,
         inspect::{Http3Capture, InspectedBidiStream, InspectedConnection},
     };
-    use super::{tracker::info::ConnectionTrack, Handle, MAX_HEADER_LIST_SIZE};
+    use super::{routes, tracker::info::ConnectionTrack, Handle, MAX_HEADER_LIST_SIZE};
     use crate::Result;
 
     type Http3Connection = h3::server::Connection<InspectedConnection, Bytes>;
@@ -1002,7 +993,14 @@ mod quic {
                 }
                 finished = requests.join_next(), if !requests.is_empty() => {
                     if let Some(result) = finished {
-                        log_request_task(result, remote_addr);
+                        match result {
+                            Ok(true) => {
+                                begin_connection_shutdown(&mut connection, remote_addr).await;
+                                break true;
+                            }
+                            Ok(false) => {}
+                            Err(error) => log_request_task(Err(error), remote_addr),
+                        }
                     }
                 }
                 accepted = connection.accept() => {
@@ -1069,7 +1067,7 @@ mod quic {
 
     async fn drain_requests_while_driving(
         connection: &mut Http3Connection,
-        requests: &mut JoinSet<()>,
+        requests: &mut JoinSet<bool>,
         remote_addr: SocketAddr,
     ) {
         while !requests.is_empty() {
@@ -1138,18 +1136,22 @@ mod quic {
         service: S,
         capture: Http3Capture,
         client_hello: Option<Arc<OnceLock<ClientHelloHandshakeBuffer>>>,
-    ) where
+    ) -> bool
+    where
         S: Service<Request<Body>, Response = Response<Body>, Error = Infallible> + Send + 'static,
         S::Future: Send,
     {
-        if timeout(
+        match timeout(
             REQUEST_TIMEOUT,
             serve_request_inner(resolver, remote_addr, service, capture, client_hello),
         )
         .await
-        .is_err()
         {
-            tracing::debug!(%remote_addr, "HTTP/3 request timed out");
+            Ok(close_after_response) => close_after_response,
+            Err(_) => {
+                tracing::debug!(%remote_addr, "HTTP/3 request timed out");
+                false
+            }
         }
     }
 
@@ -1159,17 +1161,47 @@ mod quic {
         service: S,
         capture: Http3Capture,
         client_hello: Option<Arc<OnceLock<ClientHelloHandshakeBuffer>>>,
-    ) where
+    ) -> bool
+    where
         S: Service<Request<Body>, Response = Response<Body>, Error = Infallible> + Send + 'static,
         S::Future: Send,
     {
-        let (request, stream) = match resolver.resolve_request().await {
+        let (request, mut stream) = match resolver.resolve_request().await {
             Ok(request) => request,
             Err(error) => {
                 tracing::debug!(%error, %remote_addr, "failed to resolve HTTP/3 request");
-                return;
+                return false;
             }
         };
+        let close_after_response = routes::is_websocket_transport_preparation(request.uri().path());
+        let body_response = if routes::limits_request_body(request.uri().path()) {
+            if routes::request_body_length_exceeds(request.headers()) {
+                Some(routes::request_body_too_large())
+            } else {
+                match timeout(
+                    routes::REQUEST_BODY_READ_TIMEOUT,
+                    h3_body_within_limit(&mut stream),
+                )
+                .await
+                {
+                    Ok(Ok(true)) => None,
+                    Ok(Ok(false)) => Some(routes::request_body_too_large()),
+                    Ok(Err(error)) => {
+                        tracing::debug!(%error, %remote_addr, "failed to read HTTP/3 request body");
+                        Some(routes::request_body_read_failed())
+                    }
+                    Err(_) => Some(routes::request_body_timed_out()),
+                }
+            }
+        } else {
+            None
+        };
+        if let Some(response) = body_response {
+            if let Err(error) = send_response(stream, response).await {
+                tracing::debug!(%error, %remote_addr, "failed to serve HTTP/3 response");
+            }
+            return close_after_response;
+        }
 
         let mut track = ConnectionTrack::default();
         track.set_tls_version_negotiated(Some(ProtocolVersion::TLSv1_3));
@@ -1203,13 +1235,32 @@ mod quic {
         if let Err(error) = send_response(stream, response).await {
             tracing::debug!(%error, %remote_addr, "failed to serve HTTP/3 response");
         }
+
+        close_after_response
+    }
+
+    async fn h3_body_within_limit(
+        stream: &mut RequestStream,
+    ) -> std::result::Result<bool, BoxError> {
+        let mut received = 0usize;
+        while let Some(data) = stream.recv_data().await? {
+            let Some(total) = received.checked_add(data.remaining()) else {
+                return Ok(false);
+            };
+            if total > routes::MAX_REQUEST_BODY_SIZE {
+                return Ok(false);
+            }
+            received = total;
+        }
+
+        Ok(true)
     }
 
     async fn send_response(
         mut stream: RequestStream,
         response: Response<Body>,
     ) -> std::result::Result<(), BoxError> {
-        // Analysis routes do not consume request bodies.
+        // No handler reads the request body after dispatch, so stop any unread request stream.
         stream.stop_sending(Code::H3_NO_ERROR);
 
         let (parts, body) = response.into_parts();
@@ -1240,7 +1291,7 @@ mod quic {
         }
     }
 
-    async fn drain_request_tasks(requests: &mut JoinSet<()>, remote_addr: SocketAddr) {
+    async fn drain_request_tasks(requests: &mut JoinSet<bool>, remote_addr: SocketAddr) {
         while let Some(result) = requests.join_next().await {
             log_request_task(result, remote_addr);
         }
@@ -1254,7 +1305,7 @@ mod quic {
         }
     }
 
-    fn log_request_task(result: std::result::Result<(), JoinError>, remote_addr: SocketAddr) {
+    fn log_request_task(result: std::result::Result<bool, JoinError>, remote_addr: SocketAddr) {
         if let Err(error) = result {
             if !error.is_cancelled() {
                 tracing::debug!(%error, %remote_addr, "HTTP/3 request task failed");
@@ -1282,13 +1333,17 @@ mod quic {
 mod tests {
     use std::{
         future::poll_fn,
+        io,
         net::{Ipv4Addr, SocketAddr},
         sync::Arc,
         time::Duration,
     };
 
-    use axum::http::{header::USER_AGENT, Request, StatusCode};
-    use bytes::Buf;
+    use axum::{
+        body::Body,
+        http::{header, Request, StatusCode},
+    };
+    use bytes::{Buf, Bytes};
     use quinn_proto::crypto::rustls::QuicClientConfig;
     use rcgen::{CertificateParams, KeyPair, SanType};
     use tokio::time::timeout;
@@ -1296,12 +1351,16 @@ mod tests {
         pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
         ClientConfig, RootCertStore, ServerConfig,
     };
+    use tower::ServiceExt;
 
     use super::{
         routes,
         tls::rustls::{self, RustlsConfig},
         Handle, HttpServer, RustlsAcceptor,
     };
+    use crate::error::Error;
+
+    const TEST_SERVER_BIND_ATTEMPTS: usize = 8;
 
     #[tokio::test]
     async fn http3_server_serves_analysis_and_shuts_down_cleanly() {
@@ -1310,17 +1369,55 @@ mod tests {
             .expect("HTTP/3 integration test timed out");
     }
 
+    #[tokio::test]
+    async fn router_rejects_declared_and_streamed_oversized_bodies() {
+        let requests = [
+            (
+                "declared length",
+                Request::post("/api/all")
+                    .header(header::CONTENT_LENGTH, routes::MAX_REQUEST_BODY_SIZE + 1)
+                    .body(Body::empty())
+                    .expect("request should build"),
+            ),
+            (
+                "streamed body",
+                Request::post("/api/all")
+                    .body(Body::from(vec![0; routes::MAX_REQUEST_BODY_SIZE + 1]))
+                    .expect("request should build"),
+            ),
+        ];
+
+        for (case, request) in requests {
+            let response = test_router()
+                .oneshot(request)
+                .await
+                .expect("router should respond");
+            assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE, "{case}");
+        }
+    }
+
     async fn run_http3_server_test() {
         let (acceptor, certificate) = test_acceptor();
-        let server = HttpServer::new(
-            SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
-            0,
-            1,
-            acceptor,
-            test_router(),
-        )
-        .await
-        .expect("HTTP server should bind");
+        let bind = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
+        let mut attempts_remaining = TEST_SERVER_BIND_ATTEMPTS;
+
+        // TCP and UDP use separate port spaces, so a TCP-selected ephemeral port can still be
+        // unavailable when QUIC binds it.
+        let server = loop {
+            match HttpServer::new(bind, 1, 1, acceptor.clone(), test_router()).await {
+                Ok(server) => break server,
+                Err(Error::IO(error))
+                    if attempts_remaining > 1
+                        && matches!(
+                            error.kind(),
+                            io::ErrorKind::AddrInUse | io::ErrorKind::PermissionDenied
+                        ) =>
+                {
+                    attempts_remaining -= 1;
+                }
+                Err(error) => panic!("HTTP server should bind: {error}"),
+            }
+        };
         let server_addr = server
             .tcp_listener
             .local_addr()
@@ -1347,7 +1444,7 @@ mod tests {
             "https://localhost:{}/api/http3",
             server_addr.port()
         ))
-        .header(USER_AGENT, "pingly-http3-integration")
+        .header(header::USER_AGENT, "pingly-http3-integration")
         .body(())
         .expect("HTTP/3 request should build");
         let mut stream = send_request
@@ -1375,14 +1472,40 @@ mod tests {
             serde_json::from_slice(&body).expect("analysis response should be JSON");
 
         assert_eq!(analysis["http_version"], "HTTP/3.0");
-        assert_eq!(analysis["http3"]["settings"]["frame_type"], "Settings");
-        assert_eq!(analysis["http3"]["headers"]["frame_type"], "Headers");
         assert!(analysis["http3"]["h3_text"].is_string());
-        assert!(analysis["http3"]["headers"]["headers"]
-            .as_array()
-            .expect("captured headers should be an array")
-            .iter()
-            .any(|field| field["name"] == ":method" && field["value"] == "GET"));
+
+        drop(stream);
+
+        let request = Request::post(format!(
+            "https://localhost:{}/api/http3",
+            server_addr.port()
+        ))
+        .body(())
+        .expect("HTTP/3 request should build");
+        let mut stream = send_request
+            .send_request(request)
+            .await
+            .expect("oversized HTTP/3 request should start");
+        stream
+            .send_data(Bytes::from(vec![0; routes::MAX_REQUEST_BODY_SIZE + 1]))
+            .await
+            .expect("oversized HTTP/3 request body should send");
+        stream
+            .finish()
+            .await
+            .expect("oversized HTTP/3 request should finish");
+
+        let response = stream
+            .recv_response()
+            .await
+            .expect("HTTP/3 rejection headers should arrive");
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        while stream
+            .recv_data()
+            .await
+            .expect("HTTP/3 rejection body should be readable")
+            .is_some()
+        {}
 
         drop(stream);
         drop(send_request);
@@ -1441,9 +1564,9 @@ mod tests {
 
     fn test_router() -> axum::Router {
         #[cfg(target_os = "linux")]
-        return routes::router(None);
+        return routes::router(1, None);
 
         #[cfg(not(target_os = "linux"))]
-        routes::router()
+        routes::router(1)
     }
 }
