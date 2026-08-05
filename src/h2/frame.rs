@@ -1,11 +1,14 @@
 //! Stateful HTTP/2 frame and HPACK field-block decoding.
 
+mod data;
 mod error;
 mod headers;
 mod priority;
+mod priority_update;
 mod settings;
 mod window_update;
 
+pub use data::{DataFlag, DataFlagName, DataFlags, DataFrame};
 pub use error::FrameError;
 use headers::PendingHeaders;
 pub use headers::{
@@ -14,11 +17,13 @@ pub use headers::{
 };
 use httlib_hpack::Decoder;
 pub use priority::{PriorityFrame, StreamDependency};
+pub use priority_update::PriorityUpdateFrame;
 use serde::{de, Deserialize, Deserializer, Serialize};
 pub use settings::{Setting, SettingValue, SettingsFrame};
 pub use window_update::WindowUpdateFrame;
 
 const FRAME_HEADER_LEN: usize = 9;
+const DEFAULT_HEADER_TABLE_SIZE: u32 = 4096;
 
 /// Stateful parser for HTTP/2 frames and fragmented field blocks.
 ///
@@ -26,13 +31,26 @@ const FRAME_HEADER_LEN: usize = 9;
 /// does not consume the client connection preface. Use
 /// [`crate::h2::Http2Parser`] when bytes arrive as arbitrary TCP
 /// chunks or still contain the preface.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct FrameParser {
     pending_headers: Option<PendingHeaders>,
 
     // HPACK's dynamic table is a connection-level decoding context. See RFC 7541, Section 2.2:
     // <https://www.rfc-editor.org/rfc/rfc7541#section-2.2>
     hpack_decoder: Decoder<'static>,
+
+    // SETTINGS_HEADER_TABLE_SIZE advertised by the decoder's endpoint.
+    hpack_max_dynamic_size: u32,
+}
+
+impl Default for FrameParser {
+    fn default() -> Self {
+        Self {
+            pending_headers: None,
+            hpack_decoder: Decoder::with_dynamic_size(DEFAULT_HEADER_TABLE_SIZE),
+            hpack_max_dynamic_size: DEFAULT_HEADER_TABLE_SIZE,
+        }
+    }
 }
 
 /// The result of parsing bytes that begin at an HTTP/2 frame boundary.
@@ -135,7 +153,7 @@ impl FrameParser {
                 // the connection to terminate after COMPRESSION_ERROR:
                 // <https://www.rfc-editor.org/rfc/rfc9113#section-4.3>
                 if matches!(&source, FrameError::CompressionError) {
-                    self.hpack_decoder = Decoder::default();
+                    self.reset_hpack_decoder();
                 }
 
                 Err(FrameParseError {
@@ -150,13 +168,27 @@ impl FrameParser {
     #[inline]
     pub fn reset(&mut self) {
         self.pending_headers = None;
-        self.hpack_decoder = Decoder::default();
+        self.reset_hpack_decoder();
+    }
+
+    /// Applies the peer's `SETTINGS_HEADER_TABLE_SIZE` to subsequent field sections.
+    ///
+    /// The setting limits the encoder used by the endpoint that receives it, so a bidirectional
+    /// capture applies each direction's value to the opposite HPACK decoder. See
+    /// [RFC 9113, Section 6.5.2](https://www.rfc-editor.org/rfc/rfc9113#section-6.5.2).
+    pub fn set_max_header_table_size(&mut self, size: u32) {
+        self.hpack_max_dynamic_size = size;
+        self.hpack_decoder.set_max_dynamic_size(size);
     }
 
     /// Returns whether the next frame must be a CONTINUATION frame.
     #[inline]
     pub const fn is_waiting_for_continuation(&self) -> bool {
         self.pending_headers.is_some()
+    }
+
+    fn reset_hpack_decoder(&mut self) {
+        self.hpack_decoder = Decoder::with_dynamic_size(self.hpack_max_dynamic_size);
     }
 
     fn parse_payload(
@@ -210,12 +242,16 @@ impl FrameParser {
 #[derive(Debug, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum Frame {
+    /// A DATA frame.
+    Data(DataFrame),
     /// A SETTINGS frame.
     Settings(SettingsFrame),
     /// A WINDOW_UPDATE frame.
     WindowUpdate(WindowUpdateFrame),
     /// A legacy PRIORITY frame.
     Priority(PriorityFrame),
+    /// An extensible PRIORITY_UPDATE frame.
+    PriorityUpdate(PriorityUpdateFrame),
     /// A HEADERS frame, including any CONTINUATION metadata.
     Headers(HeadersFrame),
     /// A frame whose payload is retained without type-specific decoding.
@@ -226,6 +262,9 @@ pub enum Frame {
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum FrameRepr {
+    /// A candidate DATA frame representation.
+    Data(DataFrame),
+
     /// A candidate SETTINGS frame representation.
     Settings(SettingsFrame),
 
@@ -239,6 +278,9 @@ enum FrameRepr {
     /// A candidate PRIORITY frame representation.
     Priority(PriorityFrame),
 
+    /// A candidate PRIORITY_UPDATE frame representation.
+    PriorityUpdate(PriorityUpdateFrame),
+
     /// A candidate frame representation without type-specific payload decoding.
     Unknown(UnknownFrame),
 }
@@ -249,6 +291,7 @@ impl<'de> Deserialize<'de> for Frame {
         D: Deserializer<'de>,
     {
         let frame = match FrameRepr::deserialize(deserializer)? {
+            FrameRepr::Data(frame) if frame.frame_type == FrameType::Data => Self::Data(frame),
             FrameRepr::Settings(frame) if frame.frame_type == FrameType::Settings => {
                 Self::Settings(frame)
             }
@@ -260,6 +303,9 @@ impl<'de> Deserialize<'de> for Frame {
             }
             FrameRepr::Priority(frame) if frame.frame_type == FrameType::Priority => {
                 Self::Priority(frame)
+            }
+            FrameRepr::PriorityUpdate(frame) if frame.frame_type == FrameType::PriorityUpdate => {
+                Self::PriorityUpdate(frame)
             }
             FrameRepr::Unknown(frame) if frame.frame_type == FrameType::Unknown => {
                 Self::Unknown(frame)
@@ -280,9 +326,11 @@ impl Frame {
     #[inline]
     pub const fn frame_type(&self) -> FrameType {
         match self {
+            Self::Data(_) => FrameType::Data,
             Self::Settings(_) => FrameType::Settings,
             Self::WindowUpdate(_) => FrameType::WindowUpdate,
             Self::Priority(_) => FrameType::Priority,
+            Self::PriorityUpdate(_) => FrameType::PriorityUpdate,
             Self::Headers(_) => FrameType::Headers,
             Self::Unknown(_) => FrameType::Unknown,
         }
@@ -292,9 +340,11 @@ impl Frame {
     #[inline]
     pub const fn stream_id(&self) -> u32 {
         match self {
+            Self::Data(frame) => frame.stream_id,
             Self::Settings(frame) => frame.stream_id,
             Self::WindowUpdate(frame) => frame.stream_id,
             Self::Priority(frame) => frame.stream_id,
+            Self::PriorityUpdate(frame) => frame.stream_id,
             Self::Headers(frame) => frame.stream_id,
             Self::Unknown(frame) => frame.stream_id,
         }
@@ -304,9 +354,11 @@ impl Frame {
     #[inline]
     pub const fn payload_len(&self) -> usize {
         match self {
+            Self::Data(frame) => frame.length,
             Self::Settings(frame) => frame.length,
             Self::WindowUpdate(frame) => frame.length,
             Self::Priority(frame) => frame.length,
+            Self::PriorityUpdate(frame) => frame.length,
             Self::Headers(frame) => frame.length,
             Self::Unknown(frame) => frame.length,
         }
@@ -316,6 +368,9 @@ impl Frame {
 /// Frame categories represented by [`Frame`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FrameType {
+    /// DATA (`0x00`).
+    Data,
+
     /// SETTINGS (`0x04`).
     Settings,
 
@@ -330,6 +385,9 @@ pub enum FrameType {
 
     /// PRIORITY (`0x02`).
     Priority,
+
+    /// PRIORITY_UPDATE (`0x10`).
+    PriorityUpdate,
 
     /// A frame retained without type-specific decoding.
     Unknown,
@@ -392,7 +450,7 @@ impl TryFrom<UnknownFrameRepr> for UnknownFrame {
         if repr.frame_type != FrameType::Unknown {
             return Err("unknown frame_type must be Unknown");
         }
-        if matches!(repr.type_id, 0x1 | 0x2 | 0x4 | 0x8 | 0x9) {
+        if matches!(repr.type_id, 0x0 | 0x1 | 0x2 | 0x4 | 0x8 | 0x9 | 0x10) {
             return Err("a supported HTTP/2 frame type cannot use UnknownFrame");
         }
         if repr.stream_id > 0x7fff_ffff {
@@ -423,10 +481,13 @@ impl TryFrom<(u8, u8, u32, &[u8])> for Frame {
         (ty, flags, stream_id, payload): (u8, u8, u32, &[u8]),
     ) -> Result<Self, Self::Error> {
         match ty {
+            0x0 => DataFrame::try_from((flags, stream_id, payload)).map(Frame::Data),
             0x1 => HeadersFrame::try_from((flags, stream_id, payload)).map(Frame::Headers),
             0x2 => PriorityFrame::try_from((stream_id, payload)).map(Frame::Priority),
             0x4 => SettingsFrame::try_from((flags, stream_id, payload)).map(Frame::Settings),
             0x8 => WindowUpdateFrame::try_from((stream_id, payload)).map(Frame::WindowUpdate),
+            0x10 => PriorityUpdateFrame::try_from((flags, stream_id, payload))
+                .map(Frame::PriorityUpdate),
             0x9 => Err(FrameError::UnexpectedContinuation),
             _ => {
                 let frame = UnknownFrame {

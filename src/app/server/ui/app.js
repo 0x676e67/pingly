@@ -14,6 +14,8 @@ const VIEW_META = {
 const VIEW_ORDER = Object.keys(VIEW_META);
 const SERVER_ROUTES = /* PINGLY_ROUTES */ [];
 const DEFAULT_JSON_ROUTE = "/api/all";
+const CONNECTION_REUSE_PARAMETER = "connection";
+const CONNECTION_REUSE_VALUE = "reuse";
 const LATENCY_PATH = "/api/latency";
 const WEBSOCKET_PATH = "/api/websocket";
 const WEBSOCKET_PREPARE_PATHS = {
@@ -94,6 +96,14 @@ const CHROMIUM_PRIORITY_BY_WEIGHT = new Map([
     [110, "VeryLow / IDLE"],
     [74, "THROTTLED"],
 ]);
+const HTTP2_UNKNOWN_FRAME_NAMES = new Map([
+    [0x03, "RstStream"],
+    [0x05, "PushPromise"],
+    [0x06, "Ping"],
+    [0x07, "GoAway"],
+    [0x0a, "AltSvc"],
+    [0x0c, "Origin"],
+]);
 
 const state = {
     data: null,
@@ -106,6 +116,7 @@ const state = {
         http3: new Map(),
     },
     priorityProbeRunning: new Set(),
+    h2SelectedStreamId: null,
     proxyAnalysis: null,
     proxyError: "",
     proxyProgress: 0,
@@ -435,8 +446,9 @@ async function fetchAnalysis() {
     state.controller = controller;
     showLoading();
 
+    const requestPath = withConnectionReuse(DEFAULT_JSON_ROUTE);
     try {
-        const response = await fetch("/api/all", {
+        const response = await fetch(requestPath, {
             cache: "no-store",
             signal: controller.signal,
         });
@@ -446,7 +458,7 @@ async function fetchAnalysis() {
         }
 
         const data = await response.json();
-        loadAnalysis(data);
+        loadAnalysis(data, requestPath);
     } catch (error) {
         if (error && error.name === "AbortError") {
             return;
@@ -459,14 +471,15 @@ async function fetchAnalysis() {
     }
 }
 
-function loadAnalysis(data) {
+function loadAnalysis(data, requestPath) {
     if (!isObject(data)) {
         showError(new Error("The response is not a Pingly analysis object."));
         return;
     }
 
     resetProxyProbe();
-    recordCurrentPriorityProbes(data);
+    recordCurrentPriorityProbes(data, requestPath);
+    state.h2SelectedStreamId = null;
     state.data = data;
     refs.loading.hidden = true;
     refs.error.hidden = true;
@@ -616,7 +629,7 @@ async function selectJsonRoute(path) {
             return;
         }
 
-        const response = await fetch(path, {
+        const response = await fetch(withConnectionReuse(path), {
             cache: "no-store",
             signal: controller.signal,
         });
@@ -1134,7 +1147,7 @@ function getHeaderSource(data) {
         return "HTTP/3";
     }
 
-    if (getFrames(data.http2).some(function (frame) {
+    if (getHttp2ClientFrames(data.http2).some(function (frame) {
         return frame.frame_type === "Headers" && Array.isArray(frame.headers);
     })) {
         return "HTTP/2";
@@ -1157,7 +1170,7 @@ function getRequestHeaders(data) {
         return normalizeHeaders(http3Headers);
     }
 
-    const frames = getFrames(data.http2);
+    const frames = getHttp2ClientFrames(data.http2);
     for (let index = frames.length - 1; index >= 0; index -= 1) {
         const frame = frames[index];
         if (frame.frame_type === "Headers" && Array.isArray(frame.headers)) {
@@ -1233,6 +1246,7 @@ function renderHttp2(http2) {
     ]);
 
     const frames = getFrames(http2);
+    const streamSection = renderHttp2Streams(http2);
     const frameSection = createSection(
         "Client connection",
         "Sent frames",
@@ -1246,10 +1260,213 @@ function renderHttp2(http2) {
 
     root.replaceChildren(
         fingerprint,
+        streamSection,
         renderPriorityProbeSection("http2"),
         renderChromiumResourcePrioritySection(),
         frameSection
     );
+}
+
+function renderHttp2Streams(http2) {
+    const events = getHttp2Events(http2);
+    const streams = getHttp2Streams(http2);
+    const section = createSection(
+        "Bidirectional timeline",
+        "Request streams",
+        events.length + " captured events"
+    );
+
+    if (streams.length === 0) {
+        section.append(createEmptyState("No HTTP/2 request streams were captured", "git-branch"));
+        return section;
+    }
+
+    let selected = streams.find(function (stream) {
+        return Number(stream.stream_id) === state.h2SelectedStreamId;
+    });
+    if (!selected) {
+        selected = streams[streams.length - 1];
+        state.h2SelectedStreamId = Number(selected.stream_id);
+    }
+
+    const rows = streams.map(function (stream) {
+        const streamId = Number(stream.stream_id);
+        const active = streamId === state.h2SelectedStreamId;
+        const button = create(
+            "button",
+            active ? "btn btn-primary btn-sm font-monospace" :
+                "btn btn-outline-secondary btn-sm font-monospace",
+            String(streamId)
+        );
+        button.type = "button";
+        button.title = "Show stream " + streamId;
+        button.setAttribute("aria-pressed", String(active));
+        button.addEventListener("click", function () {
+            state.h2SelectedStreamId = streamId;
+            renderHttp2(http2);
+            paintIcons();
+        });
+
+        return {
+            className: active ? "table-active" : "",
+            cells: [
+                button,
+                createHttp2RequestTarget(stream),
+                monoPriorityValue(http2DeclaredPriority(stream.priority)),
+                monoPriorityValue(http2LegacyPriority(stream.priority)),
+                String(Array.isArray(stream.event_indices) ? stream.event_indices.length : 0),
+                formatByteSize(valueOr(stream.client_wire_bytes, 0)) + " / " +
+                    formatByteSize(valueOr(stream.server_wire_bytes, 0)),
+                createHttp2StreamState(stream),
+            ],
+        };
+    });
+    section.append(
+        createTable(
+            ["Stream", "Request", "Declared priority", "Legacy", "Events", "Client / server", "State"],
+            rows,
+            ["", "", "", "", "text-center", "", ""]
+        )
+    );
+
+    const timelineHeading = create(
+        "div",
+        "d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3"
+    );
+    timelineHeading.append(
+        create("h3", "h4 mb-0", "Stream " + selected.stream_id + " timeline"),
+        create(
+            "span",
+            "text-secondary small font-monospace",
+            createHttp2RequestLabel(selected)
+        )
+    );
+    section.append(timelineHeading);
+
+    const eventIndices = Array.isArray(selected.event_indices) ? selected.event_indices : [];
+    section.append(renderHttp2EventTimeline(events, eventIndices));
+    return section;
+}
+
+function createHttp2RequestTarget(stream) {
+    const wrapper = create("div", "d-flex flex-column gap-1");
+    wrapper.append(
+        create("span", "fw-semibold text-break", valueOr(stream.path, "Unknown target")),
+        create("span", "text-secondary small font-monospace", valueOr(stream.method, "-"))
+    );
+    return wrapper;
+}
+
+function createHttp2RequestLabel(stream) {
+    return valueOr(stream.method, "-") + " " + valueOr(stream.path, "Unknown target");
+}
+
+function http2DeclaredPriority(priority) {
+    if (!isObject(priority)) {
+        return "-";
+    }
+
+    const updates = Array.isArray(priority.updates) ? priority.updates : [];
+    if (updates.length > 0) {
+        return valueOr(updates[updates.length - 1].value, "-") + " (updated)";
+    }
+    return valueOr(priority.header, "-");
+}
+
+function http2LegacyPriority(priority) {
+    if (!isObject(priority) || !isObject(priority.legacy)) {
+        return "-";
+    }
+
+    const legacy = priority.legacy;
+    return "w=" + valueOr(legacy.weight, "-") +
+        " dep=" + valueOr(legacy.depends_on, "-") +
+        (Number(legacy.exclusive) === 1 ? " exclusive" : "");
+}
+
+function createHttp2StreamState(stream) {
+    let label = "Open";
+    let className = "badge bg-secondary-lt text-secondary";
+    if (stream.reset) {
+        label = "Reset";
+        className = "badge bg-red-lt text-red";
+    } else if (stream.client_ended && stream.server_ended) {
+        label = "Complete";
+        className = "badge bg-green-lt text-green";
+    } else if (stream.client_ended) {
+        label = "Request sent";
+        className = "badge bg-azure-lt text-azure";
+    } else if (stream.server_ended) {
+        label = "Response sent";
+        className = "badge bg-orange-lt text-orange";
+    }
+    return create("span", className, label);
+}
+
+function renderHttp2EventTimeline(events, eventIndices) {
+    const list = create("div", "list-group mb-3 protocol-list");
+
+    eventIndices.forEach(function (eventIndex) {
+        const event = events[eventIndex];
+        if (!isObject(event)) {
+            return;
+        }
+
+        const details = create("details", "list-group-item p-0 protocol-item");
+        const summary = create(
+            "summary",
+            "d-flex align-items-center gap-2 p-3 cursor-pointer protocol-summary"
+        );
+        const clientToServer = event.direction === "ClientToServer";
+        summary.append(
+            create(
+                "span",
+                clientToServer ? "badge bg-azure-lt text-azure" :
+                    "badge bg-orange-lt text-orange",
+                clientToServer ? "C -> S" : "S -> C"
+            ),
+            create("span", "badge bg-secondary-lt text-secondary", padIndex(eventIndex + 1)),
+            create("span", "fw-semibold text-break", http2FrameName(event))
+        );
+
+        const meta = create("span", "ms-auto text-secondary font-monospace small text-end");
+        meta.textContent = "+" + formatElapsedMicros(event.elapsed_us) +
+            " / " + valueOr(event.length, 0) + " bytes";
+        summary.append(meta);
+        details.append(summary);
+
+        const body = create("div", "border-top bg-body-tertiary p-3 protocol-body");
+        body.append(createValueNode(withoutKeys(event, [
+            "direction",
+            "elapsed_us",
+            "frame_type",
+            "stream_id",
+            "length",
+        ])));
+        details.append(body);
+        list.append(details);
+    });
+
+    if (!list.hasChildNodes()) {
+        list.append(createEmptyState("No events were retained for this stream", "network"));
+    }
+    return list;
+}
+
+function http2FrameName(frame) {
+    if (frame.frame_type !== "Unknown") {
+        return valueOr(frame.frame_type, "Unknown frame");
+    }
+    return HTTP2_UNKNOWN_FRAME_NAMES.get(Number(frame.type_id)) ||
+        "Unknown " + formatHex(valueOr(frame.type_id, 0));
+}
+
+function formatElapsedMicros(value) {
+    const micros = Number(value);
+    if (!Number.isFinite(micros) || micros < 0) {
+        return "-";
+    }
+    return micros < 1000 ? Math.round(micros) + " us" : (micros / 1000).toFixed(2) + " ms";
 }
 
 function renderHttp3(http3, tls) {
@@ -1569,12 +1786,17 @@ async function runPriorityProbe(protocol, scenario) {
         const data = scenario.kind === "navigation"
             ? await captureNavigationPriorityProbe(path)
             : await captureFetchPriorityProbe(path, scenario.priority);
+        const observation = extractPriorityObservation(protocol, data, path);
         probes.set(scenario.id, {
             label: scenario.label,
             context: scenario.context,
             status: "ok",
-            observation: extractPriorityObservation(protocol, data, path),
+            observation: observation,
         });
+        if (protocol === "http2" && state.data && isObject(data.http2)) {
+            state.data.http2 = data.http2;
+            state.h2SelectedStreamId = Number(observation.streamId);
+        }
     } catch (error) {
         const message = error instanceof Error ? error.message : "Priority probe failed";
         probes.set(scenario.id, {
@@ -1592,10 +1814,17 @@ async function runPriorityProbe(protocol, scenario) {
 
 function createPriorityProbePath(protocol, id) {
     const query = new URLSearchParams();
+    query.set(CONNECTION_REUSE_PARAMETER, CONNECTION_REUSE_VALUE);
     query.set("priority_protocol", protocol);
     query.set("priority_probe", id);
     query.set("nonce", Date.now().toString(36));
     return "/api/all?" + query.toString();
+}
+
+function withConnectionReuse(path) {
+    const url = new URL(path, window.location.origin);
+    url.searchParams.set(CONNECTION_REUSE_PARAMETER, CONNECTION_REUSE_VALUE);
+    return url.pathname + url.search;
 }
 
 async function captureFetchPriorityProbe(path, priority) {
@@ -1703,19 +1932,19 @@ function parsePriorityProbeDocument(documentNode) {
     return JSON.parse(text.slice(start, end + 1));
 }
 
-function recordCurrentPriorityProbes(data) {
-    recordCurrentPriorityProbe("http2", data);
-    recordCurrentPriorityProbe("http3", data);
+function recordCurrentPriorityProbes(data, path) {
+    recordCurrentPriorityProbe("http2", data, path);
+    recordCurrentPriorityProbe("http3", data, path);
 }
 
-function recordCurrentPriorityProbe(protocol, data) {
+function recordCurrentPriorityProbe(protocol, data, path) {
     const probes = state.priorityProbes[protocol];
     try {
         probes.set("current", {
             label: "Current fetch",
             context: "fetch(auto)",
             status: "ok",
-            observation: extractPriorityObservation(protocol, data, "/api/all"),
+            observation: extractPriorityObservation(protocol, data, path),
         });
     } catch (_) {
         probes.delete("current");
@@ -1729,7 +1958,7 @@ function extractPriorityObservation(protocol, data, path) {
 }
 
 function extractHttp2PriorityObservation(data, path) {
-    const frames = getFrames(data.http2);
+    const frames = getHttp2ClientFrames(data.http2);
     let matchedFrame;
     let matchedHeaders;
 
@@ -1878,6 +2107,29 @@ function summarizeFlags(flags) {
 function getFrames(http2) {
     return isObject(http2) && Array.isArray(http2.sent_frames)
         ? http2.sent_frames
+        : [];
+}
+
+function getHttp2Events(http2) {
+    return isObject(http2) && Array.isArray(http2.events)
+        ? http2.events
+        : [];
+}
+
+function getHttp2ClientFrames(http2) {
+    const events = getHttp2Events(http2);
+    if (events.length === 0) {
+        return getFrames(http2);
+    }
+
+    return events.filter(function (event) {
+        return event.direction === "ClientToServer";
+    });
+}
+
+function getHttp2Streams(http2) {
+    return isObject(http2) && Array.isArray(http2.streams)
+        ? http2.streams
         : [];
 }
 

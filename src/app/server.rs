@@ -237,7 +237,7 @@ mod tcp {
 
     use axum::{
         body::Body,
-        extract::ConnectInfo,
+        extract::{ConnectInfo, Query},
         http::{header, Method, Request, StatusCode, Version},
         middleware::AddExtension,
         response::Response,
@@ -250,6 +250,7 @@ mod tcp {
         service::TowerToHyperService,
     };
     use pingora_runtime::current_handle;
+    use serde::Deserialize;
     use tokio::{
         io::{AsyncRead, AsyncWrite},
         net::{TcpListener, TcpStream},
@@ -471,12 +472,35 @@ mod tcp {
         Default,
         Close,
         PreserveIfSuccessful,
+        ReuseAnalysisIfSuccessful,
         Http1Upgrade,
+    }
+
+    #[derive(Deserialize)]
+    struct ConnectionOptions {
+        connection: Option<ConnectionMode>,
+    }
+
+    #[derive(Eq, PartialEq, Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    enum ConnectionMode {
+        Reuse,
     }
 
     impl ConnectionDirective {
         fn from_request<B>(request: &Request<B>) -> Self {
             let path = request.uri().path();
+            let reuse_requested = routes::is_analysis_path(path)
+                && Query::<ConnectionOptions>::try_from_uri(request.uri())
+                    .is_ok_and(|Query(options)| options.connection == Some(ConnectionMode::Reuse));
+            if request.version() == Version::HTTP_2
+                && (path == routes::INDEX_PATH || reuse_requested)
+            {
+                // HTTP/2 carries each request on a stream, so the UI and explicit analysis
+                // sessions keep the connection available for later streams. See RFC 9113,
+                // Section 5: <https://www.rfc-editor.org/rfc/rfc9113#section-5>.
+                return Self::ReuseAnalysisIfSuccessful;
+            }
             if path == routes::WEBSOCKET_HTTP1_PREPARE_PATH {
                 return Self::Close;
             }
@@ -517,6 +541,11 @@ mod tcp {
             match self {
                 Self::Close => true,
                 Self::PreserveIfSuccessful => !response.status().is_success(),
+                Self::ReuseAnalysisIfSuccessful => {
+                    close_by_default
+                        && !response.status().is_success()
+                        && response.status() != StatusCode::NOT_MODIFIED
+                }
                 Self::Http1Upgrade => {
                     close_by_default && response.status() != StatusCode::SWITCHING_PROTOCOLS
                 }
@@ -543,7 +572,7 @@ mod tcp {
     mod tests {
         use axum::{
             body::Body,
-            http::{header, Method, Request, StatusCode},
+            http::{header, Method, Request, StatusCode, Version},
             response::Response,
         };
         use hyper::ext::Protocol;
@@ -554,11 +583,48 @@ mod tcp {
         const WEBSOCKET_PROTOCOL: &str = "websocket";
 
         #[test]
-        fn ordinary_requests_close_when_keep_alive_is_disabled() {
+        fn request_policy_limits_reuse_to_http2_analysis_sessions() {
             let request = Request::get("/").body(()).unwrap();
             let response = Response::new(Body::empty());
-
             assert!(ConnectionDirective::from_request(&request).should_close(&response, true));
+
+            let ui_request = Request::get("/").version(Version::HTTP_2).body(()).unwrap();
+            let response = Response::new(Body::empty());
+            assert!(!ConnectionDirective::from_request(&ui_request).should_close(&response, true));
+
+            let not_modified = Response::builder()
+                .status(StatusCode::NOT_MODIFIED)
+                .body(Body::empty())
+                .unwrap();
+            assert!(
+                !ConnectionDirective::from_request(&ui_request).should_close(&not_modified, true)
+            );
+
+            let ordinary_analysis = Request::get("/api/all")
+                .version(Version::HTTP_2)
+                .body(())
+                .unwrap();
+            let response = Response::new(Body::empty());
+            assert!(
+                ConnectionDirective::from_request(&ordinary_analysis).should_close(&response, true)
+            );
+
+            let analysis_request = Request::get("/api/all?connection=reuse")
+                .version(Version::HTTP_2)
+                .body(())
+                .unwrap();
+            let response = Response::new(Body::empty());
+            assert!(
+                !ConnectionDirective::from_request(&analysis_request).should_close(&response, true)
+            );
+
+            let rejected = Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::empty())
+                .unwrap();
+            assert!(
+                ConnectionDirective::from_request(&analysis_request).should_close(&rejected, true)
+            );
         }
 
         #[test]

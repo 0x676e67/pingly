@@ -48,6 +48,7 @@ fn compute_fingerprint<'a>(frames: impl IntoIterator<Item = &'a Frame>) -> Strin
 
     for frame in frames {
         match frame {
+            Frame::Data(_) => {}
             Frame::Settings(frame) if !has_initial_settings && !frame.is_ack() => {
                 has_initial_settings = true;
                 for setting in &frame.settings {
@@ -76,6 +77,7 @@ fn compute_fingerprint<'a>(frames: impl IntoIterator<Item = &'a Frame>) -> Strin
                     frame.priority.weight
                 );
             }
+            Frame::PriorityUpdate(_) => {}
             Frame::Headers(frame) => {
                 if headers_count > 0 {
                     headers_group.push(';');
