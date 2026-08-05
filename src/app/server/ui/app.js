@@ -1415,16 +1415,18 @@ function renderHttp2EventTimeline(events, eventIndices) {
         const details = create("details", "list-group-item p-0 protocol-item");
         const summary = create(
             "summary",
-            "d-flex align-items-center gap-2 p-3 cursor-pointer protocol-summary"
+            "d-flex flex-wrap align-items-center gap-2 p-3 cursor-pointer protocol-summary"
         );
         const clientToServer = event.direction === "ClientToServer";
+        const direction = create(
+            "span",
+            clientToServer ? "badge bg-azure-lt text-azure" :
+                "badge bg-orange-lt text-orange",
+            clientToServer ? "Client sent" : "Server sent"
+        );
+        direction.title = clientToServer ? "Client to server" : "Server to client";
         summary.append(
-            create(
-                "span",
-                clientToServer ? "badge bg-azure-lt text-azure" :
-                    "badge bg-orange-lt text-orange",
-                clientToServer ? "C -> S" : "S -> C"
-            ),
+            direction,
             create("span", "badge bg-secondary-lt text-secondary", padIndex(eventIndex + 1)),
             create("span", "fw-semibold text-break", http2FrameName(event))
         );

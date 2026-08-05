@@ -124,10 +124,10 @@ struct Http2StreamInfo {
     /// Positions of this stream's frames in the connection-level `events` array.
     event_indices: Vec<usize>,
 
-    /// Total client-to-server frame bytes, including nine-byte frame headers.
+    /// Client-to-server bytes carried directly on this stream, including frame headers.
     client_wire_bytes: u64,
 
-    /// Total server-to-client frame bytes, including nine-byte frame headers.
+    /// Server-to-client bytes carried directly on this stream, including frame headers.
     server_wire_bytes: u64,
 
     /// Whether an endpoint reset the stream.
@@ -456,7 +456,7 @@ impl Http2TrackInfo {
     /// Builds HTTP/2 analysis when the captured frames contain fingerprint input.
     pub fn new(capture: Http2Capture) -> Option<Http2TrackInfo> {
         let event_count = capture.count();
-        let akamai = AkamaiFingerprint::from_frames(legacy_client_frames(&capture, event_count))?;
+        let akamai = AkamaiFingerprint::from_frames(initial_client_frames(&capture, event_count))?;
 
         Some(Self {
             akamai_fingerprint: akamai.fingerprint,
@@ -513,6 +513,28 @@ impl Serialize for ClientFrameSequence<'_> {
         }
         sequence.end()
     }
+}
+
+/// Returns the initial client frame sequence through the opening request HEADERS frame.
+fn initial_client_frames(
+    capture: &Http2Capture,
+    event_count: usize,
+) -> impl Iterator<Item = &Frame> {
+    capture
+        .iter()
+        .take(event_count)
+        .scan(false, |stopped, (_, event)| {
+            if *stopped {
+                return None;
+            }
+            if event.direction != Http2FrameDirection::ClientToServer {
+                return Some(None);
+            }
+
+            *stopped = matches!(event.frame, Frame::Headers(_));
+            Some(Some(&event.frame))
+        })
+        .flatten()
 }
 
 /// Recreates the bounded client sequence exposed before full-connection capture was added.
@@ -573,7 +595,11 @@ fn summarize_http2_streams(capture: &Http2Capture, event_count: usize) -> Vec<Ht
             .or_insert_with(|| Http2StreamInfo::new(stream_id));
         stream.event_indices.push(event_index);
 
-        let wire_bytes = http2_frame_wire_bytes(&event.frame);
+        let wire_bytes = if event.frame.stream_id() == stream_id {
+            http2_frame_wire_bytes(&event.frame)
+        } else {
+            0
+        };
         let ended = http2_frame_ends_direction(&event.frame);
         match event.direction {
             Http2FrameDirection::ClientToServer => {
@@ -1162,10 +1188,32 @@ mod tests {
                 payload: vec![0; 4],
             }),
         });
+        capture.push(Http2FrameEvent {
+            elapsed_us: 50,
+            direction: Http2FrameDirection::ClientToServer,
+            frame: Http2Frame::Headers(Http2HeadersFrame {
+                frame_type: Http2FrameType::Headers,
+                stream_id: 7,
+                length: 2,
+                headers: vec![
+                    Http2HeaderField {
+                        name: b":path".as_slice().into(),
+                        value: b"/later".as_slice().into(),
+                    },
+                    Http2HeaderField {
+                        name: b":method".as_slice().into(),
+                        value: b"GET".as_slice().into(),
+                    },
+                ],
+                flags: HeadersFlags::from(0x05),
+                priority: None,
+                continuations: Vec::new(),
+            }),
+        });
 
         let info = Http2TrackInfo::new(capture.clone()).unwrap();
         capture.push(Http2FrameEvent {
-            elapsed_us: 50,
+            elapsed_us: 60,
             direction: Http2FrameDirection::ClientToServer,
             frame: Http2Frame::Data(DataFrame::try_from((0x01, 7, b"late".as_slice())).unwrap()),
         });
@@ -1174,14 +1222,15 @@ mod tests {
         let stream = &value["streams"][0];
         let reset_stream = &value["streams"][1];
 
-        assert_eq!(value["sent_frames"].as_array().unwrap().len(), 3);
-        assert_eq!(value["events"].as_array().unwrap().len(), 5);
+        assert_eq!(value["akamai_fingerprint"], "1:65536|00|0|m,p");
+        assert_eq!(value["sent_frames"].as_array().unwrap().len(), 4);
+        assert_eq!(value["events"].as_array().unwrap().len(), 6);
         assert_eq!(value["events"][3]["direction"], "ServerToClient");
         assert_eq!(stream["stream_id"], 3);
         assert_eq!(stream["method"], "GET");
         assert_eq!(stream["path"], "/api/http2");
         assert_eq!(stream["event_indices"], json!([1, 2, 3]));
-        assert_eq!(stream["client_wire_bytes"], 32);
+        assert_eq!(stream["client_wire_bytes"], 16);
         assert_eq!(stream["server_wire_bytes"], 11);
         assert_eq!(stream["client_ended"], true);
         assert_eq!(stream["server_ended"], true);
