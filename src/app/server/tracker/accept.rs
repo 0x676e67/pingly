@@ -58,7 +58,7 @@ where
                 Some(b"h2") => {
                     tracing::debug!("negotiated ALPN protocol: HTTP/2");
                     let inspector = Http2Inspector::new(stream);
-                    connect_track.set_http2_frames(inspector.frames());
+                    connect_track.set_http2_capture(inspector.capture());
                     Inspector::Http2(inspector)
                 }
                 _ => {

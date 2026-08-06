@@ -29,7 +29,7 @@ use super::tracker::info::{ConnectionTrack, Track, TrackInfo};
 use crate::tcp::{ProxyAnalysis, TcpAnalysis, TcpCapture};
 use crate::{error::Error, Result};
 
-const INDEX_PATH: &str = "/";
+pub(super) const INDEX_PATH: &str = "/";
 const ALL_PATH: &str = "/api/all";
 const TLS_PATH: &str = "/api/tls";
 const HTTP1_PATH: &str = "/api/http1";
@@ -40,6 +40,14 @@ pub(super) const WEBSOCKET_HTTP1_PREPARE_PATH: &str = "/api/websocket/http1";
 pub(super) const WEBSOCKET_HTTP2_PREPARE_PATH: &str = "/api/websocket/http2";
 const TCP_PATH: &str = "/api/tcp";
 const LATENCY_PATH: &str = "/api/latency";
+
+/// Returns whether a route exposes captured protocol analysis as an HTTP response.
+pub(super) fn is_analysis_path(path: &str) -> bool {
+    matches!(
+        path,
+        ALL_PATH | TLS_PATH | HTTP1_PATH | HTTP2_PATH | HTTP3_PATH | TCP_PATH
+    )
+}
 
 // Analysis endpoints do not inspect request bodies. Reject oversized payloads with the status
 // defined by RFC 9110, Section 15.5.14:
@@ -154,10 +162,7 @@ pub(super) fn is_websocket_transport_preparation(path: &str) -> bool {
 }
 
 pub(super) fn limits_request_body(path: &str) -> bool {
-    matches!(
-        path,
-        ALL_PATH | TLS_PATH | HTTP1_PATH | HTTP2_PATH | HTTP3_PATH | TCP_PATH
-    )
+    is_analysis_path(path)
 }
 
 // Compression can change the transfer bytes without changing the UI document, so the
@@ -391,19 +396,25 @@ pub(crate) async fn track(
     #[cfg(target_os = "linux")]
     {
         spawn_blocking_analysis(move || {
-            TrackInfo::new_with_tcp(Track::All, addr, req, track, tcp_packets)
+            ErasedJson::pretty(TrackInfo::new_with_tcp(
+                Track::All,
+                addr,
+                req,
+                track,
+                tcp_packets,
+            ))
         })
         .await
-        .map(ErasedJson::pretty)
         .map_err(Error::from)
     }
 
     #[cfg(not(target_os = "linux"))]
     {
-        spawn_blocking_analysis(move || TrackInfo::new(Track::All, addr, req, track))
-            .await
-            .map(ErasedJson::pretty)
-            .map_err(Error::from)
+        spawn_blocking_analysis(move || {
+            ErasedJson::pretty(TrackInfo::new(Track::All, addr, req, track))
+        })
+        .await
+        .map_err(Error::from)
     }
 }
 
@@ -413,10 +424,11 @@ pub(crate) async fn tls_track(
     Extension(track): Extension<ConnectionTrack>,
     req: Request<Body>,
 ) -> Result<ErasedJson> {
-    spawn_blocking_analysis(move || TrackInfo::new(Track::Tls, addr, req, track))
-        .await
-        .map(ErasedJson::pretty)
-        .map_err(Error::from)
+    spawn_blocking_analysis(move || {
+        ErasedJson::pretty(TrackInfo::new(Track::Tls, addr, req, track))
+    })
+    .await
+    .map_err(Error::from)
 }
 
 #[inline]
@@ -425,10 +437,11 @@ pub(crate) async fn http1_track(
     Extension(track): Extension<ConnectionTrack>,
     req: Request<Body>,
 ) -> Result<ErasedJson> {
-    spawn_blocking_analysis(move || TrackInfo::new(Track::HTTP1, addr, req, track))
-        .await
-        .map(ErasedJson::pretty)
-        .map_err(Error::from)
+    spawn_blocking_analysis(move || {
+        ErasedJson::pretty(TrackInfo::new(Track::HTTP1, addr, req, track))
+    })
+    .await
+    .map_err(Error::from)
 }
 
 #[inline]
@@ -437,10 +450,11 @@ pub(crate) async fn http2_track(
     Extension(track): Extension<ConnectionTrack>,
     req: Request<Body>,
 ) -> Result<ErasedJson> {
-    spawn_blocking_analysis(move || TrackInfo::new(Track::HTTP2, addr, req, track))
-        .await
-        .map(ErasedJson::pretty)
-        .map_err(Error::from)
+    spawn_blocking_analysis(move || {
+        ErasedJson::pretty(TrackInfo::new(Track::HTTP2, addr, req, track))
+    })
+    .await
+    .map_err(Error::from)
 }
 
 #[inline]
@@ -449,10 +463,11 @@ pub(crate) async fn http3_track(
     Extension(track): Extension<ConnectionTrack>,
     req: Request<Body>,
 ) -> Result<ErasedJson> {
-    spawn_blocking_analysis(move || TrackInfo::new(Track::HTTP3, addr, req, track))
-        .await
-        .map(ErasedJson::pretty)
-        .map_err(Error::from)
+    spawn_blocking_analysis(move || {
+        ErasedJson::pretty(TrackInfo::new(Track::HTTP3, addr, req, track))
+    })
+    .await
+    .map_err(Error::from)
 }
 
 #[inline]

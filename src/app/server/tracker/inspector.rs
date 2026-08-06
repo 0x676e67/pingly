@@ -4,43 +4,66 @@
 //! bounded buffering and incremental framing.
 
 use std::{
-    ops::Deref,
     pin::Pin,
     sync::{Arc, OnceLock},
     task::{self, Poll},
+    time::Instant,
 };
 
+use bytes::{Buf, BytesMut};
 use pin_project_lite::pin_project;
 pub use pingly::tls::{ClientHello, ClientHelloBuffer};
 use pingly::{
     h1::Http1HeadBuffer,
     h2::{frame, frame::Frame, HTTP2_CLIENT_PREFACE},
 };
+use serde::Serialize;
 use tokio::io::{self, AsyncRead, AsyncWrite, ReadBuf};
 use tokio_rustls::server::TlsStream;
 
 /// Shared storage for one raw HTTP/1 request head.
 pub type Http1RequestCapture = Arc<OnceLock<Http1HeadBuffer>>;
 
-/// Concurrent storage for HTTP/2 frames captured from one connection.
-pub type Http2Frame = Arc<boxcar::Vec<Frame>>;
+/// Concurrent storage for HTTP/2 frame events captured from one connection.
+pub type Http2Capture = Arc<boxcar::Vec<Http2FrameEvent>>;
+
+/// Direction of an HTTP/2 frame relative to Pingly.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum Http2FrameDirection {
+    /// A frame sent by the client to Pingly.
+    ClientToServer,
+
+    /// A frame sent by Pingly to the client.
+    ServerToClient,
+}
+
+/// One timestamped HTTP/2 frame observed on the decrypted connection.
+#[derive(Debug, Serialize)]
+pub struct Http2FrameEvent {
+    /// Microseconds elapsed since HTTP/2 inspection began.
+    pub elapsed_us: u64,
+
+    /// Frame direction relative to Pingly.
+    pub direction: Http2FrameDirection,
+
+    /// Decoded frame fields and retained payload bytes.
+    #[serde(flatten)]
+    pub frame: Frame,
+}
 
 const HTTP2_CAPTURE_MAX_BYTES: usize = 1024 * 1024;
-const HTTP2_CAPTURE_MAX_FRAMES: usize = 128;
-const HTTP2_CAPTURE_MAX_HEADER_BLOCKS: usize = 2;
+const HTTP2_CAPTURE_MAX_FRAMES: usize = 512;
+const HTTP2_DATA_PREVIEW_BYTES: usize = 64;
 
 #[derive(Default)]
 struct Http2CaptureBudget {
-    /// Number of client bytes admitted to the capture buffer.
+    /// Number of bytes admitted to this direction's capture buffer.
     bytes: usize,
 
     /// Number of complete wire frames observed.
     frames: usize,
 
-    /// Number of complete HEADERS field sections observed.
-    header_blocks: usize,
-
-    /// Whether this connection no longer needs inspection.
+    /// Whether this direction no longer needs inspection.
     stopped: bool,
 }
 
@@ -65,20 +88,14 @@ impl Http2CaptureBudget {
         self.bytes >= HTTP2_CAPTURE_MAX_BYTES
     }
 
-    /// Records one complete wire frame and reports whether capture may continue.
-    fn record_frame(&mut self) -> bool {
-        if self.frames < HTTP2_CAPTURE_MAX_FRAMES {
-            self.frames += 1;
+    /// Admits one complete wire frame when the event limit has room.
+    fn admit_frame(&mut self) -> bool {
+        if self.frames >= HTTP2_CAPTURE_MAX_FRAMES {
+            return false;
         }
-        self.frames < HTTP2_CAPTURE_MAX_FRAMES
-    }
 
-    /// Allows the UI warm-up request before the WebSocket Extended CONNECT field section.
-    ///
-    /// The warm-up gives the browser an HTTP/2 connection to reuse for the WebSocket stream.
-    fn record_header_block(&mut self) -> bool {
-        self.header_blocks = self.header_blocks.saturating_add(1);
-        self.header_blocks >= HTTP2_CAPTURE_MAX_HEADER_BLOCKS
+        self.frames += 1;
+        true
     }
 
     #[inline]
@@ -87,10 +104,139 @@ impl Http2CaptureBudget {
     }
 }
 
+/// Incremental parser and resource budget for one HTTP/2 wire direction.
+struct Http2WireCapture {
+    /// Bytes waiting for a complete preface or frame.
+    buffer: BytesMut,
+
+    /// Stateful frame and HPACK decoder for this direction.
+    parser: frame::FrameParser,
+
+    /// Whether the expected client connection preface has been consumed.
+    preface_complete: bool,
+
+    /// Bounds retained bytes and parsing work for this direction.
+    budget: Http2CaptureBudget,
+}
+
+impl Http2WireCapture {
+    fn client() -> Self {
+        Self::new(true)
+    }
+
+    fn server() -> Self {
+        Self::new(false)
+    }
+
+    fn new(expects_preface: bool) -> Self {
+        Self {
+            buffer: BytesMut::new(),
+            parser: frame::FrameParser::default(),
+            preface_complete: !expects_preface,
+            budget: Http2CaptureBudget::default(),
+        }
+    }
+
+    fn inspect(
+        &mut self,
+        bytes: &[u8],
+        direction: Http2FrameDirection,
+        started_at: Instant,
+        events: &boxcar::Vec<Http2FrameEvent>,
+    ) -> Option<u32> {
+        if !self.budget.is_active() || bytes.is_empty() {
+            return None;
+        }
+
+        let admitted = self.budget.accept_bytes(bytes.len());
+        self.buffer.extend_from_slice(&bytes[..admitted]);
+        if !self.consume_preface() {
+            self.stop();
+            return None;
+        }
+
+        let mut header_table_size = None;
+        while self.preface_complete && !self.buffer.is_empty() {
+            let (consumed, frame) = match self.parser.parse(&self.buffer) {
+                Ok(outcome) => (outcome.consumed(), outcome.into_frame()),
+                Err(error) => {
+                    tracing::debug!(?error, ?direction, "failed to parse captured HTTP/2 frame");
+                    (error.consumed, None)
+                }
+            };
+            if consumed == 0 {
+                break;
+            }
+            self.buffer.advance(consumed.min(self.buffer.len()));
+
+            if !self.budget.admit_frame() {
+                self.stop();
+                return header_table_size;
+            }
+            if let Some(mut frame) = frame {
+                if let Frame::Settings(settings) = &frame {
+                    header_table_size = settings
+                        .settings
+                        .iter()
+                        .rev()
+                        .find_map(|setting| match setting.value() {
+                            (1, value) => Some(value),
+                            _ => None,
+                        })
+                        .or(header_table_size);
+                }
+                if let Frame::Data(data) = &mut frame {
+                    data.truncate(HTTP2_DATA_PREVIEW_BYTES);
+                }
+                let elapsed_us = started_at.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
+                events.push(Http2FrameEvent {
+                    elapsed_us,
+                    direction,
+                    frame,
+                });
+            }
+        }
+
+        if self.budget.byte_limit_reached() || self.budget.frames >= HTTP2_CAPTURE_MAX_FRAMES {
+            self.stop();
+        }
+
+        header_table_size
+    }
+
+    fn set_max_header_table_size(&mut self, size: u32) {
+        self.parser.set_max_header_table_size(size);
+    }
+
+    fn consume_preface(&mut self) -> bool {
+        if self.preface_complete {
+            return true;
+        }
+
+        let prefix_len = self.buffer.len().min(HTTP2_CLIENT_PREFACE.len());
+        if self.buffer[..prefix_len] != HTTP2_CLIENT_PREFACE[..prefix_len] {
+            return false;
+        }
+        if prefix_len == HTTP2_CLIENT_PREFACE.len() {
+            self.buffer.advance(HTTP2_CLIENT_PREFACE.len());
+            self.preface_complete = true;
+        }
+
+        true
+    }
+
+    fn stop(&mut self) {
+        self.budget.stop();
+        self.buffer = BytesMut::new();
+        self.parser.reset();
+    }
+}
+
 /// HTTP stream selected after TLS ALPN negotiation.
 ///
 /// Both variants implement [`AsyncRead`] and [`AsyncWrite`] by forwarding operations to their
 /// wrapped TLS stream.
+#[allow(clippy::large_enum_variant)]
 pub enum Inspector<S> {
     /// HTTP/1 stream with request-head capture.
     Http1(Http1Inspector<S>),
@@ -334,26 +480,26 @@ where
 }
 
 pin_project! {
-    /// TLS stream wrapper that captures the initial HTTP/2 client frame sequence.
+    /// TLS stream wrapper that captures a bounded, bidirectional HTTP/2 frame timeline.
     ///
-    /// Capture stops after an Extended CONNECT or the second complete HEADERS block. Byte and
-    /// frame limits provide the remaining bounds. Reads and writes continue normally afterward.
+    /// Client and server directions keep separate HPACK state. Reads and writes continue normally
+    /// after either direction reaches its byte or frame limit.
     pub struct Http2Inspector<I> {
         // TLS stream forwarded to Hyper.
         #[pin]
         inner: TlsStream<TlsInspector<I>>,
 
-        // Bytes waiting for a complete preface or frame.
-        buf: Vec<u8>,
+        // Incremental parser for client-to-server frames.
+        inbound: Http2WireCapture,
 
-        // Complete client frames shared with response analysis.
-        frames: Http2Frame,
+        // Incremental parser for server-to-client frames.
+        outbound: Http2WireCapture,
 
-        // Stateful frame and HPACK decoder.
-        parser: frame::FrameParser,
+        // Complete frame events shared with delayed response analysis.
+        capture: Http2Capture,
 
-        // Per-connection bounds for capture work and retained data.
-        capture_budget: Http2CaptureBudget,
+        // Monotonic origin used for event timestamps in both directions.
+        started_at: Instant,
     }
 }
 
@@ -366,17 +512,17 @@ where
     pub fn new(inner: TlsStream<TlsInspector<I>>) -> Self {
         Self {
             inner,
-            buf: Vec::new(),
-            frames: Arc::new(boxcar::Vec::new()),
-            parser: frame::FrameParser::default(),
-            capture_budget: Http2CaptureBudget::default(),
+            inbound: Http2WireCapture::client(),
+            outbound: Http2WireCapture::server(),
+            capture: Arc::new(boxcar::Vec::new()),
+            started_at: Instant::now(),
         }
     }
 
-    /// Returns shared storage for captured HTTP/2 frames.
+    /// Returns shared storage for captured HTTP/2 frame events.
     #[inline]
-    pub fn frames(&self) -> Http2Frame {
-        self.frames.clone()
+    pub fn capture(&self) -> Http2Capture {
+        self.capture.clone()
     }
 }
 
@@ -393,63 +539,14 @@ where
         let len = buf.filled().len();
         let this = self.project();
         let poll = this.inner.poll_read(cx, buf);
-
-        if !this.capture_budget.is_active() {
-            return poll;
-        }
-
         let new_data = &buf.filled()[len..];
-        let inspected_len = this.capture_budget.accept_bytes(new_data.len());
-        this.buf.extend_from_slice(&new_data[..inspected_len]);
-        let byte_limit_reached = this.capture_budget.byte_limit_reached();
-        let mut stop_capture = false;
-
-        let plen = HTTP2_CLIENT_PREFACE.len();
-        let not_http2 = this.buf.len() >= plen && !this.buf.starts_with(HTTP2_CLIENT_PREFACE);
-        if not_http2 {
-            stop_capture = true;
-        } else {
-            let frames = this.frames.deref();
-            while this.buf.len() > plen {
-                let (frame_len, frame) = match this.parser.parse(&this.buf[plen..]) {
-                    Ok(parsed) => (parsed.consumed(), parsed.into_frame()),
-                    Err(error) => {
-                        tracing::debug!(?error, "failed to parse HTTP/2 frame");
-                        (error.consumed, None)
-                    }
-                };
-                if frame_len > 0 {
-                    this.buf.drain(plen..plen + frame_len);
-                    if !this.capture_budget.record_frame() {
-                        stop_capture = true;
-                    }
-
-                    let headers_complete = match frame.as_ref() {
-                        Some(Frame::Headers(headers)) => {
-                            let limit_reached = this.capture_budget.record_header_block();
-                            headers.is_extended_connect(b"websocket") || limit_reached
-                        }
-                        _ => false,
-                    };
-                    if let Some(frame) = frame {
-                        frames.push(frame);
-                    }
-                    if headers_complete {
-                        stop_capture = true;
-                    }
-                    if stop_capture {
-                        break;
-                    }
-                } else {
-                    break;
-                }
-            }
-        }
-
-        if stop_capture || byte_limit_reached {
-            this.capture_budget.stop();
-            *this.buf = Vec::new();
-            *this.parser = frame::FrameParser::default();
+        if let Some(size) = this.inbound.inspect(
+            new_data,
+            Http2FrameDirection::ClientToServer,
+            *this.started_at,
+            this.capture,
+        ) {
+            this.outbound.set_max_header_table_size(size);
         }
 
         poll
@@ -466,7 +563,25 @@ where
         cx: &mut task::Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        self.project().inner.poll_write(cx, buf)
+        let this = self.project();
+        match this.inner.poll_write(cx, buf) {
+            Poll::Ready(Ok(written)) => {
+                if let Some(written_bytes) = buf.get(..written) {
+                    if let Some(size) = this.outbound.inspect(
+                        written_bytes,
+                        Http2FrameDirection::ServerToClient,
+                        *this.started_at,
+                        this.capture,
+                    ) {
+                        this.inbound.set_max_header_table_size(size);
+                    }
+                } else {
+                    tracing::debug!(written, available = buf.len(), "invalid AsyncWrite result");
+                }
+                Poll::Ready(Ok(written))
+            }
+            poll => poll,
+        }
     }
 
     #[inline]
@@ -482,10 +597,17 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{Http2CaptureBudget, HTTP2_CAPTURE_MAX_BYTES, HTTP2_CAPTURE_MAX_FRAMES};
+    use std::time::Instant;
+
+    use pingly::h2::{Frame, HTTP2_CLIENT_PREFACE};
+
+    use super::{
+        Http2CaptureBudget, Http2FrameDirection, Http2WireCapture, HTTP2_CAPTURE_MAX_BYTES,
+        HTTP2_CAPTURE_MAX_FRAMES,
+    };
 
     #[test]
-    fn http2_capture_budget_caps_cumulative_bytes() {
+    fn http2_capture_is_incremental_bidirectional_and_bounded() {
         let mut budget = Http2CaptureBudget::default();
 
         assert_eq!(
@@ -495,16 +617,54 @@ mod tests {
         assert_eq!(budget.accept_bytes(usize::MAX), 1);
         assert!(budget.byte_limit_reached());
         assert_eq!(budget.accept_bytes(1), 0);
-    }
 
-    #[test]
-    fn http2_capture_budget_caps_wire_frames() {
-        let mut budget = Http2CaptureBudget::default();
-
-        for _ in 1..HTTP2_CAPTURE_MAX_FRAMES {
-            assert!(budget.record_frame());
+        for _ in 0..HTTP2_CAPTURE_MAX_FRAMES {
+            assert!(budget.admit_frame());
         }
-        assert!(!budget.record_frame());
-        assert!(!budget.record_frame());
+        assert!(!budget.admit_frame());
+
+        let events = boxcar::Vec::new();
+        let started_at = Instant::now();
+        let settings = [0, 0, 6, 0x04, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0];
+        let mut client_bytes = HTTP2_CLIENT_PREFACE.to_vec();
+        client_bytes.extend_from_slice(&settings);
+
+        let mut client = Http2WireCapture::client();
+        let mut header_table_size = None;
+        for chunk in client_bytes.chunks(7) {
+            header_table_size = client
+                .inspect(
+                    chunk,
+                    Http2FrameDirection::ClientToServer,
+                    started_at,
+                    &events,
+                )
+                .or(header_table_size);
+        }
+        let mut server = Http2WireCapture::server();
+        server.set_max_header_table_size(header_table_size.unwrap());
+        let headers = [
+            0, 0, 5, 0x01, 0x04, 0, 0, 0, 1, 0x3f, 0xe1, 0xff, 0x03, 0x88,
+        ];
+        let _ = server.inspect(
+            &headers,
+            Http2FrameDirection::ServerToClient,
+            started_at,
+            &events,
+        );
+
+        assert_eq!(events.count(), 2);
+        assert!(matches!(
+            events.get(0).map(|event| &event.frame),
+            Some(Frame::Settings(_))
+        ));
+        assert_eq!(
+            events.get(1).map(|event| event.direction),
+            Some(Http2FrameDirection::ServerToClient)
+        );
+        assert!(matches!(
+            events.get(1).map(|event| &event.frame),
+            Some(Frame::Headers(_))
+        ));
     }
 }
