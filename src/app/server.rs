@@ -468,7 +468,7 @@ mod tcp {
     }
 
     #[derive(Clone, Copy)]
-    enum ConnectionDirective {
+    pub(super) enum ConnectionDirective {
         Default,
         Close,
         PreserveIfSuccessful,
@@ -488,17 +488,18 @@ mod tcp {
     }
 
     impl ConnectionDirective {
-        fn from_request<B>(request: &Request<B>) -> Self {
+        pub(super) fn from_request<B>(request: &Request<B>) -> Self {
             let path = request.uri().path();
             let reuse_requested = routes::is_analysis_path(path)
                 && Query::<ConnectionOptions>::try_from_uri(request.uri())
                     .is_ok_and(|Query(options)| options.connection == Some(ConnectionMode::Reuse));
-            if request.version() == Version::HTTP_2
+            if matches!(request.version(), Version::HTTP_2 | Version::HTTP_3)
                 && (path == routes::INDEX_PATH || reuse_requested)
             {
-                // HTTP/2 carries each request on a stream, so the UI and explicit analysis
-                // sessions keep the connection available for later streams. See RFC 9113,
-                // Section 5: <https://www.rfc-editor.org/rfc/rfc9113#section-5>.
+                // Multiplexed UI and explicit analysis sessions keep the connection available
+                // for later streams. See RFC 9113, Section 5 and RFC 9114, Section 6.1:
+                // <https://www.rfc-editor.org/rfc/rfc9113#section-5>
+                // <https://www.rfc-editor.org/rfc/rfc9114#section-6.1>
                 return Self::ReuseAnalysisIfSuccessful;
             }
             if path == routes::WEBSOCKET_HTTP1_PREPARE_PATH {
@@ -537,7 +538,7 @@ mod tcp {
             }
         }
 
-        fn should_close(self, response: &Response, close_by_default: bool) -> bool {
+        pub(super) fn should_close(self, response: &Response, close_by_default: bool) -> bool {
             match self {
                 Self::Close => true,
                 Self::PreserveIfSuccessful => !response.status().is_success(),
@@ -583,7 +584,7 @@ mod tcp {
         const WEBSOCKET_PROTOCOL: &str = "websocket";
 
         #[test]
-        fn request_policy_limits_reuse_to_http2_analysis_sessions() {
+        fn request_policy_limits_reuse_to_multiplexed_analysis_sessions() {
             let request = Request::get("/").body(()).unwrap();
             let response = Response::new(Body::empty());
             assert!(ConnectionDirective::from_request(&request).should_close(&response, true));
@@ -624,6 +625,15 @@ mod tcp {
                 .unwrap();
             assert!(
                 ConnectionDirective::from_request(&analysis_request).should_close(&rejected, true)
+            );
+
+            let http3_analysis = Request::get("/api/all?connection=reuse")
+                .version(Version::HTTP_3)
+                .body(())
+                .unwrap();
+            let response = Response::new(Body::empty());
+            assert!(
+                !ConnectionDirective::from_request(&http3_analysis).should_close(&response, true)
             );
         }
 
@@ -703,13 +713,19 @@ mod quic {
 
     use axum::{
         body::Body,
-        http::{Request, Response},
+        http::{HeaderMap, Request, Response, StatusCode},
         Router,
     };
-    use bytes::{Buf, Bytes};
+    use bytes::{Buf, Bytes, BytesMut};
     use h3::error::Code;
     use http_body_util::BodyExt;
-    use pingly::tls::ClientHelloHandshakeBuffer;
+    use pingly::{
+        h3::{
+            DataFrame as Http3DataFrame, Frame as Http3Frame, FrameType as Http3FrameType,
+            HeaderField as Http3HeaderField, HeadersFrame as Http3HeadersFrame,
+        },
+        tls::{ClientHelloHandshakeBuffer, HexBytes},
+    };
     use pingora_runtime::current_handle;
     use socket2::{Domain, Protocol, Socket, Type};
     use tokio::{
@@ -723,13 +739,26 @@ mod quic {
         crypto::HandshakeData,
         inspect::{Http3Capture, InspectedBidiStream, InspectedConnection},
     };
-    use super::{routes, tracker::info::ConnectionTrack, Handle, MAX_HEADER_LIST_SIZE};
+    use super::{
+        routes, tcp::ConnectionDirective, tracker::info::ConnectionTrack, Handle,
+        MAX_HEADER_LIST_SIZE,
+    };
     use crate::Result;
 
     type Http3Connection = h3::server::Connection<InspectedConnection, Bytes>;
     type RequestStream = h3::server::RequestStream<InspectedBidiStream<Bytes>, Bytes>;
     type RequestResolver = h3::server::RequestResolver<InspectedConnection, Bytes>;
     type BoxError = Box<dyn StdError + Send + Sync>;
+
+    /// State shared by request streams that belong to one QUIC connection.
+    struct ConnectionContext {
+        transport: quinn::Connection,
+        remote_addr: SocketAddr,
+        capture: Http3Capture,
+        client_hello: Option<Arc<OnceLock<ClientHelloHandshakeBuffer>>>,
+        handle: Handle,
+        close_by_default: bool,
+    }
 
     const SETTINGS_CAPTURE_TIMEOUT: Duration = Duration::from_secs(5);
     const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -944,105 +973,22 @@ mod quic {
             .await
             .unwrap_or_else(|error| match error {});
 
-        if close_after_first_request {
-            serve_single_request_connection(
-                connection,
-                transport,
-                remote_addr,
-                service,
-                capture,
-                client_hello,
-                handle,
-            )
-            .await;
-        } else {
-            serve_reusable_connection(
-                connection,
-                transport,
-                remote_addr,
-                service,
-                capture,
-                client_hello,
-                handle,
-            )
-            .await;
-        }
-    }
-
-    async fn serve_single_request_connection<S>(
-        mut connection: Http3Connection,
-        transport: quinn::Connection,
-        remote_addr: SocketAddr,
-        service: S,
-        capture: Http3Capture,
-        client_hello: Option<Arc<OnceLock<ClientHelloHandshakeBuffer>>>,
-        handle: Handle,
-    ) where
-        S: Service<Request<Body>, Response = Response<Body>, Error = Infallible>
-            + Clone
-            + Send
-            + 'static,
-        S::Future: Send + 'static,
-    {
-        let accepted = tokio::select! {
-            _ = handle.wait_graceful_shutdown() => {
-                begin_connection_shutdown(&mut connection, remote_addr).await;
-                wait_for_peer_close(&mut connection, &transport, remote_addr).await;
-                return;
-            }
-            accepted = connection.accept() => accepted,
-        };
-        let resolver = match accepted {
-            Ok(Some(resolver)) => resolver,
-            Ok(None) => return,
-            Err(error) => {
-                tracing::debug!(%error, %remote_addr, "failed to accept HTTP/3 request");
-                return;
-            }
+        let context = ConnectionContext {
+            transport,
+            remote_addr,
+            capture,
+            client_hello,
+            handle,
+            close_by_default: close_after_first_request,
         };
 
-        // GOAWAY identifies the first request stream that will not be processed. A zero grace count
-        // keeps the accepted stream valid while rejecting every later request stream. See
-        // RFC 9114, Section 5.2:
-        // <https://www.rfc-editor.org/rfc/rfc9114#section-5.2>
-        begin_connection_shutdown(&mut connection, remote_addr).await;
-
-        let request = serve_request(resolver, remote_addr, service, capture, client_hello);
-        tokio::pin!(request);
-
-        loop {
-            tokio::select! {
-                _ = request.as_mut() => break,
-                accepted = connection.accept() => {
-                    match accepted {
-                        Ok(Some(_)) => {
-                            tracing::trace!(%remote_addr, "discarded HTTP/3 request after GOAWAY");
-                        }
-                        Ok(None) => {
-                            request.as_mut().await;
-                            break;
-                        }
-                        Err(error) => {
-                            tracing::debug!(%error, %remote_addr, "HTTP/3 connection ended while serving request");
-                            request.as_mut().await;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        wait_for_peer_close(&mut connection, &transport, remote_addr).await;
+        serve_reusable_connection(connection, service, context).await;
     }
 
     async fn serve_reusable_connection<S>(
         mut connection: Http3Connection,
-        transport: quinn::Connection,
-        remote_addr: SocketAddr,
         service: S,
-        capture: Http3Capture,
-        client_hello: Option<Arc<OnceLock<ClientHelloHandshakeBuffer>>>,
-        handle: Handle,
+        context: ConnectionContext,
     ) where
         S: Service<Request<Body>, Response = Response<Body>, Error = Infallible>
             + Clone
@@ -1050,6 +996,14 @@ mod quic {
             + 'static,
         S::Future: Send + 'static,
     {
+        let ConnectionContext {
+            transport,
+            remote_addr,
+            capture,
+            client_hello,
+            handle,
+            close_by_default,
+        } = context;
         let mut requests = JoinSet::new();
         let graceful = loop {
             tokio::select! {
@@ -1086,6 +1040,7 @@ mod quic {
                             service.clone(),
                             capture.clone(),
                             client_hello.clone(),
+                            close_by_default,
                         ),
                         &current_handle(),
                     );
@@ -1202,6 +1157,7 @@ mod quic {
         service: S,
         capture: Http3Capture,
         client_hello: Option<Arc<OnceLock<ClientHelloHandshakeBuffer>>>,
+        close_by_default: bool,
     ) -> bool
     where
         S: Service<Request<Body>, Response = Response<Body>, Error = Infallible> + Send + 'static,
@@ -1209,14 +1165,21 @@ mod quic {
     {
         match timeout(
             REQUEST_TIMEOUT,
-            serve_request_inner(resolver, remote_addr, service, capture, client_hello),
+            serve_request_inner(
+                resolver,
+                remote_addr,
+                service,
+                capture,
+                client_hello,
+                close_by_default,
+            ),
         )
         .await
         {
             Ok(close_after_response) => close_after_response,
             Err(_) => {
                 tracing::debug!(%remote_addr, "HTTP/3 request timed out");
-                false
+                true
             }
         }
     }
@@ -1227,6 +1190,7 @@ mod quic {
         service: S,
         capture: Http3Capture,
         client_hello: Option<Arc<OnceLock<ClientHelloHandshakeBuffer>>>,
+        close_by_default: bool,
     ) -> bool
     where
         S: Service<Request<Body>, Response = Response<Body>, Error = Infallible> + Send + 'static,
@@ -1236,10 +1200,10 @@ mod quic {
             Ok(request) => request,
             Err(error) => {
                 tracing::debug!(%error, %remote_addr, "failed to resolve HTTP/3 request");
-                return false;
+                return true;
             }
         };
-        let close_after_response = routes::is_websocket_transport_preparation(request.uri().path());
+        let connection_directive = ConnectionDirective::from_request(&request);
         let body_response = if routes::limits_request_body(request.uri().path()) {
             if routes::request_body_length_exceeds(request.headers()) {
                 Some(routes::request_body_too_large())
@@ -1263,7 +1227,9 @@ mod quic {
             None
         };
         if let Some(response) = body_response {
-            if let Err(error) = send_response(stream, response).await {
+            let close_after_response =
+                connection_directive.should_close(&response, close_by_default);
+            if let Err(error) = send_response(stream, response, &capture).await {
                 tracing::debug!(%error, %remote_addr, "failed to serve HTTP/3 response");
             }
             return close_after_response;
@@ -1285,7 +1251,7 @@ mod quic {
                 .await
                 .is_ok()
             {
-                track.set_http3_capture(settings, headers);
+                track.set_http3_capture(capture.clone(), headers);
             } else {
                 tracing::debug!(%remote_addr, "HTTP/3 SETTINGS capture timed out");
             }
@@ -1297,8 +1263,9 @@ mod quic {
             .oneshot(request)
             .await
             .unwrap_or_else(|error| match error {});
+        let close_after_response = connection_directive.should_close(&response, close_by_default);
 
-        if let Err(error) = send_response(stream, response).await {
+        if let Err(error) = send_response(stream, response, &capture).await {
             tracing::debug!(%error, %remote_addr, "failed to serve HTTP/3 response");
         }
 
@@ -1325,23 +1292,53 @@ mod quic {
     async fn send_response(
         mut stream: RequestStream,
         response: Response<Body>,
+        capture: &Http3Capture,
     ) -> std::result::Result<(), BoxError> {
         // No handler reads the request body after dispatch, so stop any unread request stream.
         stream.stop_sending(Code::H3_NO_ERROR);
 
+        let stream_id = stream.id();
         let (parts, body) = response.into_parts();
+        let headers_frame = capture
+            .is_active()
+            .then(|| http3_headers_frame(parts.status, &parts.headers))
+            .flatten();
         stream
             .send_response(Response::from_parts(parts, ()))
             .await?;
+        if let Some(frame) = headers_frame {
+            capture.record_server_frame(stream_id, Http3Frame::Headers(frame));
+        }
 
         let mut body = body;
         while let Some(frame) = body.frame().await {
             let frame = frame?;
             match frame.into_data() {
-                Ok(data) => stream.send_data(data).await?,
+                Ok(data) => {
+                    let data_frame = capture.is_active().then(|| {
+                        let preview_length = data.len().min(HTTP3_DATA_PREVIEW_BYTES);
+                        Http3DataFrame {
+                            frame_type: Http3FrameType::Data,
+                            length: data.len(),
+                            data: HexBytes::from(&data[..preview_length]),
+                            truncated: preview_length < data.len(),
+                        }
+                    });
+                    stream.send_data(data).await?;
+                    if let Some(frame) = data_frame {
+                        capture.record_server_frame(stream_id, Http3Frame::Data(frame));
+                    }
+                }
                 Err(frame) => {
                     if let Ok(trailers) = frame.into_trailers() {
+                        let trailers_frame = capture
+                            .is_active()
+                            .then(|| http3_trailers_frame(&trailers))
+                            .flatten();
                         stream.send_trailers(trailers).await?;
+                        if let Some(frame) = trailers_frame {
+                            capture.record_server_frame(stream_id, Http3Frame::Headers(frame));
+                        }
                         break;
                     }
                 }
@@ -1349,6 +1346,53 @@ mod quic {
         }
         stream.finish().await?;
         Ok(())
+    }
+
+    const HTTP3_DATA_PREVIEW_BYTES: usize = 64;
+
+    fn http3_headers_frame(status: StatusCode, headers: &HeaderMap) -> Option<Http3HeadersFrame> {
+        let fields = std::iter::once(qpack::HeaderField::from((
+            b":status".as_slice(),
+            status.as_str().as_bytes(),
+        )))
+        .chain(headers.iter().map(|(name, value)| {
+            qpack::HeaderField::from((name.as_str().as_bytes(), value.as_bytes()))
+        }))
+        .collect();
+        encode_http3_headers(fields)
+    }
+
+    fn http3_trailers_frame(headers: &HeaderMap) -> Option<Http3HeadersFrame> {
+        let fields = headers
+            .iter()
+            .map(|(name, value)| {
+                qpack::HeaderField::from((name.as_str().as_bytes(), value.as_bytes()))
+            })
+            .collect();
+        encode_http3_headers(fields)
+    }
+
+    fn encode_http3_headers(fields: Vec<qpack::HeaderField>) -> Option<Http3HeadersFrame> {
+        let mut encoded = BytesMut::new();
+        if let Err(error) = qpack::encode_stateless(&mut encoded, &fields) {
+            tracing::debug!(?error, "failed to encode captured HTTP/3 response headers");
+            return None;
+        }
+
+        Some(Http3HeadersFrame {
+            frame_type: Http3FrameType::Headers,
+            length: encoded.len(),
+            headers: fields
+                .into_iter()
+                .map(|field| {
+                    let (name, value) = field.into_inner();
+                    Http3HeaderField {
+                        name: name.into_owned().into_boxed_slice(),
+                        value: value.into_owned().into_boxed_slice(),
+                    }
+                })
+                .collect(),
+        })
     }
 
     async fn drain_connection_tasks(connections: &mut JoinSet<()>) {
@@ -1539,6 +1583,10 @@ mod tests {
 
         assert_eq!(analysis["http_version"], "HTTP/3.0");
         assert!(analysis["http3"]["h3_text"].is_string());
+        assert!(analysis["http3"]["events"]
+            .as_array()
+            .is_some_and(|events| !events.is_empty()));
+        assert_eq!(analysis["http3"]["streams"][0]["path"], "/api/http3");
 
         drop(stream);
 

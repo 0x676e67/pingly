@@ -221,6 +221,60 @@ pub struct HeadersFrame {
     pub headers: Vec<HeaderField>,
 }
 
+/// A decoded HTTP/3 DATA frame.
+///
+/// Capture code may shorten `data` while retaining the original payload length. DATA framing is
+/// defined by [RFC 9114, Section 7.2.1](https://www.rfc-editor.org/rfc/rfc9114#section-7.2.1).
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "DataFrameRepr")]
+pub struct DataFrame {
+    /// Frame category, always [`FrameType::Data`].
+    pub frame_type: FrameType,
+
+    /// Original DATA payload length.
+    pub length: usize,
+
+    /// Captured body bytes, possibly shortened by [`Self::truncate`].
+    pub data: HexBytes,
+
+    /// Whether `data` contains only a prefix of the original payload.
+    pub truncated: bool,
+}
+
+impl DataFrame {
+    /// Retains at most `limit` body bytes while preserving the original payload length.
+    pub fn truncate(&mut self, limit: usize) {
+        if self.data.len() > limit {
+            self.data = HexBytes::from(&self.data.as_bytes()[..limit]);
+            self.truncated = true;
+        }
+    }
+}
+
+/// An HTTP/3 `PRIORITY_UPDATE` frame from the client control stream.
+///
+/// The request variant targets a QUIC request-stream ID, while the push variant targets a push
+/// ID. See [RFC 9218, Section 7.2](https://www.rfc-editor.org/rfc/rfc9218#section-7.2).
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "PriorityUpdateFrameRepr")]
+pub struct PriorityUpdateFrame {
+    /// Request-stream or push-stream PRIORITY_UPDATE frame category.
+    pub frame_type: FrameType,
+
+    /// Payload length including the target's QUIC varint.
+    pub length: usize,
+
+    /// Request stream ID or push ID whose response priority changed.
+    #[serde(with = "varint::serde")]
+    pub prioritized_element_id: u64,
+
+    /// Number of bytes used by the target's QUIC varint on the wire.
+    pub prioritized_element_id_length: usize,
+
+    /// Complete RFC 9218 Priority Field Value carried as ASCII text.
+    pub priority: Box<str>,
+}
+
 /// A frame retained without type-specific payload decoding.
 ///
 /// The semantic frame type is derived from the numeric identifier, so registered,
@@ -247,11 +301,17 @@ pub struct OpaqueFrame {
 #[serde(untagged)]
 #[non_exhaustive]
 pub enum Frame {
+    /// A DATA frame carrying request or response content.
+    Data(DataFrame),
+
     /// A SETTINGS frame from the control stream.
     Settings(SettingsFrame),
 
     /// A QPACK-decoded HEADERS frame.
     Headers(HeadersFrame),
+
+    /// A request-stream or push-stream priority update from the client control stream.
+    PriorityUpdate(PriorityUpdateFrame),
 
     /// A frame retained with its semantic type, numeric identifier, and payload.
     Opaque(OpaqueFrame),
@@ -347,6 +407,21 @@ pub enum Http3FrameError {
     /// QPACK could not decode a complete HEADERS field section.
     #[error("failed to decode the HTTP/3 QPACK field section")]
     QpackDecompression,
+
+    /// A PRIORITY_UPDATE payload did not begin with a complete QUIC varint.
+    #[error("incomplete HTTP/3 PRIORITY_UPDATE target identifier")]
+    IncompletePriorityTarget,
+
+    /// A request-stream PRIORITY_UPDATE referenced a non-request stream ID.
+    #[error("HTTP/3 PRIORITY_UPDATE target {id} is not a client request stream")]
+    InvalidPriorityTarget {
+        /// Target identifier found in the frame payload.
+        id: u64,
+    },
+
+    /// A PRIORITY_UPDATE value was empty or contained non-ASCII bytes.
+    #[error("HTTP/3 PRIORITY_UPDATE value must be nonempty ASCII text")]
+    InvalidPriorityValue,
 }
 
 /// Deserialization shape used to validate a saved unidirectional stream type.
@@ -400,6 +475,42 @@ struct HeadersFrameRepr {
     headers: Vec<HeaderField>,
 }
 
+/// Deserialization shape used to validate a saved DATA frame.
+#[derive(Deserialize)]
+struct DataFrameRepr {
+    /// Saved frame category.
+    frame_type: FrameType,
+
+    /// Saved original payload length.
+    length: usize,
+
+    /// Saved full payload or captured prefix.
+    data: HexBytes,
+
+    /// Saved truncation state.
+    truncated: bool,
+}
+
+/// Deserialization shape used to validate a saved PRIORITY_UPDATE frame.
+#[derive(Deserialize)]
+struct PriorityUpdateFrameRepr {
+    /// Saved frame category.
+    frame_type: FrameType,
+
+    /// Saved payload length.
+    length: usize,
+
+    /// Saved target stream or push identifier.
+    #[serde(with = "varint::serde")]
+    prioritized_element_id: u64,
+
+    /// Saved target varint width.
+    prioritized_element_id_length: usize,
+
+    /// Saved Priority Field Value.
+    priority: Box<str>,
+}
+
 /// Deserialization shape used to validate a saved opaque frame.
 #[derive(Deserialize)]
 struct OpaqueFrameRepr {
@@ -421,11 +532,17 @@ struct OpaqueFrameRepr {
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum FrameRepr {
+    /// Saved DATA frame.
+    Data(DataFrame),
+
     /// Saved SETTINGS frame.
     Settings(SettingsFrame),
 
     /// Saved HEADERS frame.
     Headers(HeadersFrame),
+
+    /// Saved PRIORITY_UPDATE frame.
+    PriorityUpdate(PriorityUpdateFrame),
 
     /// Saved frame without a dedicated decoded model.
     Opaque(OpaqueFrame),
@@ -437,8 +554,10 @@ impl<'de> Deserialize<'de> for Frame {
         D: Deserializer<'de>,
     {
         match FrameRepr::deserialize(deserializer)? {
+            FrameRepr::Data(frame) => Ok(Self::Data(frame)),
             FrameRepr::Settings(frame) => Ok(Self::Settings(frame)),
             FrameRepr::Headers(frame) => Ok(Self::Headers(frame)),
+            FrameRepr::PriorityUpdate(frame) => Ok(Self::PriorityUpdate(frame)),
             FrameRepr::Opaque(frame) => Ok(Self::Opaque(frame)),
         }
     }
@@ -569,8 +688,10 @@ impl Frame {
     /// Returns the decoded frame category.
     pub const fn frame_type(&self) -> FrameType {
         match self {
+            Self::Data(_) => FrameType::Data,
             Self::Settings(_) => FrameType::Settings,
             Self::Headers(_) => FrameType::Headers,
+            Self::PriorityUpdate(frame) => frame.frame_type,
             Self::Opaque(frame) => frame.frame_type,
         }
     }
@@ -578,10 +699,74 @@ impl Frame {
     /// Returns the payload length excluding the frame type and length varints.
     pub const fn payload_len(&self) -> usize {
         match self {
+            Self::Data(frame) => frame.length,
             Self::Settings(frame) => frame.length,
             Self::Headers(frame) => frame.length,
+            Self::PriorityUpdate(frame) => frame.length,
             Self::Opaque(frame) => frame.length,
         }
+    }
+}
+
+impl TryFrom<DataFrameRepr> for DataFrame {
+    type Error = &'static str;
+
+    fn try_from(repr: DataFrameRepr) -> Result<Self, Self::Error> {
+        if repr.frame_type != FrameType::Data {
+            return Err("HTTP/3 DATA frame_type must be Data");
+        }
+        if repr.data.len() > repr.length || repr.truncated != (repr.data.len() < repr.length) {
+            return Err("HTTP/3 DATA bytes do not match their truncation metadata");
+        }
+
+        Ok(Self {
+            frame_type: repr.frame_type,
+            length: repr.length,
+            data: repr.data,
+            truncated: repr.truncated,
+        })
+    }
+}
+
+impl TryFrom<PriorityUpdateFrameRepr> for PriorityUpdateFrame {
+    type Error = &'static str;
+
+    fn try_from(repr: PriorityUpdateFrameRepr) -> Result<Self, Self::Error> {
+        if !matches!(
+            repr.frame_type,
+            FrameType::PriorityUpdateRequest | FrameType::PriorityUpdatePush
+        ) {
+            return Err("HTTP/3 PRIORITY_UPDATE frame_type is invalid");
+        }
+        if repr.frame_type == FrameType::PriorityUpdateRequest
+            && !is_request_stream_id(repr.prioritized_element_id)
+        {
+            return Err("HTTP/3 PRIORITY_UPDATE target is not a request stream");
+        }
+        if repr.priority.is_empty() || !repr.priority.is_ascii() {
+            return Err("HTTP/3 PRIORITY_UPDATE value must be nonempty ASCII text");
+        }
+        if !varint_width_supports(
+            repr.prioritized_element_id,
+            repr.prioritized_element_id_length,
+        ) {
+            return Err("HTTP/3 PRIORITY_UPDATE target varint width is invalid");
+        }
+        if repr
+            .prioritized_element_id_length
+            .checked_add(repr.priority.len())
+            != Some(repr.length)
+        {
+            return Err("HTTP/3 PRIORITY_UPDATE length does not match its value");
+        }
+
+        Ok(Self {
+            frame_type: repr.frame_type,
+            length: repr.length,
+            prioritized_element_id: repr.prioritized_element_id,
+            prioritized_element_id_length: repr.prioritized_element_id_length,
+            priority: repr.priority,
+        })
     }
 }
 
@@ -623,7 +808,14 @@ impl TryFrom<OpaqueFrameRepr> for OpaqueFrame {
 
     fn try_from(repr: OpaqueFrameRepr) -> Result<Self, Self::Error> {
         let expected = FrameType::from(repr.type_id);
-        if matches!(expected, FrameType::Headers | FrameType::Settings) {
+        if matches!(
+            expected,
+            FrameType::Data
+                | FrameType::Headers
+                | FrameType::Settings
+                | FrameType::PriorityUpdateRequest
+                | FrameType::PriorityUpdatePush
+        ) {
             return Err("a decoded HTTP/3 frame type cannot use OpaqueFrame");
         }
         if expected.is_http2_reserved() {
@@ -695,6 +887,47 @@ pub(super) fn parse_headers(
     })
 }
 
+pub(super) fn parse_data(payload: &[u8], preview_limit: usize) -> DataFrame {
+    let preview_length = payload.len().min(preview_limit);
+    DataFrame {
+        frame_type: FrameType::Data,
+        length: payload.len(),
+        data: HexBytes::from(&payload[..preview_length]),
+        truncated: preview_length < payload.len(),
+    }
+}
+
+pub(super) fn parse_priority_update(
+    frame_type: FrameType,
+    payload: &[u8],
+) -> Result<PriorityUpdateFrame, Http3FrameError> {
+    let (prioritized_element_id, target_length) =
+        varint::decode(payload).ok_or(Http3FrameError::IncompletePriorityTarget)?;
+    if frame_type == FrameType::PriorityUpdateRequest
+        && !is_request_stream_id(prioritized_element_id)
+    {
+        return Err(Http3FrameError::InvalidPriorityTarget {
+            id: prioritized_element_id,
+        });
+    }
+
+    let priority = payload
+        .get(target_length..)
+        .filter(|value| !value.is_empty() && value.is_ascii())
+        .ok_or(Http3FrameError::InvalidPriorityValue)?;
+    let priority = std::str::from_utf8(priority)
+        .map_err(|_| Http3FrameError::InvalidPriorityValue)?
+        .into();
+
+    Ok(PriorityUpdateFrame {
+        frame_type,
+        length: payload.len(),
+        prioritized_element_id,
+        prioritized_element_id_length: target_length,
+        priority,
+    })
+}
+
 fn validate_settings(settings: &[Setting]) -> Result<(), Http3FrameError> {
     let mut setting_ids = HashSet::with_capacity(settings.len());
     for setting in settings {
@@ -715,6 +948,20 @@ fn validate_setting_id(setting_ids: &mut HashSet<u64>, id: u64) -> Result<(), Ht
 
 const fn is_grease_id(id: u64) -> bool {
     id >= 33 && (id - 33).is_multiple_of(31)
+}
+
+const fn is_request_stream_id(id: u64) -> bool {
+    id & 0b11 == 0
+}
+
+const fn varint_width_supports(value: u64, width: usize) -> bool {
+    match width {
+        1 => value <= 63,
+        2 => value <= 16_383,
+        4 => value <= 1_073_741_823,
+        8 => value < (1 << 62),
+        _ => false,
+    }
 }
 
 mod header_bytes {
@@ -763,8 +1010,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        parse_settings, FrameType, HeaderField, Http3FrameError, OpaqueFrame, Setting,
-        SettingValue, SettingsFrame, StreamType, StreamTypeName,
+        parse_data, parse_priority_update, parse_settings, FrameType, HeaderField, Http3FrameError,
+        OpaqueFrame, Setting, SettingValue, SettingsFrame, StreamType, StreamTypeName,
     };
     use crate::quic::varint;
 
@@ -968,13 +1215,13 @@ mod tests {
     #[test]
     fn opaque_frame_json_validates_its_semantic_type() {
         let frame: OpaqueFrame = serde_json::from_value(json!({
-            "frame_type": "Data",
-            "type_id": 0,
+            "frame_type": "Other",
+            "type_id": 16,
             "length": 0,
             "payload": ""
         }))
         .unwrap();
-        assert_eq!(frame.frame_type, FrameType::Data);
+        assert_eq!(frame.frame_type, FrameType::Other);
 
         assert!(serde_json::from_value::<OpaqueFrame>(json!({
             "frame_type": "Grease",
@@ -990,6 +1237,35 @@ mod tests {
             "payload": ""
         }))
         .is_err());
+    }
+
+    #[test]
+    fn data_preview_and_priority_update_preserve_wire_metadata() {
+        let data = parse_data(&[0xaa; 80], 64);
+        assert_eq!(data.length, 80);
+        assert_eq!(data.data.len(), 64);
+        assert!(data.truncated);
+        let json = serde_json::to_value(&data).unwrap();
+        assert_eq!(
+            serde_json::from_value::<super::DataFrame>(json).unwrap(),
+            data
+        );
+
+        let update =
+            parse_priority_update(FrameType::PriorityUpdateRequest, b"\x00u=1, i").unwrap();
+        assert_eq!(update.prioritized_element_id, 0);
+        assert_eq!(update.prioritized_element_id_length, 1);
+        assert_eq!(update.priority.as_ref(), "u=1, i");
+        let json = serde_json::to_value(&update).unwrap();
+        assert_eq!(
+            serde_json::from_value::<super::PriorityUpdateFrame>(json).unwrap(),
+            update
+        );
+
+        assert_eq!(
+            parse_priority_update(FrameType::PriorityUpdateRequest, b"\x02u=1").unwrap_err(),
+            Http3FrameError::InvalidPriorityTarget { id: 2 }
+        );
     }
 
     #[test]
