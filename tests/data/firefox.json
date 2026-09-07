@@ -290,6 +290,8 @@
     "http2": {
         "akamai_fingerprint": "1:65536;2:0;4:131072;5:16384|12517377|0|m,p,a,s",
         "akamai_fingerprint_hash": "6ea73faa8fc5aac76bded7bd238f6433",
+        "h2_text": "SETTINGS:1=65536,2=0,4=131072,5=16384|WINDOW_UPDATE(connection):12517377|HEADERS(stream):m,p,a,s|WINDOW_UPDATE(stream):12451840",
+        "h2_text_hash": "2ca44cda0bd9b60cb32fdc5c16525d2a",
         "sent_frames": [
             {
                 "frame_type": "Settings",
@@ -416,6 +418,12 @@
                     "depends_on": 0,
                     "exclusive": 0
                 }
+            },
+            {
+                "frame_type": "WindowUpdate",
+                "stream_id": 3,
+                "length": 4,
+                "increment": 12451840
             }
         ]
     }

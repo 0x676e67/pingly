@@ -23,7 +23,7 @@ pub use hello::{
     ClientHello, ClientHelloBuffer, ClientHelloHandshakeBuffer, ClientHelloParseError,
     ClientHelloParseStage, ECHClientHello, ECHClientHelloOuter, HexBytes, HpkeSymmetricCipherSuite,
     KeyShare, OidFilter, ProtocolName, ProtocolNameError, PskKeyExchangeModes, StatusRequest,
-    TlsCipherSuite, TlsExtension,
+    TlsCipherSuite, TlsExtension, TrustAnchorId, TrustAnchorIdError, TRUST_ANCHORS_EXTENSION_ID,
 };
 pub use ja3::Ja3Fingerprint;
 pub use ja4::Ja4Fingerprint;

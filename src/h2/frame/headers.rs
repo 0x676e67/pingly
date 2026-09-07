@@ -54,19 +54,25 @@ pub struct HeadersFrame {
 }
 
 impl HeadersFrame {
+    /// Returns the first decoded value for `name` without changing its wire bytes.
+    #[must_use]
+    pub fn header_value(&self, name: &[u8]) -> Option<&[u8]> {
+        self.headers
+            .iter()
+            .find(|field| field.name.as_ref() == name)
+            .map(|field| field.value.as_ref())
+    }
+
     /// Returns whether this field section opens an Extended CONNECT tunnel for `protocol`.
     ///
     /// Extended CONNECT uses `:method = CONNECT` and a `:protocol` pseudo-field. See
     /// [RFC 8441, Section 4](https://www.rfc-editor.org/rfc/rfc8441.html#section-4).
+    #[must_use]
     pub fn is_extended_connect(&self, protocol: &[u8]) -> bool {
-        let method = self
-            .headers
-            .iter()
-            .any(|field| field.name.as_ref() == b":method" && field.value.as_ref() == b"CONNECT");
-        let protocol_matches = self.headers.iter().any(|field| {
-            field.name.as_ref() == b":protocol"
-                && field.value.as_ref().eq_ignore_ascii_case(protocol)
-        });
+        let method = self.header_value(b":method") == Some(b"CONNECT");
+        let protocol_matches = self
+            .header_value(b":protocol")
+            .is_some_and(|value| value.eq_ignore_ascii_case(protocol));
 
         method && protocol_matches
     }

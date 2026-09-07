@@ -2,10 +2,9 @@
 
 use std::fmt::Write;
 
-use hex::encode as hex_encode;
 use serde::{Deserialize, Serialize};
 
-use super::frame::Frame;
+use super::{frame::Frame, md5_hash, push_pseudo_header_order};
 
 /// The Akamai HTTP/2 fingerprint and its MD5 digest.
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,18 +23,13 @@ impl AkamaiFingerprint {
         frames.peek()?;
 
         let fingerprint = compute_fingerprint(frames);
-        let hash = compute_hash(&fingerprint);
+        let hash = md5_hash(&fingerprint);
 
         Some(Self {
             fingerprint: fingerprint.into_boxed_str(),
             hash,
         })
     }
-}
-
-fn compute_hash(fingerprint: &str) -> Box<str> {
-    let hash = md5::compute(fingerprint);
-    hex_encode(hash.as_slice()).into_boxed_str()
 }
 
 fn compute_fingerprint<'a>(frames: impl IntoIterator<Item = &'a Frame>) -> String {
@@ -83,23 +77,7 @@ fn compute_fingerprint<'a>(frames: impl IntoIterator<Item = &'a Frame>) -> Strin
                     headers_group.push(';');
                 }
                 headers_count += 1;
-
-                let mut pseudo_count = 0usize;
-                for header in &frame.headers {
-                    let Some(short_name) = header
-                        .name
-                        .strip_prefix(b":")
-                        .and_then(|name| std::str::from_utf8(name).ok())
-                        .and_then(|name| name.chars().next())
-                    else {
-                        continue;
-                    };
-                    if pseudo_count > 0 {
-                        headers_group.push(',');
-                    }
-                    pseudo_count += 1;
-                    headers_group.push(short_name);
-                }
+                push_pseudo_header_order(&mut headers_group, frame);
             }
             Frame::Unknown(value) => {
                 tracing::trace!("Unknown http2 frame: {:?}", value);

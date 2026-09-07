@@ -8,7 +8,7 @@ use pingly::{
 };
 use serde::Deserialize;
 
-const CHROME_RESPONSE: &[u8] = include_bytes!("../tests/data/chrome.json");
+const CHROME_RESPONSE: &[u8] = include_bytes!("../tests/data/chrome_152.json");
 
 #[derive(Deserialize)]
 struct ApiResponse {

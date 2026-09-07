@@ -10,8 +10,8 @@ use std::{net::SocketAddr, sync::LazyLock, time::Duration};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::{
     body::Body,
-    extract::ConnectInfo,
-    http::{header, HeaderMap, HeaderValue, Request, StatusCode},
+    extract::{ConnectInfo, Query},
+    http::{header, HeaderMap, HeaderValue, Request, StatusCode, Uri},
     middleware::{self, Next},
     response::{Html, IntoResponse, Response},
     routing::{any, get},
@@ -21,7 +21,7 @@ use axum_extra::response::ErasedJson;
 #[cfg(target_os = "linux")]
 use futures_util::StreamExt;
 use http_body_util::BodyExt;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::tracker::info::{ConnectionTrack, Track, TrackInfo};
@@ -47,6 +47,23 @@ pub(super) fn is_analysis_path(path: &str) -> bool {
         path,
         ALL_PATH | TLS_PATH | HTTP1_PATH | HTTP2_PATH | HTTP3_PATH | TCP_PATH
     )
+}
+
+#[derive(Deserialize)]
+struct ConnectionOptions {
+    connection: Option<ConnectionMode>,
+}
+
+#[derive(Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ConnectionMode {
+    Reuse,
+}
+
+/// Returns whether an analysis request explicitly asks for the connection timeline.
+pub(super) fn reuses_analysis_connection(uri: &Uri) -> bool {
+    Query::<ConnectionOptions>::try_from_uri(uri)
+        .is_ok_and(|Query(options)| options.connection == Some(ConnectionMode::Reuse))
 }
 
 // Analysis endpoints do not inspect request bodies. Reject oversized payloads with the status
@@ -217,11 +234,12 @@ pub(crate) fn router(
 }
 
 async fn enforce_request_body_limit(request: Request<Body>, next: Next) -> Response {
-    if request_body_length_exceeds(request.headers()) {
+    let (parts, body) = request.into_parts();
+
+    if request_body_length_exceeds(&parts.headers) {
         return request_body_too_large();
     }
 
-    let (parts, body) = request.into_parts();
     match tokio::time::timeout(REQUEST_BODY_READ_TIMEOUT, body_within_limit(body)).await {
         Ok(Ok(true)) => next.run(Request::from_parts(parts, Body::empty())).await,
         Ok(Ok(false)) => request_body_too_large(),

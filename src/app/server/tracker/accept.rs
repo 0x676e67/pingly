@@ -3,12 +3,16 @@
 //! HTTP/2 over TLS uses the `h2` protocol identifier defined by
 //! [RFC 9113, Section 3.2](https://www.rfc-editor.org/rfc/rfc9113#section-3.2).
 
-use std::{io, time::Instant};
+use std::{
+    io,
+    task::{Context, Poll},
+    time::Instant,
+};
 
-use axum::{middleware::AddExtension, Extension};
+use axum::http::Request;
 use futures_util::future::BoxFuture;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tower::Layer;
+use tower::Service;
 
 use super::{
     info::ConnectionTrack,
@@ -30,13 +34,53 @@ impl TrackAcceptor {
     }
 }
 
+/// Adds request-scoped connection metadata before Hyper starts polling the response future.
+#[derive(Clone)]
+pub struct TrackService<S> {
+    /// Per-connection router service.
+    inner: S,
+
+    /// Metadata shared by requests accepted on this connection.
+    connection_track: ConnectionTrack,
+}
+
+impl<S> TrackService<S> {
+    fn new(inner: S, connection_track: ConnectionTrack) -> Self {
+        Self {
+            inner,
+            connection_track,
+        }
+    }
+}
+
+impl<S, B> Service<Request<B>> for TrackService<S>
+where
+    S: Service<Request<B>>,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = S::Future;
+
+    #[inline]
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    #[inline]
+    fn call(&mut self, mut request: Request<B>) -> Self::Future {
+        let track = self.connection_track.claim_request(&request);
+        request.extensions_mut().insert(track);
+        self.inner.call(request)
+    }
+}
+
 impl<I, S> Accept<I, S> for TrackAcceptor
 where
     I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     S: Send + 'static,
 {
     type Stream = Inspector<I>;
-    type Service = AddExtension<S, ConnectionTrack>;
+    type Service = TrackService<S>;
     type Future = BoxFuture<'static, io::Result<AcceptOutcome<Self::Stream, Self::Service>>>;
 
     #[inline]
@@ -71,7 +115,7 @@ where
 
             Ok(AcceptOutcome::Serve {
                 stream,
-                service: Extension(connect_track).layer(service),
+                service: TrackService::new(service, connect_track),
             })
         })
     }

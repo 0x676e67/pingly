@@ -388,15 +388,12 @@ fn parse_options(data: &[u8]) -> (Vec<TcpOption>, bool) {
                     (TCP_OPTION_SACK, value) if !value.is_empty() && value.len() % 8 == 0 => {
                         TcpOption::Sack {
                             blocks: value
-                                .chunks_exact(8)
-                                .filter_map(|block| {
-                                    let [a, b, c, d, e, f, g, h] = block else {
-                                        return None;
-                                    };
-                                    Some(SackBlock {
-                                        left_edge: u32::from_be_bytes([*a, *b, *c, *d]),
-                                        right_edge: u32::from_be_bytes([*e, *f, *g, *h]),
-                                    })
+                                .as_chunks::<8>()
+                                .0
+                                .iter()
+                                .map(|&[a, b, c, d, e, f, g, h]| SackBlock {
+                                    left_edge: u32::from_be_bytes([a, b, c, d]),
+                                    right_edge: u32::from_be_bytes([e, f, g, h]),
                                 })
                                 .collect(),
                         }

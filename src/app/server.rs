@@ -237,7 +237,7 @@ mod tcp {
 
     use axum::{
         body::Body,
-        extract::{ConnectInfo, Query},
+        extract::ConnectInfo,
         http::{header, Method, Request, StatusCode, Version},
         middleware::AddExtension,
         response::Response,
@@ -250,7 +250,6 @@ mod tcp {
         service::TowerToHyperService,
     };
     use pingora_runtime::current_handle;
-    use serde::Deserialize;
     use tokio::{
         io::{AsyncRead, AsyncWrite},
         net::{TcpListener, TcpStream},
@@ -476,23 +475,11 @@ mod tcp {
         Http1Upgrade,
     }
 
-    #[derive(Deserialize)]
-    struct ConnectionOptions {
-        connection: Option<ConnectionMode>,
-    }
-
-    #[derive(Eq, PartialEq, Deserialize)]
-    #[serde(rename_all = "lowercase")]
-    enum ConnectionMode {
-        Reuse,
-    }
-
     impl ConnectionDirective {
         pub(super) fn from_request<B>(request: &Request<B>) -> Self {
             let path = request.uri().path();
-            let reuse_requested = routes::is_analysis_path(path)
-                && Query::<ConnectionOptions>::try_from_uri(request.uri())
-                    .is_ok_and(|Query(options)| options.connection == Some(ConnectionMode::Reuse));
+            let reuse_requested =
+                routes::is_analysis_path(path) && routes::reuses_analysis_connection(request.uri());
             if matches!(request.version(), Version::HTTP_2 | Version::HTTP_3)
                 && (path == routes::INDEX_PATH || reuse_requested)
             {

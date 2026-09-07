@@ -21,8 +21,8 @@ pub struct WindowUpdateFrame {
     /// The length of the frame payload (should always be 4 for WINDOW_UPDATE)
     pub length: usize,
 
-    /// The window size increment (31 bits, most significant bit is reserved and must be zero).
-    /// This value specifies the number of bytes that can be sent.
+    /// The decoded 31-bit window increment. The reserved high bit is ignored on receipt.
+    /// This value specifies the number of additional bytes that can be sent.
     pub increment: u32,
 }
 

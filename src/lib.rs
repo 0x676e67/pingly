@@ -62,16 +62,18 @@
 //! directly at a frame header.
 //!
 //! ```no_run
-//! use pingly::h2::{parse_connection, AkamaiFingerprint};
+//! use pingly::h2::{parse_connection, AkamaiFingerprint, Http2Fingerprint};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let bytes = std::fs::read("http2-connection.bin")?;
 //! let frames = parse_connection(&bytes)?;
-//! let fingerprint = AkamaiFingerprint::from_frames(&frames);
+//! let akamai = AkamaiFingerprint::from_frames(&frames);
+//! let h2 = Http2Fingerprint::from_frames(&frames);
 //!
 //! let json = serde_json::to_vec_pretty(&frames)?;
 //! let restored = serde_json::from_slice::<Vec<pingly::h2::Frame>>(&json)?;
-//! assert_eq!(AkamaiFingerprint::from_frames(&restored), fingerprint);
+//! assert_eq!(AkamaiFingerprint::from_frames(&restored), akamai);
+//! assert_eq!(Http2Fingerprint::from_frames(&restored), h2);
 //! # Ok(())
 //! # }
 //! ```

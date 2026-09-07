@@ -32,6 +32,12 @@ const TLS_HANDSHAKE_HEADER_LEN: usize = 4;
 const TLS_HANDSHAKE_CLIENT_HELLO: u8 = 1;
 const TLS_HANDSHAKE_CONTENT_TYPE: u8 = 22;
 
+/// Provisional BoringSSL code point for the TLS `trust_anchors` extension.
+///
+/// This value is not yet assigned by IANA and may change when the draft is finalized. See
+/// [draft-ietf-tls-trust-anchor-ids](https://datatracker.ietf.org/doc/draft-ietf-tls-trust-anchor-ids/).
+pub const TRUST_ANCHORS_EXTENSION_ID: u16 = 0xca34;
+
 /// Buffers raw TLS record bytes so the ClientHello can be parsed after the handshake.
 ///
 /// Deferring parsing keeps fingerprint analysis out of the handshake path. The buffer may be filled
@@ -1332,6 +1338,19 @@ pub enum TlsExtension {
         data: Vec<OidFilter>,
     },
 
+    /// Trust anchors accepted by the client for server certificate selection.
+    ///
+    /// Each ID is a compact DER relative OID below the Private Enterprise Number arc. See
+    /// [draft-ietf-tls-trust-anchor-ids, Section 4.1](https://datatracker.ietf.org/doc/html/draft-ietf-tls-trust-anchor-ids#section-4.1).
+    TrustAnchors {
+        /// Provisional numeric extension type observed on the wire.
+        #[serde(deserialize_with = "extension_id::trust_anchors")]
+        value: u16,
+
+        /// Requested IDs in wire order. The list is semantically unordered and may be empty.
+        data: Vec<TrustAnchorId>,
+    },
+
     /// A reserved GREASE extension used to exercise protocol extensibility.
     ///
     /// See [RFC 8701, Section 3](https://www.rfc-editor.org/rfc/rfc8701.html#section-3).
@@ -1375,7 +1394,7 @@ mod extension_id {
     use serde::{de, Deserialize, Deserializer};
     use tls_parser::TlsExtensionType;
 
-    use super::{is_grease_value, TRANSPORT_PARAMETERS_EXTENSION_ID};
+    use super::{is_grease_value, TRANSPORT_PARAMETERS_EXTENSION_ID, TRUST_ANCHORS_EXTENSION_ID};
 
     const CERTIFICATE_COMPRESSION: u16 = 27;
     const DELEGATED_CREDENTIALS: u16 = 34;
@@ -1403,6 +1422,7 @@ mod extension_id {
         TlsExtensionType::PskExchangeModes.0,
         TlsExtensionType::OidFilters.0,
         TlsExtensionType::KeyShare.0,
+        TRUST_ANCHORS_EXTENSION_ID,
         APPLICATION_SETTINGS_OLD,
         APPLICATION_SETTINGS,
         ENCRYPTED_CLIENT_HELLO,
@@ -1452,6 +1472,7 @@ mod extension_id {
     exact_id!(psk_key_exchange_modes, TlsExtensionType::PskExchangeModes.0);
     exact_id!(oid_filters, TlsExtensionType::OidFilters.0);
     exact_id!(key_share, TlsExtensionType::KeyShare.0);
+    exact_id!(trust_anchors, TRUST_ANCHORS_EXTENSION_ID);
     exact_id!(application_settings_old, APPLICATION_SETTINGS_OLD);
     exact_id!(application_settings, APPLICATION_SETTINGS);
     exact_id!(encrypted_client_hello, ENCRYPTED_CLIENT_HELLO);
@@ -1529,6 +1550,7 @@ impl TlsExtension {
             | TlsExtension::QuicTransportParameters { value, .. }
             | TlsExtension::EncryptedServerName { value, .. }
             | TlsExtension::OidFilters { value, .. }
+            | TlsExtension::TrustAnchors { value, .. }
             | TlsExtension::Grease { value }
             | TlsExtension::Opaque { value, .. } => *value,
         }
@@ -1849,6 +1871,140 @@ struct OidFilterRepr {
     cert_ext_val: HexBytes,
 }
 
+/// A Trust Anchor Identifier carried by the TLS `trust_anchors` extension.
+///
+/// `id` is the dotted-decimal relative OID used by text protocols. `value` preserves the exact
+/// DER contents octets sent in TLS. See
+/// [draft-ietf-tls-trust-anchor-ids, Section 3](https://datatracker.ietf.org/doc/html/draft-ietf-tls-trust-anchor-ids#section-3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Hash)]
+pub struct TrustAnchorId {
+    /// Dotted-decimal relative OID, such as `11129.9.5`.
+    pub id: Box<str>,
+
+    /// DER relative-OID contents encoded as lowercase hexadecimal.
+    pub value: HexBytes,
+}
+
+impl TrustAnchorId {
+    /// Creates a Trust Anchor ID from its DER relative-OID contents octets.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TrustAnchorIdError`] when the value is empty, exceeds 255 bytes, or is not a
+    /// canonical DER relative OID.
+    pub fn from_bytes(bytes: impl Into<Box<[u8]>>) -> Result<Self, TrustAnchorIdError> {
+        let bytes = bytes.into();
+        let id = decode_relative_oid(&bytes)?;
+
+        Ok(Self {
+            id,
+            value: HexBytes::from(bytes),
+        })
+    }
+
+    /// Returns the DER relative-OID contents octets observed on the wire.
+    pub fn as_bytes(&self) -> &[u8] {
+        self.value.as_bytes()
+    }
+}
+
+impl<'de> Deserialize<'de> for TrustAnchorId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let repr = TrustAnchorIdRepr::deserialize(deserializer)?;
+        let id = Self::from_bytes(repr.value.into_bytes()).map_err(de::Error::custom)?;
+        if id.id != repr.id {
+            return Err(de::Error::custom(format_args!(
+                "TLS trust anchor value decodes to {}, got {}",
+                id.id, repr.id
+            )));
+        }
+        Ok(id)
+    }
+}
+
+/// Invalid binary representation of a TLS Trust Anchor Identifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum TrustAnchorIdError {
+    /// Trust Anchor IDs use a one-byte length on the wire.
+    #[error("TLS trust anchor IDs must contain 1 to 255 bytes, got {length}")]
+    InvalidLength {
+        /// Invalid decoded byte length.
+        length: usize,
+    },
+
+    /// The value is not a canonical DER `RELATIVE-OID` contents encoding.
+    #[error("TLS trust anchor ID is not a canonical DER relative OID")]
+    InvalidEncoding,
+}
+
+/// Deserialization shape used to verify the text and binary forms agree.
+#[derive(Deserialize)]
+struct TrustAnchorIdRepr {
+    /// Saved dotted-decimal relative OID.
+    id: Box<str>,
+
+    /// Saved DER relative-OID contents.
+    value: HexBytes,
+}
+
+fn decode_relative_oid(bytes: &[u8]) -> Result<Box<str>, TrustAnchorIdError> {
+    if bytes.is_empty() || bytes.len() > usize::from(u8::MAX) {
+        return Err(TrustAnchorIdError::InvalidLength {
+            length: bytes.len(),
+        });
+    }
+
+    let mut output = String::with_capacity(bytes.len().saturating_mul(3));
+    let mut decimal_digits = Vec::with_capacity(bytes.len().saturating_mul(3));
+    let mut offset = 0usize;
+
+    while offset < bytes.len() {
+        if bytes[offset] == 0x80 {
+            return Err(TrustAnchorIdError::InvalidEncoding);
+        }
+
+        decimal_digits.clear();
+        decimal_digits.push(0u8);
+        loop {
+            let byte = bytes[offset];
+            let mut carry = u16::from(byte & 0x7f);
+            for digit in &mut decimal_digits {
+                let value = u16::from(*digit) * 128 + carry;
+                *digit = (value % 10) as u8;
+                carry = value / 10;
+            }
+            while carry > 0 {
+                decimal_digits.push((carry % 10) as u8);
+                carry /= 10;
+            }
+
+            offset += 1;
+            if byte & 0x80 == 0 {
+                break;
+            }
+            if offset == bytes.len() {
+                return Err(TrustAnchorIdError::InvalidEncoding);
+            }
+        }
+
+        if !output.is_empty() {
+            output.push('.');
+        }
+        output.extend(
+            decimal_digits
+                .iter()
+                .rev()
+                .map(|digit| char::from(b'0' + digit)),
+        );
+    }
+
+    Ok(output.into_boxed_str())
+}
+
 /// The ClientHello layer at which binary parsing failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -1885,6 +2041,12 @@ pub enum ClientHelloParseStage {
 
     /// The key-share vector is malformed.
     KeyShare,
+
+    /// The Trust Anchor Identifier list is malformed.
+    ///
+    /// See
+    /// [draft-ietf-tls-trust-anchor-ids, Section 4.1](https://datatracker.ietf.org/doc/html/draft-ietf-tls-trust-anchor-ids#section-4.1).
+    TrustAnchors,
 
     /// The QUIC transport-parameters payload is malformed.
     ///
@@ -2218,6 +2380,21 @@ impl ClientHello {
                         .1;
                     client_hello.extensions.push(extension);
                 }
+                tls_parser::TlsExtension::Unknown(
+                    TlsExtensionType(TRUST_ANCHORS_EXTENSION_ID),
+                    data,
+                ) => {
+                    let extension = parser::parse_tls_extension_trust_anchors(extension_id, data)
+                        .map_err(|_| {
+                            ClientHelloParseError::extension(
+                                ClientHelloParseStage::TrustAnchors,
+                                extension_id,
+                                data.len(),
+                            )
+                        })?
+                        .1;
+                    client_hello.extensions.push(extension);
+                }
                 tls_parser::TlsExtension::Padding(padding) => {
                     client_hello.extensions.push(TlsExtension::Padding {
                         value: extension_id,
@@ -2444,7 +2621,7 @@ mod tests {
     use super::{
         ClientHello, ClientHelloBuffer, ClientHelloHandshakeBuffer, ClientHelloParseStage,
         ECHClientHelloOuter, HexBytes, KeyShare, ProtocolName, StatusRequest, TlsCipherSuite,
-        TlsExtension,
+        TlsExtension, TRUST_ANCHORS_EXTENSION_ID,
     };
     use crate::tls::{CompressionAlgorithm, NamedGroup, SupportedVersions, TlsVersion};
 
@@ -2845,6 +3022,12 @@ mod tests {
                 57,
                 3,
             ),
+            (
+                &[0xca, 0x34, 0x00, 0x04, 0x00, 0x02, 0x01, 0x80][..],
+                ClientHelloParseStage::TrustAnchors,
+                TRUST_ANCHORS_EXTENSION_ID,
+                4,
+            ),
         ];
 
         for (extension, stage, extension_id, payload_len) in cases {
@@ -3020,6 +3203,58 @@ mod tests {
         assert!(serde_json::from_value::<TlsExtension>(duplicate).is_err());
         assert!(serde_json::from_value::<TlsExtension>(wrong_id).is_err());
         assert!(serde_json::from_value::<TlsExtension>(opaque).is_err());
+    }
+
+    #[test]
+    fn chrome_trust_anchor_ids_are_decoded_and_preserved() {
+        let payload = hex::decode(concat!(
+            "00b804d67909050582df13020e0582df13020104d679090b0582df130214",
+            "08839a648c9b2d010808839a648c9b2d011308839a648c9b2d010708839a",
+            "648c9b2d010d08839a648c9b2d010a0582df13020d08839a648c9b2d0109",
+            "04d679090604d679090c08839a648c9b2d010c04d679090f0582df130213",
+            "04d679090404d679090108839a648c9b2d010b0582df13020604d679090d",
+            "0582df13020f08839a648c9b2d011204d679090a0582df13021204d6790907",
+            "04d6790908",
+        ))
+        .expect("Chrome trust_anchors sample is valid hexadecimal");
+        let mut extension = Vec::with_capacity(4 + payload.len());
+        extension.extend_from_slice(&TRUST_ANCHORS_EXTENSION_ID.to_be_bytes());
+        extension.extend_from_slice(
+            &u16::try_from(payload.len())
+                .expect("TLS extension payload fits in u16")
+                .to_be_bytes(),
+        );
+        extension.extend_from_slice(&payload);
+
+        let client_hello = ClientHello::parse_handshake(&client_hello_handshake(Some(&extension)))
+            .expect("Chrome ClientHello extension parses");
+        let parsed = client_hello
+            .extensions
+            .first()
+            .expect("trust_anchors extension is present");
+        let TlsExtension::TrustAnchors { value, data } = parsed else {
+            panic!("expected parsed trust_anchors extension");
+        };
+
+        assert_eq!(*value, TRUST_ANCHORS_EXTENSION_ID);
+        assert_eq!(data.len(), 28);
+        assert_eq!(data[0].id.as_ref(), "11129.9.5");
+        assert_eq!(data[0].as_bytes(), [0xd6, 0x79, 0x09, 0x05]);
+        assert_eq!(data[5].id.as_ref(), "52580.200109.1.8");
+        assert_eq!(data[27].id.as_ref(), "11129.9.8");
+        assert_eq!(client_hello.ja3().raw.as_ref(), "771,4865,51764,,");
+        assert_eq!(client_hello.ja4().raw.as_ref(), "t12i010100_1301_ca34");
+
+        let json = serde_json::to_value(parsed).expect("trust_anchors extension serializes");
+        assert_eq!(
+            json["trust_anchors"]["data"][0],
+            serde_json::json!({"id": "11129.9.5", "value": "d6790905"})
+        );
+        assert_eq!(
+            serde_json::from_value::<TlsExtension>(json)
+                .expect("trust_anchors extension deserializes"),
+            *parsed
+        );
     }
 
     #[test]

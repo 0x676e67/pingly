@@ -486,12 +486,10 @@ fn parse_version_information(
         payload[0], payload[1], payload[2], payload[3],
     ]));
     let available_versions = payload[4..]
-        .chunks_exact(4)
-        .map(|version| {
-            QuicVersion::from_id(u32::from_be_bytes([
-                version[0], version[1], version[2], version[3],
-            ]))
-        })
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|version| QuicVersion::from_id(u32::from_be_bytes(*version)))
         .collect();
 
     Ok(QuicVersionInformation {

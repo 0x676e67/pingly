@@ -739,6 +739,7 @@ function renderOverview(data) {
     const fingerprintItems = [
         fingerprintItem("JA4", tls.ja4, tls.ja4_r),
         fingerprintItem("JA3", tls.ja3_hash, tls.ja3),
+        fingerprintItem("HTTP/2", http2.h2_text_hash, http2.h2_text),
         fingerprintItem(
             "Akamai HTTP/2",
             http2.akamai_fingerprint_hash,
@@ -1239,6 +1240,7 @@ function renderHttp2(http2) {
     }
 
     const fingerprint = createFingerprintSection("HTTP/2 fingerprint", [
+        fingerprintItem("HTTP/2", http2.h2_text_hash, http2.h2_text),
         fingerprintItem(
             "Akamai HTTP/2",
             http2.akamai_fingerprint_hash,

@@ -1,5 +1,5 @@
 use pingly::{
-    h2::{frame::StreamDependency, AkamaiFingerprint, Frame},
+    h2::{frame::StreamDependency, AkamaiFingerprint, Frame, Http2Fingerprint},
     h3::{HeadersFrame, Http3Fingerprint, SettingsFrame},
     tls::ClientHello,
 };
@@ -11,6 +11,8 @@ struct BrowserSample {
     response: &'static [u8],
 
     priority: StreamDependency,
+
+    stream_window_increment: Option<u32>,
 }
 
 struct Http3BrowserSample {
@@ -21,13 +23,24 @@ struct Http3BrowserSample {
 
 const BROWSER_SAMPLES: &[BrowserSample] = &[
     BrowserSample {
-        name: "Chrome",
-        response: include_bytes!("data/chrome.json"),
+        name: "Chrome 150",
+        response: include_bytes!("data/chrome_150.json"),
         priority: StreamDependency {
             weight: 256,
             depends_on: 0,
             exclusive: 1,
         },
+        stream_window_increment: None,
+    },
+    BrowserSample {
+        name: "Chrome 152",
+        response: include_bytes!("data/chrome_152.json"),
+        priority: StreamDependency {
+            weight: 256,
+            depends_on: 0,
+            exclusive: 1,
+        },
+        stream_window_increment: None,
     },
     BrowserSample {
         name: "Firefox",
@@ -37,6 +50,7 @@ const BROWSER_SAMPLES: &[BrowserSample] = &[
             depends_on: 0,
             exclusive: 0,
         },
+        stream_window_increment: Some(12_451_840),
     },
 ];
 
@@ -83,6 +97,9 @@ struct TlsResponse {
 
 #[derive(Deserialize)]
 struct Http2Response {
+    #[serde(flatten)]
+    fingerprint: Http2Fingerprint,
+
     akamai_fingerprint: Box<str>,
 
     akamai_fingerprint_hash: Box<str>,
@@ -194,31 +211,50 @@ fn assert_tls(browser: &str, tls: &TlsResponse) {
 }
 
 fn assert_http2(sample: &BrowserSample, http2: &Http2Response) {
-    let [Frame::Settings(_), Frame::WindowUpdate(_), Frame::Headers(headers)] =
+    let [Frame::Settings(_), Frame::WindowUpdate(connection_window), Frame::Headers(headers), tail @ ..] =
         http2.sent_frames.as_slice()
     else {
         panic!(
-            "{} sample should contain SETTINGS, WINDOW_UPDATE, and HEADERS frames",
+            "{} sample should begin with SETTINGS, WINDOW_UPDATE, and HEADERS frames",
             sample.name
         );
     };
 
+    assert_eq!(connection_window.stream_id, 0);
     assert_eq!(
         headers.priority.as_ref(),
         Some(&sample.priority),
         "{} HEADERS priority",
         sample.name
     );
-
-    let fingerprint = AkamaiFingerprint::from_frames(&http2.sent_frames).unwrap();
     assert_eq!(
-        fingerprint.fingerprint.as_ref(),
+        tail.first().and_then(|frame| match frame {
+            Frame::WindowUpdate(frame) if frame.stream_id == headers.stream_id => {
+                Some(frame.increment)
+            }
+            _ => None,
+        }),
+        sample.stream_window_increment,
+        "{} stream WINDOW_UPDATE",
+        sample.name
+    );
+
+    let fingerprint = Http2Fingerprint::from_frames(&http2.sent_frames).unwrap();
+    assert_eq!(
+        fingerprint, http2.fingerprint,
+        "{} HTTP/2 fingerprint",
+        sample.name
+    );
+
+    let akamai = AkamaiFingerprint::from_frames(&http2.sent_frames).unwrap();
+    assert_eq!(
+        akamai.fingerprint.as_ref(),
         http2.akamai_fingerprint.as_ref(),
         "{} Akamai fingerprint",
         sample.name
     );
     assert_eq!(
-        fingerprint.hash.as_ref(),
+        akamai.hash.as_ref(),
         http2.akamai_fingerprint_hash.as_ref(),
         "{} Akamai hash",
         sample.name
@@ -233,8 +269,14 @@ fn assert_http2(sample: &BrowserSample, http2: &Http2Response) {
     );
     assert_eq!(
         AkamaiFingerprint::from_frames(&restored),
-        Some(fingerprint),
+        Some(akamai),
         "{} restored Akamai fingerprint",
+        sample.name
+    );
+    assert_eq!(
+        Http2Fingerprint::from_frames(&restored),
+        Some(fingerprint),
+        "{} restored HTTP/2 fingerprint",
         sample.name
     );
 }

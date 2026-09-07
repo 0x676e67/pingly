@@ -424,10 +424,12 @@ impl TryFrom<(u8, u32, &[u8])> for SettingsFrame {
         }
 
         let settings = payload
-            .chunks_exact(6)
-            .map(|data| {
-                let id = u16::from_be_bytes([data[0], data[1]]);
-                let value = u32::from_be_bytes([data[2], data[3], data[4], data[5]]);
+            .as_chunks::<6>()
+            .0
+            .iter()
+            .map(|&[id_high, id_low, value_0, value_1, value_2, value_3]| {
+                let id = u16::from_be_bytes([id_high, id_low]);
+                let value = u32::from_be_bytes([value_0, value_1, value_2, value_3]);
                 Setting::from((id, value))
             })
             .collect();

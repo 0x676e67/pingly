@@ -4,8 +4,9 @@
 //! bounded buffering and incremental framing.
 
 use std::{
+    collections::VecDeque,
     pin::Pin,
-    sync::{Arc, OnceLock},
+    sync::{Arc, Mutex, MutexGuard, OnceLock},
     task::{self, Poll},
     time::Instant,
 };
@@ -24,8 +25,73 @@ use tokio_rustls::server::TlsStream;
 /// Shared storage for one raw HTTP/1 request head.
 pub type Http1RequestCapture = Arc<OnceLock<Http1HeadBuffer>>;
 
-/// Concurrent storage for HTTP/2 frame events captured from one connection.
-pub type Http2Capture = Arc<boxcar::Vec<Http2FrameEvent>>;
+/// Shared HTTP/2 events and the request streams waiting to be claimed by Hyper.
+#[derive(Clone, Default)]
+pub struct Http2Capture(Arc<Http2CaptureInner>);
+
+#[derive(Default)]
+struct Http2CaptureInner {
+    /// Complete frames retained in observed order.
+    events: boxcar::Vec<Http2FrameEvent>,
+
+    /// Opening request HEADERS events not yet handed to Hyper.
+    pending_requests: Mutex<VecDeque<usize>>,
+}
+
+impl Http2Capture {
+    #[inline]
+    pub(super) fn count(&self) -> usize {
+        self.0.events.count()
+    }
+
+    #[inline]
+    pub(super) fn get(&self, index: usize) -> Option<&Http2FrameEvent> {
+        self.0.events.get(index)
+    }
+
+    #[inline]
+    pub(super) fn iter(&self) -> impl Iterator<Item = (usize, &Http2FrameEvent)> {
+        self.0.events.iter()
+    }
+
+    pub(super) fn push(&self, event: Http2FrameEvent) {
+        let opens_request = event.direction == Http2FrameDirection::ClientToServer
+            && matches!(
+                &event.frame,
+                Frame::Headers(headers)
+                    if headers.header_value(b":method").is_some()
+            );
+        let event_index = self.0.events.push(event);
+
+        if opens_request {
+            self.pending_requests().push_back(event_index);
+        }
+    }
+
+    /// Claims the first matching request and returns its stream identifier.
+    pub(super) fn claim_request_stream(
+        &self,
+        mut predicate: impl FnMut(&Http2FrameEvent) -> bool,
+    ) -> Option<u32> {
+        let mut pending = self.pending_requests();
+        let position = pending
+            .iter()
+            .position(|event_index| self.0.events.get(*event_index).is_some_and(&mut predicate))?;
+        let event_index = pending.remove(position)?;
+
+        self.0
+            .events
+            .get(event_index)
+            .map(|event| event.frame.stream_id())
+    }
+
+    fn pending_requests(&self) -> MutexGuard<'_, VecDeque<usize>> {
+        self.0
+            .pending_requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
 
 /// Direction of an HTTP/2 frame relative to Pingly.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -142,7 +208,7 @@ impl Http2WireCapture {
         bytes: &[u8],
         direction: Http2FrameDirection,
         started_at: Instant,
-        events: &boxcar::Vec<Http2FrameEvent>,
+        capture: &Http2Capture,
     ) -> Option<u32> {
         if !self.budget.is_active() || bytes.is_empty() {
             return None;
@@ -189,7 +255,7 @@ impl Http2WireCapture {
                     data.truncate(HTTP2_DATA_PREVIEW_BYTES);
                 }
                 let elapsed_us = started_at.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
-                events.push(Http2FrameEvent {
+                capture.push(Http2FrameEvent {
                     elapsed_us,
                     direction,
                     frame,
@@ -514,7 +580,7 @@ where
             inner,
             inbound: Http2WireCapture::client(),
             outbound: Http2WireCapture::server(),
-            capture: Arc::new(boxcar::Vec::new()),
+            capture: Http2Capture::default(),
             started_at: Instant::now(),
         }
     }
@@ -602,8 +668,8 @@ mod tests {
     use pingly::h2::{Frame, HTTP2_CLIENT_PREFACE};
 
     use super::{
-        Http2CaptureBudget, Http2FrameDirection, Http2WireCapture, HTTP2_CAPTURE_MAX_BYTES,
-        HTTP2_CAPTURE_MAX_FRAMES,
+        Http2Capture, Http2CaptureBudget, Http2FrameDirection, Http2WireCapture,
+        HTTP2_CAPTURE_MAX_BYTES, HTTP2_CAPTURE_MAX_FRAMES,
     };
 
     #[test]
@@ -623,11 +689,12 @@ mod tests {
         }
         assert!(!budget.admit_frame());
 
-        let events = boxcar::Vec::new();
+        let capture = Http2Capture::default();
         let started_at = Instant::now();
         let settings = [0, 0, 6, 0x04, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0];
         let mut client_bytes = HTTP2_CLIENT_PREFACE.to_vec();
         client_bytes.extend_from_slice(&settings);
+        client_bytes.extend_from_slice(&[0, 0, 2, 0x01, 0x05, 0, 0, 0, 1, 0x82, 0x84]);
 
         let mut client = Http2WireCapture::client();
         let mut header_table_size = None;
@@ -637,7 +704,7 @@ mod tests {
                     chunk,
                     Http2FrameDirection::ClientToServer,
                     started_at,
-                    &events,
+                    &capture,
                 )
                 .or(header_table_size);
         }
@@ -650,20 +717,21 @@ mod tests {
             &headers,
             Http2FrameDirection::ServerToClient,
             started_at,
-            &events,
+            &capture,
         );
 
-        assert_eq!(events.count(), 2);
+        assert_eq!(capture.count(), 3);
         assert!(matches!(
-            events.get(0).map(|event| &event.frame),
+            capture.get(0).map(|event| &event.frame),
             Some(Frame::Settings(_))
         ));
+        assert_eq!(capture.claim_request_stream(|_| true), Some(1));
         assert_eq!(
-            events.get(1).map(|event| event.direction),
+            capture.get(2).map(|event| event.direction),
             Some(Http2FrameDirection::ServerToClient)
         );
         assert!(matches!(
-            events.get(1).map(|event| &event.frame),
+            capture.get(2).map(|event| &event.frame),
             Some(Frame::Headers(_))
         ));
     }
