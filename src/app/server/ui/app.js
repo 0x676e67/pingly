@@ -97,7 +97,6 @@ const CHROMIUM_PRIORITY_BY_WEIGHT = new Map([
     [74, "THROTTLED"],
 ]);
 const HTTP2_UNKNOWN_FRAME_NAMES = new Map([
-    [0x03, "RstStream"],
     [0x05, "PushPromise"],
     [0x06, "Ping"],
     [0x07, "GoAway"],

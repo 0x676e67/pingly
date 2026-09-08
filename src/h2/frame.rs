@@ -5,6 +5,7 @@ mod error;
 mod headers;
 mod priority;
 mod priority_update;
+mod rst_stream;
 mod settings;
 mod window_update;
 
@@ -18,6 +19,7 @@ pub use headers::{
 use httlib_hpack::Decoder;
 pub use priority::{PriorityFrame, StreamDependency};
 pub use priority_update::PriorityUpdateFrame;
+pub use rst_stream::{ErrorCode, ErrorCodeName, RstStreamFrame};
 use serde::{de, Deserialize, Deserializer, Serialize};
 pub use settings::{Setting, SettingValue, SettingsFrame};
 pub use window_update::WindowUpdateFrame;
@@ -250,6 +252,8 @@ pub enum Frame {
     WindowUpdate(WindowUpdateFrame),
     /// A legacy PRIORITY frame.
     Priority(PriorityFrame),
+    /// An RST_STREAM frame.
+    RstStream(RstStreamFrame),
     /// An extensible PRIORITY_UPDATE frame.
     PriorityUpdate(PriorityUpdateFrame),
     /// A HEADERS frame, including any CONTINUATION metadata.
@@ -278,8 +282,14 @@ enum FrameRepr {
     /// A candidate PRIORITY frame representation.
     Priority(PriorityFrame),
 
+    /// A candidate RST_STREAM frame representation.
+    RstStream(RstStreamFrame),
+
     /// A candidate PRIORITY_UPDATE frame representation.
     PriorityUpdate(PriorityUpdateFrame),
+
+    /// A legacy RST_STREAM saved before the frame had a dedicated model.
+    LegacyRstStream(LegacyRstStreamFrame),
 
     /// A candidate frame representation without type-specific payload decoding.
     Unknown(UnknownFrame),
@@ -304,9 +314,13 @@ impl<'de> Deserialize<'de> for Frame {
             FrameRepr::Priority(frame) if frame.frame_type == FrameType::Priority => {
                 Self::Priority(frame)
             }
+            FrameRepr::RstStream(frame) if frame.frame_type == FrameType::RstStream => {
+                Self::RstStream(frame)
+            }
             FrameRepr::PriorityUpdate(frame) if frame.frame_type == FrameType::PriorityUpdate => {
                 Self::PriorityUpdate(frame)
             }
+            FrameRepr::LegacyRstStream(frame) => Self::RstStream(frame.0),
             FrameRepr::Unknown(frame) if frame.frame_type == FrameType::Unknown => {
                 Self::Unknown(frame)
             }
@@ -330,6 +344,7 @@ impl Frame {
             Self::Settings(_) => FrameType::Settings,
             Self::WindowUpdate(_) => FrameType::WindowUpdate,
             Self::Priority(_) => FrameType::Priority,
+            Self::RstStream(_) => FrameType::RstStream,
             Self::PriorityUpdate(_) => FrameType::PriorityUpdate,
             Self::Headers(_) => FrameType::Headers,
             Self::Unknown(_) => FrameType::Unknown,
@@ -344,6 +359,7 @@ impl Frame {
             Self::Settings(frame) => frame.stream_id,
             Self::WindowUpdate(frame) => frame.stream_id,
             Self::Priority(frame) => frame.stream_id,
+            Self::RstStream(frame) => frame.stream_id,
             Self::PriorityUpdate(frame) => frame.stream_id,
             Self::Headers(frame) => frame.stream_id,
             Self::Unknown(frame) => frame.stream_id,
@@ -358,6 +374,7 @@ impl Frame {
             Self::Settings(frame) => frame.length,
             Self::WindowUpdate(frame) => frame.length,
             Self::Priority(frame) => frame.length,
+            Self::RstStream(frame) => frame.length,
             Self::PriorityUpdate(frame) => frame.length,
             Self::Headers(frame) => frame.length,
             Self::Unknown(frame) => frame.length,
@@ -385,6 +402,9 @@ pub enum FrameType {
 
     /// PRIORITY (`0x02`).
     Priority,
+
+    /// RST_STREAM (`0x03`).
+    RstStream,
 
     /// PRIORITY_UPDATE (`0x10`).
     PriorityUpdate,
@@ -421,6 +441,33 @@ pub struct UnknownFrame {
     pub payload: Vec<u8>,
 }
 
+/// Legacy serialized RST_STREAM representation retained for saved captures.
+#[derive(Deserialize)]
+#[serde(try_from = "LegacyRstStreamFrameRepr")]
+struct LegacyRstStreamFrame(RstStreamFrame);
+
+/// Fields emitted before RST_STREAM received a dedicated frame model.
+#[derive(Deserialize)]
+struct LegacyRstStreamFrameRepr {
+    /// Saved generic frame category.
+    frame_type: FrameType,
+
+    /// Original HTTP/2 frame type.
+    type_id: u8,
+
+    /// Stream terminated by the frame.
+    stream_id: u32,
+
+    /// Saved payload length.
+    length: usize,
+
+    /// Original unused flag byte.
+    flags: u8,
+
+    /// Four-byte HTTP/2 error code.
+    payload: Vec<u8>,
+}
+
 /// Deserialization shape used to validate a frame retained as unknown.
 #[derive(Deserialize)]
 struct UnknownFrameRepr {
@@ -450,7 +497,7 @@ impl TryFrom<UnknownFrameRepr> for UnknownFrame {
         if repr.frame_type != FrameType::Unknown {
             return Err("unknown frame_type must be Unknown");
         }
-        if matches!(repr.type_id, 0x0 | 0x1 | 0x2 | 0x4 | 0x8 | 0x9 | 0x10) {
+        if matches!(repr.type_id, 0x0 | 0x1 | 0x2 | 0x3 | 0x4 | 0x8 | 0x9 | 0x10) {
             return Err("a supported HTTP/2 frame type cannot use UnknownFrame");
         }
         if repr.stream_id > 0x7fff_ffff {
@@ -474,6 +521,23 @@ impl TryFrom<UnknownFrameRepr> for UnknownFrame {
     }
 }
 
+impl TryFrom<LegacyRstStreamFrameRepr> for LegacyRstStreamFrame {
+    type Error = &'static str;
+
+    fn try_from(repr: LegacyRstStreamFrameRepr) -> Result<Self, Self::Error> {
+        if repr.frame_type != FrameType::Unknown || repr.type_id != 0x03 {
+            return Err("legacy RST_STREAM must use Unknown frame type 0x03");
+        }
+        if repr.length != repr.payload.len() {
+            return Err("legacy RST_STREAM length does not match its payload");
+        }
+
+        RstStreamFrame::try_from((repr.flags, repr.stream_id, repr.payload.as_slice()))
+            .map(Self)
+            .map_err(|_| "legacy RST_STREAM fields are invalid")
+    }
+}
+
 impl TryFrom<(u8, u8, u32, &[u8])> for Frame {
     type Error = FrameError;
 
@@ -484,6 +548,7 @@ impl TryFrom<(u8, u8, u32, &[u8])> for Frame {
             0x0 => DataFrame::try_from((flags, stream_id, payload)).map(Frame::Data),
             0x1 => HeadersFrame::try_from((flags, stream_id, payload)).map(Frame::Headers),
             0x2 => PriorityFrame::try_from((stream_id, payload)).map(Frame::Priority),
+            0x3 => RstStreamFrame::try_from((flags, stream_id, payload)).map(Frame::RstStream),
             0x4 => SettingsFrame::try_from((flags, stream_id, payload)).map(Frame::Settings),
             0x8 => WindowUpdateFrame::try_from((stream_id, payload)).map(Frame::WindowUpdate),
             0x10 => PriorityUpdateFrame::try_from((flags, stream_id, payload))
@@ -609,7 +674,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_frame_deserialization_rejects_supported_types_and_bad_lengths() {
+    fn unknown_frame_deserialization_rejects_supported_types_and_accepts_legacy_rst_stream() {
         let supported_type = r#"{
             "frame_type":"Unknown",
             "type_id":1,
@@ -626,8 +691,20 @@ mod tests {
             "flags":0,
             "payload":[0]
         }"#;
+        let legacy_rst_stream = r#"{
+            "frame_type":"Unknown",
+            "type_id":3,
+            "stream_id":5,
+            "length":4,
+            "flags":0,
+            "payload":[0,0,0,8]
+        }"#;
 
         assert!(serde_json::from_str::<UnknownFrame>(supported_type).is_err());
         assert!(serde_json::from_str::<UnknownFrame>(bad_length).is_err());
+        assert!(matches!(
+            serde_json::from_str::<Frame>(legacy_rst_stream).unwrap(),
+            Frame::RstStream(frame) if frame.error_code.id == 8
+        ));
     }
 }

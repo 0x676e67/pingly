@@ -43,7 +43,10 @@ impl Http2Fingerprint {
                 }
                 stream_id = Some(headers.stream_id);
             }
-            if !matches!(frame, Frame::Data(_) | Frame::Unknown(_)) {
+            if !matches!(
+                frame,
+                Frame::Data(_) | Frame::RstStream(_) | Frame::Unknown(_)
+            ) {
                 opening_frames.push(frame);
             }
         }
@@ -74,7 +77,7 @@ fn fingerprint_text(frames: &[&Frame], stream_id: u32) -> String {
                     let _ = write!(output, "{id}={value}");
                 }
             }
-            Frame::Settings(_) | Frame::Data(_) | Frame::Unknown(_) => {}
+            Frame::Settings(_) | Frame::Data(_) | Frame::RstStream(_) | Frame::Unknown(_) => {}
             Frame::WindowUpdate(frame) => {
                 push_token(&mut output);
                 push_target(&mut output, "WINDOW_UPDATE", frame.stream_id, stream_id);

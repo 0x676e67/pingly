@@ -71,6 +71,7 @@ fn compute_fingerprint<'a>(frames: impl IntoIterator<Item = &'a Frame>) -> Strin
                     frame.priority.weight
                 );
             }
+            Frame::RstStream(_) => {}
             Frame::PriorityUpdate(_) => {}
             Frame::Headers(frame) => {
                 if headers_count > 0 {
