@@ -105,7 +105,7 @@ struct HeadersFrameRepr {
     continuations: Vec<ContinuationFrame>,
 }
 
-/// A CONTINUATION frame associated with a decoded HEADERS field block.
+/// A CONTINUATION frame associated with a HEADERS or PUSH_PROMISE field block.
 ///
 /// See [RFC 9113, Section 6.10](https://www.rfc-editor.org/rfc/rfc9113#section-6.10).
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,7 +114,7 @@ pub struct ContinuationFrame {
     /// The frame type, always [`FrameType::Continuation`].
     pub frame_type: FrameType,
 
-    /// The stream identifier shared with the opening HEADERS frame.
+    /// The stream identifier shared with the opening field-block frame.
     pub stream_id: u32,
 
     /// The payload length, excluding the 9-byte frame header.
@@ -198,10 +198,20 @@ pub(super) struct PendingHeaders {
     /// The optional priority fields from the opening HEADERS frame.
     priority: Option<StreamDependency>,
 
-    /// The compressed field block accumulated so far.
-    block: Vec<u8>,
+    /// Compressed field block and its continuation metadata.
+    block: FieldBlock,
+}
 
-    /// Metadata for the CONTINUATION frames received so far.
+/// Field-block assembly shared by HEADERS and PUSH_PROMISE in one direction.
+#[derive(Debug)]
+pub(super) struct FieldBlock {
+    /// Stream carrying all fragments of the block.
+    stream_id: u32,
+
+    /// Compressed bytes accumulated before HPACK decoding.
+    bytes: Vec<u8>,
+
+    /// Metadata retained for each continuation.
     continuations: Vec<ContinuationFrame>,
 }
 
@@ -482,25 +492,11 @@ impl TryFrom<HeadersFrameRepr> for HeadersFrame {
             return Err("a pseudo-header name cannot contain only a colon");
         }
 
-        if repr.flags.has_end_headers() {
-            if !repr.continuations.is_empty() {
-                return Err("END_HEADERS opening frames cannot have CONTINUATION metadata");
-            }
-        } else {
-            if repr.continuations.is_empty() {
-                return Err("an incomplete HEADERS frame requires CONTINUATION metadata");
-            }
-            let continuation_count = repr.continuations.len();
-            for (index, continuation) in repr.continuations.iter().enumerate() {
-                if continuation.stream_id != repr.stream_id {
-                    return Err("CONTINUATION stream_id does not match the opening HEADERS frame");
-                }
-                let is_last = index + 1 == continuation_count;
-                if continuation.flags.has_end_headers() != is_last {
-                    return Err("only the final CONTINUATION frame may set END_HEADERS");
-                }
-            }
-        }
+        validate_continuations(
+            repr.stream_id,
+            repr.flags.has_end_headers(),
+            &repr.continuations,
+        )?;
 
         Ok(Self {
             frame_type: repr.frame_type,
@@ -525,13 +521,71 @@ impl PendingHeaders {
         stream_id: u32,
         payload: &[u8],
     ) -> Result<bool, FrameError> {
+        self.block.push_continuation(flags, stream_id, payload)
+    }
+
+    pub(super) fn finish(self, decoder: &mut Decoder<'_>) -> Result<HeadersFrame, FrameError> {
+        let (headers, continuations) = self.block.decode(decoder)?;
+        Ok(HeadersFrame {
+            frame_type: FrameType::Headers,
+            stream_id: self.stream_id,
+            length: self.length,
+            headers,
+            flags: self.flags,
+            priority: self.priority,
+            continuations,
+        })
+    }
+}
+
+/// Checks that saved continuation metadata completes exactly one field section.
+pub(super) fn validate_continuations(
+    stream_id: u32,
+    end_headers: bool,
+    continuations: &[ContinuationFrame],
+) -> Result<(), &'static str> {
+    if end_headers {
+        return continuations
+            .is_empty()
+            .then_some(())
+            .ok_or("END_HEADERS opening frames cannot have CONTINUATION metadata");
+    }
+    if continuations.is_empty() {
+        return Err("an incomplete field block requires CONTINUATION metadata");
+    }
+    for (index, continuation) in continuations.iter().enumerate() {
+        if continuation.stream_id != stream_id {
+            return Err("CONTINUATION stream_id does not match the opening frame");
+        }
+        if continuation.flags.has_end_headers() != (index + 1 == continuations.len()) {
+            return Err("only the final CONTINUATION frame may set END_HEADERS");
+        }
+    }
+    Ok(())
+}
+
+impl FieldBlock {
+    pub(super) fn new(stream_id: u32, bytes: &[u8]) -> Self {
+        Self {
+            stream_id,
+            bytes: bytes.to_vec(),
+            continuations: Vec::new(),
+        }
+    }
+
+    pub(super) fn push_continuation(
+        &mut self,
+        flags: u8,
+        stream_id: u32,
+        payload: &[u8],
+    ) -> Result<bool, FrameError> {
         if stream_id != self.stream_id {
             return Err(FrameError::UnexpectedContinuation);
         }
 
         let flags = ContinuationFlags::from(flags);
         let complete = flags.has_end_headers();
-        self.block.extend_from_slice(payload);
+        self.bytes.extend_from_slice(payload);
         self.continuations.push(ContinuationFrame {
             frame_type: FrameType::Continuation,
             stream_id,
@@ -542,10 +596,13 @@ impl PendingHeaders {
         Ok(complete)
     }
 
-    pub(super) fn finish(mut self, decoder: &mut Decoder<'_>) -> Result<HeadersFrame, FrameError> {
+    pub(super) fn decode(
+        mut self,
+        decoder: &mut Decoder<'_>,
+    ) -> Result<(Vec<HeaderField>, Vec<ContinuationFrame>), FrameError> {
         let mut decoded = Vec::new();
 
-        if decoder.decode(&mut self.block, &mut decoded).is_err() {
+        if decoder.decode(&mut self.bytes, &mut decoded).is_err() {
             return Err(FrameError::CompressionError);
         }
 
@@ -562,15 +619,7 @@ impl PendingHeaders {
             });
         }
 
-        Ok(HeadersFrame {
-            frame_type: FrameType::Headers,
-            stream_id: self.stream_id,
-            length: self.length,
-            headers,
-            flags: self.flags,
-            priority: self.priority,
-            continuations: self.continuations,
-        })
+        Ok((headers, self.continuations))
     }
 }
 
@@ -619,8 +668,7 @@ impl TryFrom<(u8, u32, &[u8])> for PendingHeaders {
             length: payload.len(),
             flags,
             priority,
-            block: data[..data.len() - padding_len].to_vec(),
-            continuations: Vec::new(),
+            block: FieldBlock::new(stream_id, &data[..data.len() - padding_len]),
         })
     }
 }
@@ -639,7 +687,7 @@ impl TryFrom<(u8, u32, &[u8])> for HeadersFrame {
     }
 }
 
-mod header_bytes {
+pub(super) mod header_bytes {
     use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
     #[derive(Deserialize)]
@@ -649,7 +697,7 @@ mod header_bytes {
         Bytes { hex: Box<str> },
     }
 
-    pub(super) fn serialize<S>(value: &[u8], serializer: S) -> Result<S::Ok, S::Error>
+    pub(in crate::h2::frame) fn serialize<S>(value: &[u8], serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
@@ -662,7 +710,7 @@ mod header_bytes {
         }
     }
 
-    pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<Box<[u8]>, D::Error>
+    pub(in crate::h2::frame) fn deserialize<'de, D>(deserializer: D) -> Result<Box<[u8]>, D::Error>
     where
         D: Deserializer<'de>,
     {

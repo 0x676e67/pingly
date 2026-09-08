@@ -722,20 +722,19 @@ fn http2_frame_wire_bytes(frame: &Frame) -> u64 {
     let base = u64::try_from(frame.payload_len())
         .unwrap_or(u64::MAX)
         .saturating_add(HTTP2_FRAME_HEADER_LENGTH);
-    let Frame::Headers(headers) = frame else {
-        return base;
+    let continuations = match frame {
+        Frame::Headers(frame) => &frame.continuations,
+        Frame::PushPromise(frame) => &frame.continuations,
+        _ => return base,
     };
 
-    headers
-        .continuations
-        .iter()
-        .fold(base, |total, continuation| {
-            total.saturating_add(
-                u64::try_from(continuation.length)
-                    .unwrap_or(u64::MAX)
-                    .saturating_add(HTTP2_FRAME_HEADER_LENGTH),
-            )
-        })
+    continuations.iter().fold(base, |total, continuation| {
+        total.saturating_add(
+            u64::try_from(continuation.length)
+                .unwrap_or(u64::MAX)
+                .saturating_add(HTTP2_FRAME_HEADER_LENGTH),
+        )
+    })
 }
 
 fn update_http2_request_summary(
@@ -1167,10 +1166,9 @@ mod tests {
         h1::Http1HeadBuffer,
         h2::{
             frame::{
-                DataFrame, HeaderField as Http2HeaderField, HeadersFlags,
-                HeadersFrame as Http2HeadersFrame, PriorityUpdateFrame, RstStreamFrame,
-                SettingsFrame as Http2SettingsFrame, StreamDependency,
-                UnknownFrame as Http2UnknownFrame, WindowUpdateFrame,
+                DataFrame, GoAwayFrame, HeaderField as Http2HeaderField, HeadersFlags,
+                HeadersFrame as Http2HeadersFrame, PingFrame, PriorityUpdateFrame, RstStreamFrame,
+                SettingsFrame as Http2SettingsFrame, StreamDependency, WindowUpdateFrame,
             },
             Frame as Http2Frame, FrameType as Http2FrameType,
         },
@@ -1373,14 +1371,14 @@ mod tests {
         capture.push(Http2FrameEvent {
             elapsed_us: 55,
             direction: Http2FrameDirection::ClientToServer,
-            frame: Http2Frame::Unknown(Http2UnknownFrame {
-                frame_type: Http2FrameType::Unknown,
-                type_id: 0x06,
-                stream_id: 0,
-                length: 8,
-                flags: 0,
-                payload: vec![0; 8],
-            }),
+            frame: Http2Frame::Ping(PingFrame::try_from((0, 0, [0; 8].as_slice())).unwrap()),
+        });
+        capture.push(Http2FrameEvent {
+            elapsed_us: 56,
+            direction: Http2FrameDirection::ServerToClient,
+            frame: Http2Frame::GoAway(
+                GoAwayFrame::try_from((0, 0, [0, 0, 0, 7, 0, 0, 0, 0].as_slice())).unwrap(),
+            ),
         });
 
         let info = Http2TrackInfo::new(capture.clone(), None).unwrap();
@@ -1402,8 +1400,8 @@ mod tests {
         assert_eq!(value["h2_text_hash"], "04e7eb17eb6119f9a65c4cacb32f4dea");
         assert_eq!(value["sent_frames"].as_array().unwrap().len(), 6);
         assert_eq!(value["sent_frames"][2]["increment"], 12_451_840);
-        assert_eq!(value["sent_frames"][5]["type_id"], 6);
-        assert_eq!(value["events"].as_array().unwrap().len(), 8);
+        assert_eq!(value["sent_frames"][5]["frame_type"], "Ping");
+        assert_eq!(value["events"].as_array().unwrap().len(), 9);
         assert_eq!(value["events"][4]["direction"], "ServerToClient");
         assert_eq!(value["events"][5]["frame_type"], "RstStream");
         assert_eq!(value["events"][5]["error_code"]["name"], "Cancel");
@@ -1429,6 +1427,9 @@ mod tests {
         assert_eq!(reset_stream["reset"], true);
         assert_eq!(reset_stream["client_ended"], true);
         assert_eq!(reset_stream["server_ended"], true);
+        assert_eq!(value["streams"].as_array().unwrap().len(), 3);
+        assert_eq!(value["streams"][2]["server_ended"], false);
+        assert_eq!(value["events"][8]["frame_type"], "GoAway");
 
         let mut connection = ConnectionTrack::default();
         connection.set_http2_capture(capture);
@@ -1449,11 +1450,18 @@ mod tests {
         assert_eq!(scoped["akamai_fingerprint"], "1:65536|00|0|p,m");
         assert_eq!(scoped["h2_text"], "SETTINGS:1=65536|HEADERS(stream):p,m");
         assert_eq!(scoped["sent_frames"].as_array().unwrap().len(), 4);
-        assert_eq!(scoped["events"].as_array().unwrap().len(), 4);
+        assert_eq!(scoped["events"].as_array().unwrap().len(), 5);
         assert_eq!(scoped["streams"].as_array().unwrap().len(), 1);
         assert_eq!(scoped["streams"][0]["stream_id"], 7);
-        assert_eq!(scoped["streams"][0]["event_indices"], json!([1, 3]));
+        assert_eq!(scoped["streams"][0]["event_indices"], json!([1, 4]));
         assert_eq!(scoped["streams"][0]["client_wire_bytes"], 24);
+
+        let mut parser = pingly::h2::FrameParser::default();
+        let promise = [0, 0, 5, 5, 0, 0, 0, 0, 1, 0, 0, 0, 2, 0x82];
+        let continuation = [0, 0, 1, 9, 4, 0, 0, 0, 1, 0x84];
+        assert!(parser.parse(&promise).unwrap().into_frame().is_none());
+        let frame = parser.parse(&continuation).unwrap().into_frame().unwrap();
+        assert_eq!(super::http2_frame_wire_bytes(&frame), 24);
     }
 
     #[test]

@@ -26,7 +26,7 @@ pub enum Http2ParseError {
         /// Whether the parser still needs the rest of the client preface.
         waiting_for_preface: bool,
 
-        /// Whether a HEADERS field block still needs a CONTINUATION frame.
+        /// Whether a HEADERS or PUSH_PROMISE block still needs a CONTINUATION frame.
         waiting_for_continuation: bool,
     },
 
