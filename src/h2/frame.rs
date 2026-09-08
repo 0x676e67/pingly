@@ -293,28 +293,40 @@ impl FrameParser {
 pub enum Frame {
     /// A DATA frame.
     Data(DataFrame),
+
     /// A SETTINGS frame.
     Settings(SettingsFrame),
+
     /// A WINDOW_UPDATE frame.
     WindowUpdate(WindowUpdateFrame),
+
     /// A legacy PRIORITY frame.
     Priority(PriorityFrame),
+
     /// An RST_STREAM frame.
     RstStream(RstStreamFrame),
+
     /// A PUSH_PROMISE frame, including any CONTINUATION metadata.
     PushPromise(PushPromiseFrame),
+
     /// A connection-level PING probe or acknowledgement.
     Ping(PingFrame),
+
     /// A connection-level GOAWAY notification.
     GoAway(GoAwayFrame),
+
     /// An alternative-service advertisement.
     AltSvc(AltSvcFrame),
+
     /// An origin advertisement.
     Origin(OriginFrame),
+
     /// An extensible PRIORITY_UPDATE frame.
     PriorityUpdate(PriorityUpdateFrame),
+
     /// A HEADERS frame, including any CONTINUATION metadata.
     Headers(HeadersFrame),
+
     /// A frame whose payload is retained without type-specific decoding.
     Unknown(UnknownFrame),
 }
