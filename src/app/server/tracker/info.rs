@@ -807,7 +807,7 @@ fn http2_frame_ends_direction(frame: &Frame) -> bool {
 }
 
 fn http2_frame_resets_stream(frame: &Frame) -> bool {
-    matches!(frame, Frame::Unknown(frame) if frame.type_id == 0x03 && frame.length == 4)
+    matches!(frame, Frame::RstStream(_))
 }
 
 impl Http3TrackInfo {
@@ -1168,7 +1168,7 @@ mod tests {
         h2::{
             frame::{
                 DataFrame, HeaderField as Http2HeaderField, HeadersFlags,
-                HeadersFrame as Http2HeadersFrame, PriorityUpdateFrame,
+                HeadersFrame as Http2HeadersFrame, PriorityUpdateFrame, RstStreamFrame,
                 SettingsFrame as Http2SettingsFrame, StreamDependency,
                 UnknownFrame as Http2UnknownFrame, WindowUpdateFrame,
             },
@@ -1344,14 +1344,9 @@ mod tests {
         capture.push(Http2FrameEvent {
             elapsed_us: 40,
             direction: Http2FrameDirection::ServerToClient,
-            frame: Http2Frame::Unknown(Http2UnknownFrame {
-                frame_type: Http2FrameType::Unknown,
-                type_id: 0x03,
-                stream_id: 5,
-                length: 4,
-                flags: 0,
-                payload: vec![0; 4],
-            }),
+            frame: Http2Frame::RstStream(
+                RstStreamFrame::try_from((0, 5, &[0, 0, 0, 8][..])).unwrap(),
+            ),
         });
         capture.push(Http2FrameEvent {
             elapsed_us: 50,
@@ -1410,6 +1405,8 @@ mod tests {
         assert_eq!(value["sent_frames"][5]["type_id"], 6);
         assert_eq!(value["events"].as_array().unwrap().len(), 8);
         assert_eq!(value["events"][4]["direction"], "ServerToClient");
+        assert_eq!(value["events"][5]["frame_type"], "RstStream");
+        assert_eq!(value["events"][5]["error_code"]["name"], "Cancel");
         assert_eq!(stream["stream_id"], 3);
         assert_eq!(stream["method"], "GET");
         assert_eq!(stream["path"], "/api/http2");
