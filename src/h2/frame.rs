@@ -1,24 +1,35 @@
 //! Stateful HTTP/2 frame and HPACK field-block decoding.
 
+mod altsvc;
 mod data;
 mod error;
+mod goaway;
 mod headers;
+mod origin;
+mod ping;
 mod priority;
 mod priority_update;
+mod push_promise;
 mod rst_stream;
 mod settings;
 mod window_update;
 
+pub use altsvc::AltSvcFrame;
 pub use data::{DataFlag, DataFlagName, DataFlags, DataFrame};
 pub use error::FrameError;
+pub use goaway::GoAwayFrame;
 use headers::PendingHeaders;
 pub use headers::{
     ContinuationFlag, ContinuationFlagName, ContinuationFlags, ContinuationFrame, HeaderField,
     HeadersFlag, HeadersFlagName, HeadersFlags, HeadersFrame,
 };
 use httlib_hpack::Decoder;
+pub use origin::{OriginEntry, OriginFrame};
+pub use ping::PingFrame;
 pub use priority::{PriorityFrame, StreamDependency};
 pub use priority_update::PriorityUpdateFrame;
+use push_promise::PendingPushPromise;
+pub use push_promise::PushPromiseFrame;
 pub use rst_stream::{ErrorCode, ErrorCodeName, RstStreamFrame};
 use serde::{de, Deserialize, Deserializer, Serialize};
 pub use settings::{Setting, SettingValue, SettingsFrame};
@@ -26,6 +37,44 @@ pub use window_update::WindowUpdateFrame;
 
 const FRAME_HEADER_LEN: usize = 9;
 const DEFAULT_HEADER_TABLE_SIZE: u32 = 4096;
+
+/// A field section awaiting completion in this parser's HPACK direction.
+#[derive(Debug)]
+enum PendingFieldSection {
+    /// Request, response, or trailer fields.
+    Headers(PendingHeaders),
+
+    /// Request fields promised by the server.
+    PushPromise(PendingPushPromise),
+}
+
+impl PendingFieldSection {
+    fn is_complete(&self) -> bool {
+        match self {
+            Self::Headers(frame) => frame.is_complete(),
+            Self::PushPromise(frame) => frame.is_complete(),
+        }
+    }
+
+    fn push_continuation(
+        &mut self,
+        flags: u8,
+        stream_id: u32,
+        payload: &[u8],
+    ) -> Result<bool, FrameError> {
+        match self {
+            Self::Headers(frame) => frame.push_continuation(flags, stream_id, payload),
+            Self::PushPromise(frame) => frame.push_continuation(flags, stream_id, payload),
+        }
+    }
+
+    fn finish(self, decoder: &mut Decoder<'_>) -> Result<Frame, FrameError> {
+        match self {
+            Self::Headers(frame) => frame.finish(decoder).map(Frame::Headers),
+            Self::PushPromise(frame) => frame.finish(decoder).map(Frame::PushPromise),
+        }
+    }
+}
 
 /// Stateful parser for HTTP/2 frames and fragmented field blocks.
 ///
@@ -35,7 +84,8 @@ const DEFAULT_HEADER_TABLE_SIZE: u32 = 4096;
 /// chunks or still contain the preface.
 #[derive(Debug)]
 pub struct FrameParser {
-    pending_headers: Option<PendingHeaders>,
+    // HEADERS and PUSH_PROMISE both require uninterrupted CONTINUATION sequences.
+    pending_field_section: Option<PendingFieldSection>,
 
     // HPACK's dynamic table is a connection-level decoding context. See RFC 7541, Section 2.2:
     // <https://www.rfc-editor.org/rfc/rfc7541#section-2.2>
@@ -48,7 +98,7 @@ pub struct FrameParser {
 impl Default for FrameParser {
     fn default() -> Self {
         Self {
-            pending_headers: None,
+            pending_field_section: None,
             hpack_decoder: Decoder::with_dynamic_size(DEFAULT_HEADER_TABLE_SIZE),
             hpack_max_dynamic_size: DEFAULT_HEADER_TABLE_SIZE,
         }
@@ -64,7 +114,7 @@ pub enum FrameParseOutcome {
 
     /// A complete wire frame was consumed.
     ///
-    /// `frame` is `None` only while a HEADERS field block is waiting for, or
+    /// `frame` is `None` only while a HEADERS or PUSH_PROMISE block is waiting for, or
     /// consuming, a CONTINUATION frame.
     Consumed {
         /// Number of bytes consumed from the supplied slice.
@@ -149,7 +199,7 @@ impl FrameParser {
                 frame,
             }),
             Err(source) => {
-                self.pending_headers = None;
+                self.pending_field_section = None;
                 // httlib-hpack updates its dynamic table one field at a time. A later decoding
                 // failure can therefore leave partial state, but RFC 9113, Section 4.3 requires
                 // the connection to terminate after COMPRESSION_ERROR:
@@ -166,10 +216,10 @@ impl FrameParser {
         }
     }
 
-    /// Clears any partially decoded HEADERS field block.
+    /// Clears any incomplete field section and resets this direction's HPACK table.
     #[inline]
     pub fn reset(&mut self) {
-        self.pending_headers = None;
+        self.pending_field_section = None;
         self.reset_hpack_decoder();
     }
 
@@ -186,7 +236,7 @@ impl FrameParser {
     /// Returns whether the next frame must be a CONTINUATION frame.
     #[inline]
     pub const fn is_waiting_for_continuation(&self) -> bool {
-        self.pending_headers.is_some()
+        self.pending_field_section.is_some()
     }
 
     fn reset_hpack_decoder(&mut self) {
@@ -203,7 +253,7 @@ impl FrameParser {
         // RFC 9113, Section 6.10 requires CONTINUATION frames to be consecutive and on the same
         // stream until END_HEADERS is received:
         // <https://www.rfc-editor.org/rfc/rfc9113#section-6.10>
-        if let Some(pending) = self.pending_headers.as_mut() {
+        if let Some(pending) = self.pending_field_section.as_mut() {
             if ty != 0x9 {
                 return Err(FrameError::ExpectedContinuation);
             }
@@ -212,30 +262,27 @@ impl FrameParser {
                 return Ok(None);
             }
 
-            let Some(pending) = self.pending_headers.take() else {
+            let Some(pending) = self.pending_field_section.take() else {
                 return Err(FrameError::MalformedMessage);
             };
-            return pending
-                .finish(&mut self.hpack_decoder)
-                .map(Frame::Headers)
-                .map(Some);
+            return pending.finish(&mut self.hpack_decoder).map(Some);
         }
 
-        match ty {
-            0x1 => {
-                let pending = PendingHeaders::try_from((flags, stream_id, payload))?;
-                if pending.is_complete() {
-                    pending
-                        .finish(&mut self.hpack_decoder)
-                        .map(Frame::Headers)
-                        .map(Some)
-                } else {
-                    self.pending_headers = Some(pending);
-                    Ok(None)
-                }
+        let pending = match FrameType::from(ty) {
+            FrameType::Headers => {
+                PendingFieldSection::Headers(PendingHeaders::try_from((flags, stream_id, payload))?)
             }
-            0x9 => Err(FrameError::UnexpectedContinuation),
-            _ => Frame::try_from((ty, flags, stream_id, payload)).map(Some),
+            FrameType::PushPromise => PendingFieldSection::PushPromise(
+                PendingPushPromise::try_from((flags, stream_id, payload))?,
+            ),
+            FrameType::Continuation => return Err(FrameError::UnexpectedContinuation),
+            _ => return Frame::try_from((ty, flags, stream_id, payload)).map(Some),
+        };
+        if pending.is_complete() {
+            pending.finish(&mut self.hpack_decoder).map(Some)
+        } else {
+            self.pending_field_section = Some(pending);
+            Ok(None)
         }
     }
 }
@@ -254,6 +301,16 @@ pub enum Frame {
     Priority(PriorityFrame),
     /// An RST_STREAM frame.
     RstStream(RstStreamFrame),
+    /// A PUSH_PROMISE frame, including any CONTINUATION metadata.
+    PushPromise(PushPromiseFrame),
+    /// A connection-level PING probe or acknowledgement.
+    Ping(PingFrame),
+    /// A connection-level GOAWAY notification.
+    GoAway(GoAwayFrame),
+    /// An alternative-service advertisement.
+    AltSvc(AltSvcFrame),
+    /// An origin advertisement.
+    Origin(OriginFrame),
     /// An extensible PRIORITY_UPDATE frame.
     PriorityUpdate(PriorityUpdateFrame),
     /// A HEADERS frame, including any CONTINUATION metadata.
@@ -285,11 +342,26 @@ enum FrameRepr {
     /// A candidate RST_STREAM frame representation.
     RstStream(RstStreamFrame),
 
+    /// A candidate promised request.
+    PushPromise(PushPromiseFrame),
+
+    /// A candidate PING frame.
+    Ping(PingFrame),
+
+    /// A candidate GOAWAY frame.
+    GoAway(GoAwayFrame),
+
+    /// A candidate ALTSVC frame.
+    AltSvc(AltSvcFrame),
+
+    /// A candidate ORIGIN frame.
+    Origin(OriginFrame),
+
     /// A candidate PRIORITY_UPDATE frame representation.
     PriorityUpdate(PriorityUpdateFrame),
 
-    /// A legacy RST_STREAM saved before the frame had a dedicated model.
-    LegacyRstStream(LegacyRstStreamFrame),
+    /// A legacy control frame saved before it had a dedicated model.
+    LegacyControl(LegacyControlFrame),
 
     /// A candidate frame representation without type-specific payload decoding.
     Unknown(UnknownFrame),
@@ -317,10 +389,15 @@ impl<'de> Deserialize<'de> for Frame {
             FrameRepr::RstStream(frame) if frame.frame_type == FrameType::RstStream => {
                 Self::RstStream(frame)
             }
+            FrameRepr::PushPromise(frame) => Self::PushPromise(frame),
+            FrameRepr::Ping(frame) => Self::Ping(frame),
+            FrameRepr::GoAway(frame) => Self::GoAway(frame),
+            FrameRepr::AltSvc(frame) => Self::AltSvc(frame),
+            FrameRepr::Origin(frame) => Self::Origin(frame),
             FrameRepr::PriorityUpdate(frame) if frame.frame_type == FrameType::PriorityUpdate => {
                 Self::PriorityUpdate(frame)
             }
-            FrameRepr::LegacyRstStream(frame) => Self::RstStream(frame.0),
+            FrameRepr::LegacyControl(frame) => frame.0,
             FrameRepr::Unknown(frame) if frame.frame_type == FrameType::Unknown => {
                 Self::Unknown(frame)
             }
@@ -345,6 +422,11 @@ impl Frame {
             Self::WindowUpdate(_) => FrameType::WindowUpdate,
             Self::Priority(_) => FrameType::Priority,
             Self::RstStream(_) => FrameType::RstStream,
+            Self::PushPromise(_) => FrameType::PushPromise,
+            Self::Ping(_) => FrameType::Ping,
+            Self::GoAway(_) => FrameType::GoAway,
+            Self::AltSvc(_) => FrameType::AltSvc,
+            Self::Origin(_) => FrameType::Origin,
             Self::PriorityUpdate(_) => FrameType::PriorityUpdate,
             Self::Headers(_) => FrameType::Headers,
             Self::Unknown(_) => FrameType::Unknown,
@@ -360,6 +442,11 @@ impl Frame {
             Self::WindowUpdate(frame) => frame.stream_id,
             Self::Priority(frame) => frame.stream_id,
             Self::RstStream(frame) => frame.stream_id,
+            Self::PushPromise(frame) => frame.stream_id,
+            Self::Ping(frame) => frame.stream_id,
+            Self::GoAway(frame) => frame.stream_id,
+            Self::AltSvc(frame) => frame.stream_id,
+            Self::Origin(frame) => frame.stream_id,
             Self::PriorityUpdate(frame) => frame.stream_id,
             Self::Headers(frame) => frame.stream_id,
             Self::Unknown(frame) => frame.stream_id,
@@ -375,6 +462,11 @@ impl Frame {
             Self::WindowUpdate(frame) => frame.length,
             Self::Priority(frame) => frame.length,
             Self::RstStream(frame) => frame.length,
+            Self::PushPromise(frame) => frame.length,
+            Self::Ping(frame) => frame.length,
+            Self::GoAway(frame) => frame.length,
+            Self::AltSvc(frame) => frame.length,
+            Self::Origin(frame) => frame.length,
             Self::PriorityUpdate(frame) => frame.length,
             Self::Headers(frame) => frame.length,
             Self::Unknown(frame) => frame.length,
@@ -382,35 +474,41 @@ impl Frame {
     }
 }
 
-/// Frame categories represented by [`Frame`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum FrameType {
-    /// DATA (`0x00`).
-    Data,
+registry_enum! {
+    /// HTTP/2 frame types in the [IANA registry](https://www.iana.org/assignments/http2-parameters#frame-type).
+    pub enum FrameType: u8 {
+        /// DATA (`0x00`, RFC 9113 Section 6.1).
+        Data => 0x00,
+        /// HEADERS (`0x01`, RFC 9113 Section 6.2).
+        Headers => 0x01,
+        /// PRIORITY (`0x02`, RFC 9113 Section 6.3).
+        Priority => 0x02,
+        /// RST_STREAM (`0x03`, RFC 9113 Section 6.4).
+        RstStream => 0x03,
+        /// SETTINGS (`0x04`, RFC 9113 Section 6.5).
+        Settings => 0x04,
+        /// PUSH_PROMISE (`0x05`, RFC 9113 Section 6.6).
+        PushPromise => 0x05,
+        /// PING (`0x06`, RFC 9113 Section 6.7).
+        Ping => 0x06,
+        /// GOAWAY (`0x07`, RFC 9113 Section 6.8).
+        GoAway => 0x07,
+        /// WINDOW_UPDATE (`0x08`, RFC 9113 Section 6.9).
+        WindowUpdate => 0x08,
+        /// CONTINUATION (`0x09`, RFC 9113 Section 6.10).
+        Continuation => 0x09,
+        /// ALTSVC (`0x0a`, RFC 7838 Section 4).
+        AltSvc => 0x0a,
+        /// ORIGIN (`0x0c`, RFC 8336 Section 2).
+        Origin => 0x0c,
+        /// PRIORITY_UPDATE (`0x10`, RFC 9218 Section 7.1).
+        PriorityUpdate => 0x10,
+    }
 
-    /// SETTINGS (`0x04`).
-    Settings,
-
-    /// WINDOW_UPDATE (`0x08`).
-    WindowUpdate,
-
-    /// HEADERS (`0x01`).
-    Headers,
-
-    /// CONTINUATION (`0x09`).
-    Continuation,
-
-    /// PRIORITY (`0x02`).
-    Priority,
-
-    /// RST_STREAM (`0x03`).
-    RstStream,
-
-    /// PRIORITY_UPDATE (`0x10`).
-    PriorityUpdate,
-
-    /// A frame retained without type-specific decoding.
-    Unknown,
+    fallback(_id) {
+        /// An unassigned or private frame type; its ID remains in [`UnknownFrame::type_id`].
+        Unknown,
+    } => Self::Unknown;
 }
 
 /// A frame retained without type-specific payload decoding.
@@ -441,32 +539,10 @@ pub struct UnknownFrame {
     pub payload: Vec<u8>,
 }
 
-/// Legacy serialized RST_STREAM representation retained for saved captures.
+/// Converts saved control frames that do not need a connection's compression context.
 #[derive(Deserialize)]
-#[serde(try_from = "LegacyRstStreamFrameRepr")]
-struct LegacyRstStreamFrame(RstStreamFrame);
-
-/// Fields emitted before RST_STREAM received a dedicated frame model.
-#[derive(Deserialize)]
-struct LegacyRstStreamFrameRepr {
-    /// Saved generic frame category.
-    frame_type: FrameType,
-
-    /// Original HTTP/2 frame type.
-    type_id: u8,
-
-    /// Stream terminated by the frame.
-    stream_id: u32,
-
-    /// Saved payload length.
-    length: usize,
-
-    /// Original unused flag byte.
-    flags: u8,
-
-    /// Four-byte HTTP/2 error code.
-    payload: Vec<u8>,
-}
+#[serde(try_from = "UnknownFrameRepr")]
+struct LegacyControlFrame(Frame);
 
 /// Deserialization shape used to validate a frame retained as unknown.
 #[derive(Deserialize)]
@@ -497,6 +573,8 @@ impl TryFrom<UnknownFrameRepr> for UnknownFrame {
         if repr.frame_type != FrameType::Unknown {
             return Err("unknown frame_type must be Unknown");
         }
+        // Keep older captures of newly supported types readable. Legacy PUSH_PROMISE
+        // payloads cannot be decoded without their connection's HPACK context.
         if matches!(repr.type_id, 0x0 | 0x1 | 0x2 | 0x3 | 0x4 | 0x8 | 0x9 | 0x10) {
             return Err("a supported HTTP/2 frame type cannot use UnknownFrame");
         }
@@ -521,20 +599,27 @@ impl TryFrom<UnknownFrameRepr> for UnknownFrame {
     }
 }
 
-impl TryFrom<LegacyRstStreamFrameRepr> for LegacyRstStreamFrame {
+impl TryFrom<UnknownFrameRepr> for LegacyControlFrame {
     type Error = &'static str;
 
-    fn try_from(repr: LegacyRstStreamFrameRepr) -> Result<Self, Self::Error> {
-        if repr.frame_type != FrameType::Unknown || repr.type_id != 0x03 {
-            return Err("legacy RST_STREAM must use Unknown frame type 0x03");
+    fn try_from(repr: UnknownFrameRepr) -> Result<Self, Self::Error> {
+        if repr.frame_type != FrameType::Unknown
+            || !matches!(repr.type_id, 0x03 | 0x06 | 0x07 | 0x0a | 0x0c)
+        {
+            return Err("not a legacy HTTP/2 control frame");
         }
         if repr.length != repr.payload.len() {
-            return Err("legacy RST_STREAM length does not match its payload");
+            return Err("legacy frame length does not match its payload");
         }
 
-        RstStreamFrame::try_from((repr.flags, repr.stream_id, repr.payload.as_slice()))
-            .map(Self)
-            .map_err(|_| "legacy RST_STREAM fields are invalid")
+        Frame::try_from((
+            repr.type_id,
+            repr.flags,
+            repr.stream_id,
+            repr.payload.as_slice(),
+        ))
+        .map(Self)
+        .map_err(|_| "legacy control frame fields are invalid")
     }
 }
 
@@ -544,17 +629,40 @@ impl TryFrom<(u8, u8, u32, &[u8])> for Frame {
     fn try_from(
         (ty, flags, stream_id, payload): (u8, u8, u32, &[u8]),
     ) -> Result<Self, Self::Error> {
-        match ty {
-            0x0 => DataFrame::try_from((flags, stream_id, payload)).map(Frame::Data),
-            0x1 => HeadersFrame::try_from((flags, stream_id, payload)).map(Frame::Headers),
-            0x2 => PriorityFrame::try_from((stream_id, payload)).map(Frame::Priority),
-            0x3 => RstStreamFrame::try_from((flags, stream_id, payload)).map(Frame::RstStream),
-            0x4 => SettingsFrame::try_from((flags, stream_id, payload)).map(Frame::Settings),
-            0x8 => WindowUpdateFrame::try_from((stream_id, payload)).map(Frame::WindowUpdate),
-            0x10 => PriorityUpdateFrame::try_from((flags, stream_id, payload))
+        match FrameType::from(ty) {
+            FrameType::Data => DataFrame::try_from((flags, stream_id, payload)).map(Frame::Data),
+            FrameType::Headers => {
+                HeadersFrame::try_from((flags, stream_id, payload)).map(Frame::Headers)
+            }
+            FrameType::Priority => {
+                PriorityFrame::try_from((stream_id, payload)).map(Frame::Priority)
+            }
+            FrameType::RstStream => {
+                RstStreamFrame::try_from((flags, stream_id, payload)).map(Frame::RstStream)
+            }
+            FrameType::Settings => {
+                SettingsFrame::try_from((flags, stream_id, payload)).map(Frame::Settings)
+            }
+            FrameType::PushPromise => {
+                PushPromiseFrame::try_from((flags, stream_id, payload)).map(Frame::PushPromise)
+            }
+            FrameType::Ping => PingFrame::try_from((flags, stream_id, payload)).map(Frame::Ping),
+            FrameType::GoAway => {
+                GoAwayFrame::try_from((flags, stream_id, payload)).map(Frame::GoAway)
+            }
+            FrameType::AltSvc => {
+                AltSvcFrame::try_from((flags, stream_id, payload)).map(Frame::AltSvc)
+            }
+            FrameType::Origin => {
+                OriginFrame::try_from((flags, stream_id, payload)).map(Frame::Origin)
+            }
+            FrameType::WindowUpdate => {
+                WindowUpdateFrame::try_from((stream_id, payload)).map(Frame::WindowUpdate)
+            }
+            FrameType::PriorityUpdate => PriorityUpdateFrame::try_from((flags, stream_id, payload))
                 .map(Frame::PriorityUpdate),
-            0x9 => Err(FrameError::UnexpectedContinuation),
-            _ => {
+            FrameType::Continuation => Err(FrameError::UnexpectedContinuation),
+            FrameType::Unknown => {
                 let frame = UnknownFrame {
                     frame_type: FrameType::Unknown,
                     type_id: ty,
@@ -619,18 +727,18 @@ mod tests {
 
         assert_eq!(error.consumed, wrong_stream.len());
         assert_eq!(error.source, FrameError::UnexpectedContinuation);
-        assert!(parser.pending_headers.is_none());
+        assert!(!parser.is_waiting_for_continuation());
     }
 
     #[test]
     fn unknown_frames_retain_wire_metadata() {
-        let bytes = [0, 0, 2, 0x0a, 0xa5, 0, 0, 0, 7, 1, 2];
+        let bytes = [0, 0, 2, 0x0b, 0xa5, 0, 0, 0, 7, 1, 2];
         let parsed = FrameParser::default().parse(&bytes).unwrap();
         let Some(Frame::Unknown(frame)) = parsed.into_frame() else {
             panic!("expected an unknown frame");
         };
 
-        assert_eq!(frame.type_id, 0x0a);
+        assert_eq!(frame.type_id, 0x0b);
         assert_eq!(frame.flags, 0xa5);
         assert_eq!(frame.stream_id, 7);
         assert_eq!(frame.payload, [1, 2]);
