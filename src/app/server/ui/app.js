@@ -1247,13 +1247,18 @@ function renderHttp2(http2) {
     ]);
 
     const frames = getFrames(http2);
+    const events = getHttp2Events(http2);
     const streamSection = renderHttp2Streams(http2);
     const frameSection = createSection(
-        "Client connection",
-        "Sent frames",
-        frames.length + " entries"
+        events.length > 0 ? "Bidirectional connection" : "Client connection",
+        events.length > 0 ? "All frames" : "Sent frames",
+        (events.length > 0 ? events.length : frames.length) + " entries"
     );
-    if (frames.length === 0) {
+    if (events.length > 0) {
+        frameSection.append(renderHttp2EventTimeline(events, events.map(function (_, index) {
+            return index;
+        })));
+    } else if (frames.length === 0) {
         frameSection.append(createEmptyState("No HTTP/2 frames were captured", "network"));
     } else {
         frameSection.append(renderFrames(frames));
@@ -1434,6 +1439,7 @@ function renderHttp2EventTimeline(events, eventIndices) {
 
         const meta = create("span", "ms-auto text-secondary font-monospace small text-end");
         meta.textContent = "+" + formatElapsedMicros(event.elapsed_us) +
+            " / " + (event.stream_id === 0 ? "connection" : "stream " + valueOr(event.stream_id, "-")) +
             " / " + valueOr(event.length, 0) + " bytes";
         summary.append(meta);
         details.append(summary);
@@ -1457,11 +1463,13 @@ function renderHttp2EventTimeline(events, eventIndices) {
 }
 
 function http2FrameName(frame) {
-    if (frame.frame_type !== "Unknown") {
-        return valueOr(frame.frame_type, "Unknown frame");
-    }
-    return HTTP2_UNKNOWN_FRAME_NAMES.get(Number(frame.type_id)) ||
-        "Unknown " + formatHex(valueOr(frame.type_id, 0));
+    const name = frame.frame_type === "Unknown"
+        ? HTTP2_UNKNOWN_FRAME_NAMES.get(Number(frame.type_id)) ||
+            "Unknown " + formatHex(valueOr(frame.type_id, 0))
+        : valueOr(frame.frame_type, "Unknown frame");
+    return name === "Ping" && (Number(frame.flags) & 0x01) !== 0
+        ? "Ping (ACK)"
+        : name;
 }
 
 function formatElapsedMicros(value) {
@@ -2060,12 +2068,12 @@ function renderFrames(frames) {
         );
         summary.append(
             create("span", "badge bg-secondary-lt text-secondary", padIndex(index + 1)),
-            create("span", "fw-semibold text-break", valueOr(frame.frame_type, "Unknown frame"))
+            create("span", "fw-semibold text-break", http2FrameName(frame))
         );
 
         const meta = create("span", "ms-auto text-secondary font-monospace small text-end");
         const metaParts = [
-            "stream " + valueOr(frame.stream_id, "-"),
+            frame.stream_id === 0 ? "connection" : "stream " + valueOr(frame.stream_id, "-"),
             valueOr(frame.length, 0) + " bytes",
         ];
         const flags = summarizeFlags(frame.flags);
