@@ -174,10 +174,6 @@ const PUBLIC_ROUTES: &[PublicRoute] = &[
 
 static UI_DOCUMENT: LazyLock<Box<str>> = LazyLock::new(build_ui_document);
 
-pub(super) fn is_websocket_transport_preparation(path: &str) -> bool {
-    path == WEBSOCKET_HTTP1_PREPARE_PATH || path == WEBSOCKET_HTTP2_PREPARE_PATH
-}
-
 pub(super) fn limits_request_body(path: &str) -> bool {
     is_analysis_path(path)
 }
