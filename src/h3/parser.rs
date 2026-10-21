@@ -1,10 +1,10 @@
-//! Incremental parsing for decrypted HTTP/3 request and unidirectional streams.
+//! Incremental parsing for decrypted HTTP/3 message directions and unidirectional streams.
 
 use bytes::{Buf, BytesMut};
 
 use super::frame::{
-    parse_headers, parse_settings, Frame, FrameType, Http3FrameError, OpaqueFrame, StreamType,
-    StreamTypeName,
+    parse_data, parse_headers, parse_priority_update, parse_settings, Frame, FrameType,
+    Http3FrameError, OpaqueFrame, StreamType, StreamTypeName,
 };
 use crate::{quic::varint, tls::HexBytes};
 
@@ -48,8 +48,8 @@ pub enum Http3ParseError {
     #[error("the HTTP/3 control stream contains a second SETTINGS frame")]
     DuplicateSettingsFrame,
 
-    /// The first request-stream frame was not HEADERS.
-    #[error("an HTTP/3 request stream must begin with HEADERS")]
+    /// The first request or response frame was not HEADERS.
+    #[error("an HTTP/3 message direction must begin with HEADERS")]
     ExpectedHeaders,
 
     /// A server-only unidirectional stream type was opened by the client.
@@ -109,11 +109,13 @@ impl Http3PushError {
 enum StreamKind {
     Request,
 
+    Response,
+
     Unidirectional,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RequestState {
+enum MessageState {
     Initial,
 
     Body,
@@ -123,7 +125,8 @@ enum RequestState {
 
 /// Incrementally parses frames from one decrypted HTTP/3 QUIC stream.
 ///
-/// Use [`Self::request`] for a client bidirectional request stream and
+/// Use [`Self::request`] for the client direction of a request stream, [`Self::response`] for its
+/// server direction, and
 /// [`Self::unidirectional`] when the input begins with a unidirectional stream-type varint.
 /// QPACK encoder and decoder streams are identified and ignored because they do not contain
 /// HTTP/3 frames.
@@ -132,7 +135,7 @@ pub struct Http3Parser {
     /// Bytes retained until a stream type or complete frame is available.
     buffer: BytesMut,
 
-    /// Whether this parser handles a request or unidirectional stream.
+    /// Whether this parser handles a request, response, or unidirectional stream.
     kind: StreamKind,
 
     /// Decoded type of a unidirectional stream.
@@ -144,14 +147,17 @@ pub struct Http3Parser {
     /// Number of complete HTTP/3 frames consumed from this stream.
     frame_count: usize,
 
-    /// Current HTTP message section on a client request stream.
-    request_state: RequestState,
+    /// Current HTTP message section on a request or response direction.
+    message_state: MessageState,
 
     /// Maximum accepted frame payload size.
     max_frame_size: usize,
 
     /// Maximum decoded QPACK field-section size.
     max_field_section_size: u64,
+
+    /// Maximum DATA bytes copied from each frame while preserving its original length.
+    data_preview_limit: usize,
 }
 
 impl Http3Parser {
@@ -186,6 +192,43 @@ impl Http3Parser {
     ) -> Self {
         Self::with_capacity_and_limits(
             StreamKind::Request,
+            capacity,
+            max_frame_size,
+            max_field_section_size,
+        )
+    }
+
+    /// Creates a parser for the server-to-client direction of a request stream.
+    pub fn response() -> Self {
+        Self::response_with_capacity(DEFAULT_BUFFER_CAPACITY)
+    }
+
+    /// Creates a response parser with the requested initial allocation.
+    pub fn response_with_capacity(capacity: usize) -> Self {
+        Self::response_with_capacity_and_limits(
+            capacity,
+            DEFAULT_MAX_FRAME_SIZE,
+            DEFAULT_MAX_FIELD_SECTION_SIZE,
+        )
+    }
+
+    /// Creates a response parser with custom frame and field-section limits.
+    pub fn response_with_limits(max_frame_size: usize, max_field_section_size: u64) -> Self {
+        Self::response_with_capacity_and_limits(
+            DEFAULT_BUFFER_CAPACITY.min(max_frame_size),
+            max_frame_size,
+            max_field_section_size,
+        )
+    }
+
+    /// Creates a response parser with explicit allocation and resource limits.
+    pub fn response_with_capacity_and_limits(
+        capacity: usize,
+        max_frame_size: usize,
+        max_field_section_size: u64,
+    ) -> Self {
+        Self::with_capacity_and_limits(
+            StreamKind::Response,
             capacity,
             max_frame_size,
             max_field_section_size,
@@ -241,10 +284,20 @@ impl Http3Parser {
             stream_type: None,
             ignored: false,
             frame_count: 0,
-            request_state: RequestState::Initial,
+            message_state: MessageState::Initial,
             max_frame_size,
             max_field_section_size,
+            data_preview_limit: usize::MAX,
         }
+    }
+
+    /// Limits retained DATA payloads while preserving each frame's original length.
+    ///
+    /// This is useful for bounded protocol capture. Other frame types and parser limits are
+    /// unchanged.
+    pub fn with_data_preview_limit(mut self, limit: usize) -> Self {
+        self.data_preview_limit = limit;
+        self
     }
 
     /// Returns the current allocation capacity.
@@ -344,7 +397,7 @@ impl Http3Parser {
                 }
             };
             self.buffer.advance(frame_len);
-            self.record_frame(frame.frame_type());
+            self.record_frame(&frame);
             self.frame_count = self.frame_count.saturating_add(1);
             output.push(frame);
         }
@@ -372,7 +425,8 @@ impl Http3Parser {
         if self.ignored {
             return true;
         }
-        let stream_type_complete = self.kind == StreamKind::Request || self.stream_type.is_some();
+        let stream_type_complete =
+            self.kind != StreamKind::Unidirectional || self.stream_type.is_some();
         stream_type_complete && self.buffer.is_empty()
     }
 
@@ -396,7 +450,9 @@ impl Http3Parser {
         }
 
         match self.kind {
-            StreamKind::Request if self.request_state == RequestState::Initial => {
+            StreamKind::Request | StreamKind::Response
+                if self.message_state == MessageState::Initial =>
+            {
                 Err(Http3ParseError::ExpectedHeaders)
             }
             StreamKind::Unidirectional => match self.stream_type {
@@ -412,7 +468,7 @@ impl Http3Parser {
                 }
                 _ => Ok(()),
             },
-            StreamKind::Request => Ok(()),
+            StreamKind::Request | StreamKind::Response => Ok(()),
         }
     }
 
@@ -422,7 +478,7 @@ impl Http3Parser {
         self.stream_type = None;
         self.ignored = false;
         self.frame_count = 0;
-        self.request_state = RequestState::Initial;
+        self.message_state = MessageState::Initial;
     }
 
     fn parse_frame(&self, type_id: u64, payload: &[u8]) -> Result<Frame, Http3ParseError> {
@@ -448,18 +504,17 @@ impl Http3Parser {
                     return Err(Http3ParseError::UnexpectedFrame { type_id });
                 }
             }
-            StreamKind::Request => {
+            StreamKind::Request | StreamKind::Response => {
                 // Connection-level frames are forbidden on request streams. PUSH_PROMISE is
-                // server-originated, while this parser models a client request stream. ORIGIN
-                // and PRIORITY_UPDATE are also control-stream extensions:
+                // allowed only in the server-to-client direction. ORIGIN and PRIORITY_UPDATE are
+                // control-stream extensions:
                 // <https://www.rfc-editor.org/rfc/rfc9114#section-7.2>
                 // <https://www.rfc-editor.org/rfc/rfc9412#section-2>
-                // <https://www.rfc-editor.org/rfc/rfc9218#section-7.1>
+                // <https://www.rfc-editor.org/rfc/rfc9218#section-7.2>
                 if matches!(
                     frame_type,
                     FrameType::CancelPush
                         | FrameType::Settings
-                        | FrameType::PushPromise
                         | FrameType::GoAway
                         | FrameType::Origin
                         | FrameType::MaxPushId
@@ -468,10 +523,13 @@ impl Http3Parser {
                 ) {
                     return Err(Http3ParseError::UnexpectedFrame { type_id });
                 }
-                if self.request_state == RequestState::Initial && frame_type == FrameType::Data {
+                if self.kind == StreamKind::Request && frame_type == FrameType::PushPromise {
+                    return Err(Http3ParseError::UnexpectedFrame { type_id });
+                }
+                if self.message_state == MessageState::Initial && frame_type == FrameType::Data {
                     return Err(Http3ParseError::ExpectedHeaders);
                 }
-                if self.request_state == RequestState::Trailers
+                if self.message_state == MessageState::Trailers
                     && matches!(frame_type, FrameType::Data | FrameType::Headers)
                 {
                     return Err(Http3ParseError::UnexpectedFrame { type_id });
@@ -480,12 +538,18 @@ impl Http3Parser {
         }
 
         match frame_type {
+            FrameType::Data => Ok(Frame::Data(parse_data(payload, self.data_preview_limit))),
             FrameType::Headers => parse_headers(payload, self.max_field_section_size)
                 .map(Frame::Headers)
                 .map_err(Into::into),
             FrameType::Settings => parse_settings(payload)
                 .map(Frame::Settings)
                 .map_err(Into::into),
+            FrameType::PriorityUpdateRequest | FrameType::PriorityUpdatePush => {
+                parse_priority_update(frame_type, payload)
+                    .map(Frame::PriorityUpdate)
+                    .map_err(Into::into)
+            }
             _ => Ok(Frame::Opaque(OpaqueFrame {
                 frame_type,
                 type_id,
@@ -495,16 +559,35 @@ impl Http3Parser {
         }
     }
 
-    fn record_frame(&mut self, frame_type: FrameType) {
-        if self.kind != StreamKind::Request || frame_type != FrameType::Headers {
+    fn record_frame(&mut self, frame: &Frame) {
+        let Frame::Headers(headers) = frame else {
+            return;
+        };
+
+        if self.kind == StreamKind::Unidirectional
+            || (self.kind == StreamKind::Response
+                && self.message_state == MessageState::Initial
+                && is_informational_response(headers))
+        {
             return;
         }
 
-        self.request_state = match self.request_state {
-            RequestState::Initial => RequestState::Body,
-            RequestState::Body | RequestState::Trailers => RequestState::Trailers,
+        self.message_state = match self.message_state {
+            MessageState::Initial => MessageState::Body,
+            MessageState::Body | MessageState::Trailers => MessageState::Trailers,
         };
     }
+}
+
+fn is_informational_response(headers: &super::frame::HeadersFrame) -> bool {
+    headers
+        .headers
+        .iter()
+        .find(|header| header.name.as_ref() == b":status")
+        .is_some_and(|header| {
+            let value = header.value.as_ref();
+            value.len() == 3 && value[0] == b'1' && value[1..].iter().all(u8::is_ascii_digit)
+        })
 }
 
 impl Default for Http3Parser {
@@ -523,6 +606,19 @@ impl Default for Http3Parser {
 /// exceeds default limits, or contains a malformed frame or QPACK field section.
 pub fn parse_request_stream(data: &[u8]) -> Result<Vec<Frame>, Http3ParseError> {
     parse_complete(Http3Parser::request(), data)
+}
+
+/// Parses a complete decrypted HTTP/3 response direction.
+///
+/// The direction must begin with response HEADERS and may contain DATA, PUSH_PROMISE, and trailing
+/// HEADERS as described by [RFC 9114, Section 4.1](https://www.rfc-editor.org/rfc/rfc9114#section-4.1).
+///
+/// # Errors
+///
+/// Returns an error when the stream is incomplete, violates frame ordering or placement rules,
+/// exceeds default limits, or contains a malformed frame or QPACK field section.
+pub fn parse_response_stream(data: &[u8]) -> Result<Vec<Frame>, Http3ParseError> {
+    parse_complete(Http3Parser::response(), data)
 }
 
 /// Parses a complete client-initiated unidirectional stream, including its stream-type varint.
@@ -548,7 +644,10 @@ fn parse_complete(mut parser: Http3Parser, data: &[u8]) -> Result<Vec<Frame>, Ht
 mod tests {
     use bytes::BytesMut;
 
-    use super::{parse_request_stream, parse_unidirectional_stream, Http3ParseError, Http3Parser};
+    use super::{
+        parse_request_stream, parse_response_stream, parse_unidirectional_stream, Http3ParseError,
+        Http3Parser,
+    };
     use crate::{
         h3::{Frame, FrameType, Http3FrameError, SettingValue},
         quic::varint,
@@ -613,7 +712,7 @@ mod tests {
     }
 
     #[test]
-    fn request_headers_are_qpack_decoded_in_wire_order() {
+    fn request_and_response_directions_decode_message_frames() {
         let mut block = BytesMut::from(&[0x00, 0x00, 0xd1, 0x51, 0x0a][..]);
         block.extend_from_slice(b"/api/http3");
         block.extend_from_slice(&[0x5f, 0x50, 0x0b]);
@@ -632,6 +731,48 @@ mod tests {
         assert_eq!(&*frame.headers[0].name, b":method");
         assert_eq!(&*frame.headers[1].name, b":path");
         assert_eq!(&*frame.headers[2].value, b"pingly-test");
+
+        let mut informational_block = BytesMut::new();
+        qpack::encode_stateless(
+            &mut informational_block,
+            [qpack::HeaderField::from((
+                b":status".as_slice(),
+                b"103".as_slice(),
+            ))],
+        )
+        .unwrap();
+        let mut response = Vec::new();
+        varint::encode(1, &mut response).unwrap();
+        varint::encode(informational_block.len() as u64, &mut response).unwrap();
+        response.extend_from_slice(&informational_block);
+
+        let mut response_block = BytesMut::new();
+        qpack::encode_stateless(
+            &mut response_block,
+            [qpack::HeaderField::from((
+                b":status".as_slice(),
+                b"200".as_slice(),
+            ))],
+        )
+        .unwrap();
+        varint::encode(1, &mut response).unwrap();
+        varint::encode(response_block.len() as u64, &mut response).unwrap();
+        response.extend_from_slice(&response_block);
+        response.extend_from_slice(&[0x00, 0x03, b'o', b'k', b'!']);
+
+        let frames = parse_response_stream(&response).unwrap();
+        assert!(matches!(
+            &frames[0],
+            Frame::Headers(frame) if frame.headers[0].value.as_ref() == b"103"
+        ));
+        assert!(matches!(
+            &frames[1],
+            Frame::Headers(frame) if frame.headers[0].value.as_ref() == b"200"
+        ));
+        assert!(matches!(
+            &frames[2],
+            Frame::Data(frame) if frame.data.as_bytes() == b"ok!"
+        ));
     }
 
     #[test]

@@ -17,7 +17,7 @@ use pingly::{
         frame::{HeadersFlagName, HeadersFrame, StreamDependency},
         AkamaiFingerprint, Frame, Http2Fingerprint,
     },
-    h3::Http3Fingerprint,
+    h3::{Frame as Http3Frame, Http3Fingerprint},
     tls::{ClientHelloHandshakeBuffer, ClientHelloParseError, TlsVersion},
 };
 use serde::{
@@ -30,7 +30,10 @@ use super::inspector::{
     ClientHello, ClientHelloBuffer, Http1RequestCapture, Http2Capture, Http2FrameDirection,
     Http2FrameEvent,
 };
-use crate::server::quic::inspect::{HeadersCapture, SettingsCapture};
+use crate::server::quic::inspect::{
+    HeadersCapture, Http3Capture, Http3EventCapture, Http3EventData, Http3EventDirection,
+    Http3StreamEvent, Http3StreamKind, SettingsCapture,
+};
 #[cfg(target_os = "linux")]
 use crate::tcp::{CapturedPacket, TcpAnalysis};
 
@@ -222,20 +225,105 @@ struct Http2PriorityUpdate {
     value: Box<str>,
 }
 
-/// HTTP/3 tracking information from the client's control and request streams.
-#[derive(Serialize)]
+/// HTTP/3 tracking information with a per-stream connection timeline.
 pub struct Http3TrackInfo {
     /// Fingerprint derived from the client SETTINGS frame.
-    #[serde(flatten)]
     fingerprint: Http3Fingerprint,
 
     /// Client SETTINGS frame captured from the HTTP/3 control stream.
-    #[serde(serialize_with = "serialize_settings_capture")]
     settings: SettingsCapture,
 
     /// First HEADERS frame captured from this request stream.
-    #[serde(serialize_with = "serialize_headers_capture")]
     headers: HeadersCapture,
+
+    /// Shared HTTP/3 event storage for this QUIC connection.
+    events: Http3EventCapture,
+
+    /// Initialized event slots visible when response analysis began.
+    event_snapshot: Box<[usize]>,
+}
+
+/// Delayed summary of one HTTP/3 request stream.
+#[derive(Serialize)]
+struct Http3StreamInfo {
+    /// QUIC request-stream identifier scoped to this connection.
+    #[serde(serialize_with = "serialize_quic_varint")]
+    stream_id: u64,
+
+    /// Request method decoded from the opening client HEADERS frame.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    method: Option<Box<str>>,
+
+    /// Request target decoded from the opening client HEADERS frame.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<Box<str>>,
+
+    /// RFC 9218 priority signals associated with this stream.
+    #[serde(skip_serializing_if = "Http3PriorityInfo::is_empty")]
+    priority: Http3PriorityInfo,
+
+    /// Positions of this stream's frames and state changes in the connection `events` array.
+    event_indices: Vec<usize>,
+
+    /// Client frame payload bytes carried directly on this request stream.
+    client_payload_bytes: u64,
+
+    /// Server frame payload bytes carried directly on this request stream.
+    server_payload_bytes: u64,
+
+    /// Whether either direction was reset.
+    reset: bool,
+
+    /// Whether the client request direction ended with FIN, reset, or STOP_SENDING.
+    client_ended: bool,
+
+    /// Whether the server response direction ended with FIN, reset, or STOP_SENDING.
+    server_ended: bool,
+}
+
+impl Http3StreamInfo {
+    fn new(stream_id: u64) -> Self {
+        Self {
+            stream_id,
+            method: None,
+            path: None,
+            priority: Http3PriorityInfo::default(),
+            event_indices: Vec::new(),
+            client_payload_bytes: 0,
+            server_payload_bytes: 0,
+            reset: false,
+            client_ended: false,
+            server_ended: false,
+        }
+    }
+}
+
+/// Priority header and subsequent updates associated with an HTTP/3 request stream.
+#[derive(Default, Serialize)]
+struct Http3PriorityInfo {
+    /// Initial Priority request field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    header: Option<Box<str>>,
+
+    /// PRIORITY_UPDATE values received on the client control stream.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    updates: Vec<Http3PriorityUpdate>,
+}
+
+impl Http3PriorityInfo {
+    fn is_empty(&self) -> bool {
+        self.header.is_none() && self.updates.is_empty()
+    }
+}
+
+/// One control-stream priority update associated with a request stream.
+#[derive(Serialize)]
+struct Http3PriorityUpdate {
+    /// Time since HTTP/3 inspection began.
+    elapsed_us: u64,
+
+    /// Complete replacement Priority Field Value.
+    value: Box<str>,
 }
 
 #[derive(Clone)]
@@ -258,8 +346,8 @@ impl ClientHelloCapture {
 
 #[derive(Clone)]
 struct Http3RequestCapture {
-    /// SETTINGS shared by all requests on one HTTP/3 connection.
-    settings: SettingsCapture,
+    /// Shared settings, events, and capture clock for one HTTP/3 connection.
+    capture: Http3Capture,
 
     /// HEADERS belonging to the current HTTP/3 request stream.
     headers: HeadersCapture,
@@ -345,7 +433,7 @@ pub struct ConnectionTrack {
     /// Bidirectional HTTP/2 events and the stream selected for this request.
     http2_capture: Option<Http2RequestCapture>,
 
-    /// HTTP/3 control-stream SETTINGS and request-stream HEADERS captures.
+    /// HTTP/3 connection events and current request HEADERS capture.
     http3_capture: Option<Http3RequestCapture>,
 }
 
@@ -810,18 +898,195 @@ fn http2_frame_resets_stream(frame: &Frame) -> bool {
 }
 
 impl Http3TrackInfo {
-    /// Builds HTTP/3 analysis only after both client frames have been captured.
+    /// Builds HTTP/3 analysis only after the client fingerprint inputs have been captured.
     fn new(capture: Http3RequestCapture) -> Option<Self> {
-        let settings = capture.settings.get()?;
+        let settings_capture = capture.capture.settings();
+        let settings = settings_capture.get()?;
         let headers = capture.headers.get()?;
         let fingerprint = Http3Fingerprint::from_frames(settings, headers);
+        let event_snapshot = capture.capture.event_snapshot();
 
         Some(Self {
             fingerprint,
-            settings: capture.settings,
+            settings: settings_capture,
             headers: capture.headers,
+            events: capture.capture.events(),
+            event_snapshot,
         })
     }
+}
+
+impl Serialize for Http3TrackInfo {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let streams = summarize_http3_streams(&self.events, &self.event_snapshot);
+        let mut state = serializer.serialize_struct("Http3TrackInfo", 6)?;
+        state.serialize_field("h3_text", &self.fingerprint.h3_text)?;
+        state.serialize_field("h3_text_hash", &self.fingerprint.h3_text_hash)?;
+        state.serialize_field("settings", &SettingsCaptureView(&self.settings))?;
+        state.serialize_field("headers", &HeadersCaptureView(&self.headers))?;
+        state.serialize_field(
+            "events",
+            &Http3EventSequence {
+                capture: &self.events,
+                event_snapshot: &self.event_snapshot,
+            },
+        )?;
+        state.serialize_field("streams", &streams)?;
+        state.end()
+    }
+}
+
+/// Serializes the indexed SETTINGS frame retained in the shared event log.
+struct SettingsCaptureView<'a>(&'a SettingsCapture);
+
+impl Serialize for SettingsCaptureView<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serialize_settings_capture(self.0, serializer)
+    }
+}
+
+/// Serializes the indexed opening request HEADERS frame.
+struct HeadersCaptureView<'a>(&'a HeadersCapture);
+
+impl Serialize for HeadersCaptureView<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serialize_headers_capture(self.0, serializer)
+    }
+}
+
+/// Connection events serialized in their observed order up to the response snapshot.
+struct Http3EventSequence<'a> {
+    capture: &'a Http3EventCapture,
+    event_snapshot: &'a [usize],
+}
+
+impl Serialize for Http3EventSequence<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut sequence = serializer.serialize_seq(Some(self.event_snapshot.len()))?;
+        for (_, event) in http3_snapshot_events(self.capture, self.event_snapshot) {
+            sequence.serialize_element(event)?;
+        }
+        sequence.end()
+    }
+}
+
+fn summarize_http3_streams(
+    capture: &Http3EventCapture,
+    event_snapshot: &[usize],
+) -> Vec<Http3StreamInfo> {
+    let mut streams = BTreeMap::<u64, Http3StreamInfo>::new();
+
+    for (event_index, event) in http3_snapshot_events(capture, event_snapshot) {
+        if let Http3EventData::Frame {
+            frame: Http3Frame::PriorityUpdate(update),
+        } = &event.event
+        {
+            if update.frame_type == pingly::h3::FrameType::PriorityUpdateRequest {
+                let stream = streams
+                    .entry(update.prioritized_element_id)
+                    .or_insert_with(|| Http3StreamInfo::new(update.prioritized_element_id));
+                stream.event_indices.push(event_index);
+                stream.priority.updates.push(Http3PriorityUpdate {
+                    elapsed_us: event.elapsed_us,
+                    value: update.priority.clone(),
+                });
+            }
+            continue;
+        }
+
+        if event.stream_kind != Http3StreamKind::Request {
+            continue;
+        }
+
+        let stream = streams
+            .entry(event.stream_id)
+            .or_insert_with(|| Http3StreamInfo::new(event.stream_id));
+        stream.event_indices.push(event_index);
+
+        match &event.event {
+            Http3EventData::Frame { frame } => {
+                let payload_bytes = u64::try_from(frame.payload_len()).unwrap_or(u64::MAX);
+                match event.direction {
+                    Http3EventDirection::ClientToServer => {
+                        stream.client_payload_bytes =
+                            stream.client_payload_bytes.saturating_add(payload_bytes);
+                        update_http3_request_summary(stream, frame);
+                    }
+                    Http3EventDirection::ServerToClient => {
+                        stream.server_payload_bytes =
+                            stream.server_payload_bytes.saturating_add(payload_bytes);
+                    }
+                }
+            }
+            Http3EventData::Finished => match event.direction {
+                Http3EventDirection::ClientToServer => stream.client_ended = true,
+                Http3EventDirection::ServerToClient => stream.server_ended = true,
+            },
+            Http3EventData::Reset { .. } => {
+                stream.reset = true;
+                match event.direction {
+                    Http3EventDirection::ClientToServer => stream.client_ended = true,
+                    Http3EventDirection::ServerToClient => stream.server_ended = true,
+                }
+            }
+            Http3EventData::StopSending { .. } => match event.direction {
+                Http3EventDirection::ClientToServer => stream.server_ended = true,
+                Http3EventDirection::ServerToClient => stream.client_ended = true,
+            },
+        }
+    }
+
+    streams.into_values().collect()
+}
+
+fn http3_snapshot_events<'a>(
+    capture: &'a Http3EventCapture,
+    event_snapshot: &'a [usize],
+) -> impl Iterator<Item = (usize, &'a Http3StreamEvent)> + 'a {
+    event_snapshot
+        .iter()
+        .filter_map(|event_index| capture.get(*event_index))
+        .enumerate()
+}
+
+fn update_http3_request_summary(stream: &mut Http3StreamInfo, frame: &Http3Frame) {
+    let Http3Frame::Headers(headers) = frame else {
+        return;
+    };
+
+    stream.method.get_or_insert_with(|| {
+        http3_header_text(headers, b":method").unwrap_or_else(|| "Unknown".into())
+    });
+    if stream.path.is_none() {
+        stream.path = http3_header_text(headers, b":path");
+    }
+    if stream.priority.header.is_none() {
+        stream.priority.header = http3_header_text(headers, b"priority");
+    }
+}
+
+fn http3_header_text(headers: &pingly::h3::HeadersFrame, name: &[u8]) -> Option<Box<str>> {
+    headers
+        .headers
+        .iter()
+        .find(|field| field.name.as_ref() == name)
+        .map(|field| {
+            String::from_utf8_lossy(&field.value)
+                .into_owned()
+                .into_boxed_str()
+        })
 }
 
 fn serialize_settings_capture<S>(
@@ -926,14 +1191,14 @@ impl ConnectionTrack {
         });
     }
 
-    /// Sets HTTP/3 control-stream SETTINGS and request-stream HEADERS captures.
+    /// Sets the HTTP/3 connection timeline and current request HEADERS capture.
     #[inline]
     pub(in crate::server) fn set_http3_capture(
         &mut self,
-        settings: SettingsCapture,
+        capture: Http3Capture,
         headers: HeadersCapture,
     ) {
-        self.http3_capture = Some(Http3RequestCapture { settings, headers });
+        self.http3_capture = Some(Http3RequestCapture { capture, headers });
     }
 
     /// Claims this request's HTTP/2 stream and returns its connection metadata.
@@ -1154,9 +1419,25 @@ where
     serializer.serialize_str(method.as_str())
 }
 
+fn serialize_quic_varint<S>(value: &u64, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    const JSON_SAFE_INTEGER_MAX: u64 = (1 << 53) - 1;
+
+    if *value <= JSON_SAFE_INTEGER_MAX {
+        serializer.serialize_u64(*value)
+    } else {
+        serializer.collect_str(value)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, OnceLock};
+    use std::{
+        sync::{Arc, Barrier, OnceLock},
+        thread,
+    };
 
     use axum::{
         body::Body,
@@ -1172,14 +1453,19 @@ mod tests {
             },
             Frame as Http2Frame, FrameType as Http2FrameType,
         },
-        h3::{FrameType, HeaderField, HeadersFrame, Setting, SettingsFrame},
         tls::ClientHelloHandshakeBuffer,
     };
     use serde_json::json;
 
-    use super::{protocol_track_info, ConnectionTrack, Http2TrackInfo, Track, TrackInfo};
+    use super::{
+        protocol_track_info, summarize_http3_streams, ConnectionTrack, Http2TrackInfo,
+        Http3EventSequence, Track, TrackInfo,
+    };
     use crate::server::{
-        quic::inspect::SettingsCapture,
+        quic::inspect::{
+            CaptureParser, Http3Capture, Http3EventData, Http3EventDirection, Http3StreamEvent,
+            Http3StreamKind,
+        },
         tracker::inspector::{Http2Capture, Http2FrameDirection, Http2FrameEvent},
     };
 
@@ -1221,37 +1507,31 @@ mod tests {
 
     #[test]
     fn http3_capture_is_fingerprinted_when_analysis_is_built() {
-        let settings = SettingsCapture::new();
-        settings.set(SettingsFrame {
-            frame_type: FrameType::Settings,
-            length: 5,
-            settings: vec![Setting::try_from_wire(1, 65_536).unwrap()],
-        });
+        let capture = Http3Capture::new();
+        let settings = capture.settings();
+        let control_id = h3::quic::StreamId::try_from(2).unwrap();
+        let mut control = CaptureParser::control(
+            capture.clone(),
+            Http3EventDirection::ClientToServer,
+            control_id,
+            Some(settings),
+        );
+        control.inspect(&[0x00, 0x04, 0x05, 0x01, 0x80, 0x01, 0x00, 0x00]);
 
-        let headers = Arc::new(OnceLock::new());
-        headers
-            .set(HeadersFrame {
-                frame_type: FrameType::Headers,
-                length: 16,
-                headers: vec![
-                    HeaderField {
-                        name: b":method".as_slice().into(),
-                        value: b"GET".as_slice().into(),
-                    },
-                    HeaderField {
-                        name: b":path".as_slice().into(),
-                        value: b"/api/http3".as_slice().into(),
-                    },
-                ],
-            })
-            .unwrap();
+        let request_id = h3::quic::StreamId::try_from(0).unwrap();
+        let (headers, _guard) = capture.register_request(request_id).unwrap();
+        let mut request = CaptureParser::request(capture.clone(), request_id, headers.clone());
+        let mut request_wire = vec![0x01, 0x0f, 0x00, 0x00, 0xd1, 0x51, 0x0a];
+        request_wire.extend_from_slice(b"/api/http3");
+        request.inspect(&request_wire);
+        request.finish();
 
         let client_hello = Arc::new(OnceLock::new());
         client_hello.set(quic_client_hello()).unwrap();
 
         let mut connection = ConnectionTrack::default();
         connection.set_client_hello_handshake(client_hello);
-        connection.set_http3_capture(settings, headers);
+        connection.set_http3_capture(capture, headers);
         let analysis = protocol_track_info(Track::All, connection, false);
         let tls = serde_json::to_value(analysis.tls.unwrap()).unwrap();
         let http3 = analysis.http3.unwrap();
@@ -1264,6 +1544,11 @@ mod tests {
             "QpackMaxTableCapacity"
         );
         assert_eq!(value["headers"]["headers"][1]["name"], ":path");
+        assert_eq!(value["streams"][0]["stream_id"], 0);
+        assert_eq!(value["streams"][0]["path"], "/api/http3");
+        assert!(value["events"]
+            .as_array()
+            .is_some_and(|events| events.len() >= 3));
         assert_eq!(
             tls["extensions"][0]["quic_transport_parameters"]["data"],
             json!([{"id": 4, "name": "initial_max_data", "value": 32}])
@@ -1277,6 +1562,55 @@ mod tests {
         assert!(value.get("normalized_h3_text").is_none());
         assert!(value.get("normalized_h3_text_hash").is_none());
         assert!(value.get("quic_transport_parameters").is_none());
+    }
+
+    #[test]
+    fn http3_event_snapshot_keeps_sparse_storage_indices_dense() {
+        let capture = Http3Capture::new();
+        let events = capture.events();
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let blocked_events = events.clone();
+        let writer_entered = entered.clone();
+        let writer_release = release.clone();
+        let writer = thread::spawn(move || {
+            blocked_events.push_with(|_| {
+                writer_entered.wait();
+                writer_release.wait();
+                Http3StreamEvent {
+                    elapsed_us: 1,
+                    direction: Http3EventDirection::ClientToServer,
+                    stream_id: 2,
+                    stream_kind: Http3StreamKind::Control,
+                    event: Http3EventData::Finished,
+                }
+            })
+        });
+
+        entered.wait();
+        let later_index = events.push(Http3StreamEvent {
+            elapsed_us: 2,
+            direction: Http3EventDirection::ClientToServer,
+            stream_id: 0,
+            stream_kind: Http3StreamKind::Request,
+            event: Http3EventData::Finished,
+        });
+        let snapshot = capture.event_snapshot();
+        release.wait();
+        writer.join().unwrap();
+
+        let value = serde_json::to_value(Http3EventSequence {
+            capture: &events,
+            event_snapshot: &snapshot,
+        })
+        .unwrap();
+        let streams = summarize_http3_streams(&events, &snapshot);
+
+        assert_eq!(later_index, 1);
+        assert_eq!(snapshot.as_ref(), &[1]);
+        assert_eq!(value.as_array().unwrap().len(), 1);
+        assert_eq!(value[0]["stream_id"], 0);
+        assert_eq!(streams[0].event_indices, [0]);
     }
 
     #[test]

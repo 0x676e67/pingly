@@ -116,6 +116,7 @@ const state = {
     },
     priorityProbeRunning: new Set(),
     h2SelectedStreamId: null,
+    h3SelectedStreamId: null,
     proxyAnalysis: null,
     proxyError: "",
     proxyProgress: 0,
@@ -1323,7 +1324,7 @@ function renderHttp2Streams(http2) {
                 String(Array.isArray(stream.event_indices) ? stream.event_indices.length : 0),
                 formatByteSize(valueOr(stream.client_wire_bytes, 0)) + " / " +
                     formatByteSize(valueOr(stream.server_wire_bytes, 0)),
-                createHttp2StreamState(stream),
+                createHttpStreamState(stream),
             ],
         };
     });
@@ -1390,7 +1391,7 @@ function http2LegacyPriority(priority) {
         (Number(legacy.exclusive) === 1 ? " exclusive" : "");
 }
 
-function createHttp2StreamState(stream) {
+function createHttpStreamState(stream) {
     let label = "Open";
     let className = "badge bg-secondary-lt text-secondary";
     if (stream.reset) {
@@ -1490,6 +1491,7 @@ function renderHttp3(http3, tls) {
     const settings = getHttp3Settings(http3);
     const headers = getHttp3Headers(http3);
     const transportParameters = getHttp3TransportParameters(tls);
+    const streamSection = renderHttp3Streams(http3);
     const fingerprint = createFingerprintSection("HTTP/3 fingerprint", [
         fingerprintItem(
             "HTTP/3",
@@ -1539,11 +1541,173 @@ function renderHttp3(http3, tls) {
 
     root.replaceChildren(
         fingerprint,
+        streamSection,
         renderPriorityProbeSection("http3"),
         settingsSection,
         headersSection,
         transportSection
     );
+}
+
+function renderHttp3Streams(http3) {
+    const events = getHttp3Events(http3);
+    const streams = getHttp3Streams(http3);
+    const section = createSection(
+        "QUIC timeline",
+        "Request streams",
+        events.length + " captured events"
+    );
+
+    if (streams.length === 0) {
+        section.append(createEmptyState("No HTTP/3 request streams were captured", "git-branch"));
+        return section;
+    }
+
+    let selected = streams.find(function (stream) {
+        return String(stream.stream_id) === state.h3SelectedStreamId;
+    });
+    if (!selected) {
+        selected = streams[streams.length - 1];
+        state.h3SelectedStreamId = String(selected.stream_id);
+    }
+
+    const rows = streams.map(function (stream) {
+        const streamId = String(stream.stream_id);
+        const active = streamId === state.h3SelectedStreamId;
+        const button = create(
+            "button",
+            active ? "btn btn-primary btn-sm font-monospace" :
+                "btn btn-outline-secondary btn-sm font-monospace",
+            streamId
+        );
+        button.type = "button";
+        button.title = "Show stream " + streamId;
+        button.setAttribute("aria-pressed", String(active));
+        button.addEventListener("click", function () {
+            state.h3SelectedStreamId = streamId;
+            renderHttp3(http3, state.data && state.data.tls);
+            paintIcons();
+        });
+
+        return {
+            className: active ? "table-active" : "",
+            cells: [
+                button,
+                createHttp2RequestTarget(stream),
+                monoPriorityValue(http3DeclaredPriority(stream.priority)),
+                String(Array.isArray(stream.event_indices) ? stream.event_indices.length : 0),
+                formatByteSize(valueOr(stream.client_payload_bytes, 0)) + " / " +
+                    formatByteSize(valueOr(stream.server_payload_bytes, 0)),
+                createHttpStreamState(stream),
+            ],
+        };
+    });
+    section.append(
+        createTable(
+            ["Stream", "Request", "Declared priority", "Events", "Client / server", "State"],
+            rows,
+            ["", "", "", "text-center", "", ""]
+        )
+    );
+
+    const timelineHeading = create(
+        "div",
+        "d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3"
+    );
+    timelineHeading.append(
+        create("h3", "h4 mb-0", "Stream " + selected.stream_id + " timeline"),
+        create(
+            "span",
+            "text-secondary small font-monospace",
+            createHttp2RequestLabel(selected)
+        )
+    );
+    section.append(timelineHeading);
+
+    const eventIndices = Array.isArray(selected.event_indices) ? selected.event_indices : [];
+    section.append(renderHttp3EventTimeline(events, eventIndices));
+    return section;
+}
+
+function http3DeclaredPriority(priority) {
+    if (!isObject(priority)) {
+        return "-";
+    }
+
+    const updates = Array.isArray(priority.updates) ? priority.updates : [];
+    if (updates.length > 0) {
+        return valueOr(updates[updates.length - 1].value, "-") + " (updated)";
+    }
+    return valueOr(priority.header, "-");
+}
+
+function renderHttp3EventTimeline(events, eventIndices) {
+    const list = create("div", "list-group mb-3 protocol-list");
+
+    eventIndices.forEach(function (eventIndex) {
+        const event = events[eventIndex];
+        if (!isObject(event)) {
+            return;
+        }
+
+        const details = create("details", "list-group-item p-0 protocol-item");
+        const summary = create(
+            "summary",
+            "d-flex flex-wrap align-items-center gap-2 p-3 cursor-pointer protocol-summary"
+        );
+        const clientToServer = event.direction === "ClientToServer";
+        const direction = create(
+            "span",
+            clientToServer ? "badge bg-azure-lt text-azure" :
+                "badge bg-orange-lt text-orange",
+            clientToServer ? "Client sent" : "Server sent"
+        );
+        direction.title = clientToServer ? "Client to server" : "Server to client";
+        summary.append(
+            direction,
+            create("span", "badge bg-secondary-lt text-secondary", padIndex(eventIndex + 1)),
+            create("span", "fw-semibold text-break", http3EventName(event))
+        );
+
+        const meta = create("span", "ms-auto text-secondary font-monospace small text-end");
+        const length = Number.isInteger(event.length) ? " / " + event.length + " bytes" : "";
+        meta.textContent = "+" + formatElapsedMicros(event.elapsed_us) + length;
+        summary.append(meta);
+        details.append(summary);
+
+        const body = create("div", "border-top bg-body-tertiary p-3 protocol-body");
+        body.append(createValueNode(withoutKeys(event, [
+            "direction",
+            "elapsed_us",
+            "event_type",
+            "frame_type",
+            "stream_id",
+            "stream_kind",
+            "length",
+        ])));
+        details.append(body);
+        list.append(details);
+    });
+
+    if (!list.hasChildNodes()) {
+        list.append(createEmptyState("No events were retained for this stream", "radio-tower"));
+    }
+    return list;
+}
+
+function http3EventName(event) {
+    if (event.event_type !== "Frame") {
+        return valueOr(event.event_type, "Stream event");
+    }
+    return valueOr(event.frame_type, "Unknown frame");
+}
+
+function getHttp3Events(http3) {
+    return isObject(http3) && Array.isArray(http3.events) ? http3.events : [];
+}
+
+function getHttp3Streams(http3) {
+    return isObject(http3) && Array.isArray(http3.streams) ? http3.streams : [];
 }
 
 function getHttp3Settings(http3) {
@@ -1586,7 +1750,10 @@ function getHttp3FrameCount(http3) {
         return 0;
     }
 
-    return Number(isObject(http3.settings)) + Number(isObject(http3.headers));
+    const events = getHttp3Events(http3);
+    return events.length > 0
+        ? events.filter(function (event) { return event.event_type === "Frame"; }).length
+        : Number(isObject(http3.settings)) + Number(isObject(http3.headers));
 }
 
 function http3FrameMeta(frame, entryCount) {
@@ -1807,6 +1974,9 @@ async function runPriorityProbe(protocol, scenario) {
         if (protocol === "http2" && state.data && isObject(data.http2)) {
             state.data.http2 = data.http2;
             state.h2SelectedStreamId = Number(observation.streamId);
+        } else if (protocol === "http3" && state.data && isObject(data.http3)) {
+            state.data.http3 = data.http3;
+            state.h3SelectedStreamId = String(observation.streamId);
         }
     } catch (error) {
         const message = error instanceof Error ? error.message : "Priority probe failed";
@@ -2018,8 +2188,34 @@ function extractHttp2PriorityObservation(data, path) {
 }
 
 function extractHttp3PriorityObservation(data, path) {
-    const headers = normalizeHeaders(getHttp3Headers(data.http3));
-    if (priorityHeaderValue(headers, ":path") !== path) {
+    const http3 = data.http3;
+    const events = getHttp3Events(http3);
+    const streams = getHttp3Streams(http3);
+    let matchedStream;
+    let headers;
+
+    for (let index = streams.length - 1; index >= 0; index -= 1) {
+        const stream = streams[index];
+        if (stream.path !== path) {
+            continue;
+        }
+
+        matchedStream = stream;
+        const eventIndices = Array.isArray(stream.event_indices) ? stream.event_indices : [];
+        for (const eventIndex of eventIndices) {
+            const event = events[eventIndex];
+            if (isObject(event)
+                && event.direction === "ClientToServer"
+                && event.frame_type === "Headers"
+                && Array.isArray(event.headers)) {
+                headers = normalizeHeaders(event.headers);
+                break;
+            }
+        }
+        break;
+    }
+
+    if (!matchedStream || !headers) {
         throw new Error("The matching HTTP/3 HEADERS frame was not captured.");
     }
 
@@ -2029,6 +2225,7 @@ function extractHttp3PriorityObservation(data, path) {
     return {
         requestContext: priorityRequestContext(headers),
         priorityHeader: priorityHeaderValue(headers, "priority"),
+        streamId: matchedStream.stream_id,
     };
 }
 
